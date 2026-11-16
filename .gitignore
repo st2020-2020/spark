@@ -1,11 +1,7 @@
-node_modules/
-.next/
-out/
-coverage/
 data/
+build/
+.mygo/
 .env*
 !.env.example
-*.tsbuildinfo
 .DS_Store
-*.log
-.taste-skill/
+mygo_windows_*.syso

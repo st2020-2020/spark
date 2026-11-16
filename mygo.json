@@ -1,0 +1,10 @@
+{
+  "name": "Spark",
+  "slug": "spark",
+  "identifier": "com.spark.notes",
+  "version": "0.2.0",
+  "out": "build",
+  "linux": {
+    "webview": false
+  }
+}

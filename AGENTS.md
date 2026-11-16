@@ -1,9 +1,7 @@
-<!-- BEGIN:nextjs-agent-rules -->
+# Spark 开发约定
 
-## This is NOT the Next.js you know
+界面统一使用 MyGo Native UI（`github.com/egoist/mygo/ui`）。窗口和菜单从 `main.go` 初始化。新增视图和交互沿用 `internal/app/` 的组件、主题和状态管理方式。
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+运行和打包命令见 `README.md`。界面规范见 `DESIGN.md`，交互行为见 `UX-CONTRACT.md`。
 
-This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
-
-<!-- END:nextjs-agent-rules -->
+修改后运行 `CGO_ENABLED=0 go test ./...`。界面测试使用 MyGo 的 `ui.Tester`，存储测试使用临时 SQLite 数据库。
