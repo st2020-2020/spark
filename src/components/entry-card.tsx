@@ -7,7 +7,6 @@ import {
   FileText,
   ImageIcon,
   Link2,
-  Sparkles,
   LoaderCircle,
 } from "lucide-react";
 import { sourceLabels, type Entry } from "@/lib/types";
@@ -19,17 +18,19 @@ export function EntryCard({
   entry,
   onTag,
   returnPath,
+  onOpen,
   optimistic = false,
 }: {
   entry: Entry;
   onTag: (tag: string) => void;
   returnPath: string;
+  onOpen: (destination: string) => void;
   optimistic?: boolean;
 }) {
   const Icon = icons[entry.source];
   return (
     <article
-      className={`entry-card ${optimistic ? "entry-saving" : ""}`}
+      className={`entry-card card ${optimistic ? "entry-saving m-nolift" : ""}`}
       aria-label={entry.title || entry.content.slice(0, 60) || "图片记录"}
     >
       <div className="entry-meta">
@@ -48,29 +49,25 @@ export function EntryCard({
       </div>
       {entry.title && <h3 className="entry-title">{entry.title}</h3>}
       {entry.imageUrl && (
-        <div className="entry-image">
+        <div className="entry-image m-zoom">
           <Image
             src={entry.imageUrl}
             alt={entry.imageName || "上传的图片"}
             fill
             unoptimized
-            sizes="(max-width: 600px) 100vw, 700px"
+            sizes="(max-width: 600px) 100vw, (min-width: 1180px) 40vw, 700px"
           />
         </div>
       )}
       {entry.content && (
-        <p className="entry-content line-clamp-4">{entry.content}</p>
+        <p className="entry-content line-clamp-8">{entry.content}</p>
       )}
-      <div className="entry-summary">
-        <Sparkles size={14} aria-hidden="true" />
-        <p>
-          {optimistic
-            ? "正在保存原始内容…"
-            : entry.status === "pending"
-              ? "已保存，正在整理摘要和标签…"
-              : entry.summary}
+      {(optimistic || entry.status === "pending") && (
+        <p className="entry-pending">
+          <LoaderCircle size={12} className="spin" aria-hidden="true" />
+          {optimistic ? "正在保存…" : "正在整理…"}
         </p>
-      </div>
+      )}
       <div className="entry-bottom">
         <div className="tags">
           {entry.tags.map((tag) => (
@@ -88,8 +85,23 @@ export function EntryCard({
           <Link
             className="detail-link"
             href={`/entries/${entry.id}?from=${encodeURIComponent(returnPath)}`}
+            prefetch={false}
+            onClick={(event) => {
+              if (
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey ||
+                event.button !== 0
+              )
+                return;
+              event.preventDefault();
+              onOpen(
+                `/entries/${entry.id}?from=${encodeURIComponent(returnPath)}`,
+              );
+            }}
           >
-            查看详情
+            打开记录
             <span className="sr-only">
               ：{entry.title || entry.content.slice(0, 30) || "图片"}
             </span>

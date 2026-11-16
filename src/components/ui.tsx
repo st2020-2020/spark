@@ -22,12 +22,23 @@ export function Button({
   return (
     <button
       {...props}
-      className={`button button-${intent} ${className}`}
+      className={`button btn button-${intent} ${className}`}
       disabled={props.disabled || busy}
       aria-busy={busy || undefined}
     >
-      {busy && <LoaderCircle size={16} className="spin" aria-hidden="true" />}
-      {children}
+      <span
+        className="button-content"
+        style={{ opacity: busy ? 0 : undefined }}
+      >
+        {children}
+      </span>
+      {busy && (
+        <LoaderCircle
+          size={18}
+          className="button-spinner spin"
+          aria-hidden="true"
+        />
+      )}
     </button>
   );
 }
@@ -62,16 +73,17 @@ export function Notice({
 export function AutoTextarea({
   value,
   className = "",
+  minimumHeight = 132,
   ...props
-}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { minimumHeight?: number }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useLayoutEffect(() => {
     const el = ref.current;
     if (el) {
       el.style.height = "auto";
-      el.style.height = `${Math.min(Math.max(el.scrollHeight, 132), 600)}px`;
+      el.style.height = `${Math.min(Math.max(el.scrollHeight, minimumHeight), 600)}px`;
     }
-  }, [value]);
+  }, [value, minimumHeight]);
   return (
     <textarea
       {...props}
@@ -126,7 +138,7 @@ export function ConfirmDialog({
         <button
           ref={cancel}
           type="button"
-          className="button button-neutral"
+          className="button btn button-neutral"
           onClick={onClose}
           disabled={busy}
         >

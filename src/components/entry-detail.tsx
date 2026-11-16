@@ -20,7 +20,7 @@ import {
   Notice,
   useUnsavedChanges,
 } from "./ui";
-import { Brand } from "./brand";
+import { WorkspaceShell } from "./workspace-shell";
 
 export function EntryDetail({
   initialEntry,
@@ -163,195 +163,206 @@ export function EntryDetail({
   }
 
   return (
-    <main id="main-content" className="detail-shell">
-      <header className="detail-topbar">
+    <WorkspaceShell
+      detail
+      busy={busy}
+      tags={entry.tags.map((tag) => [tag, null])}
+      onInbox={goBack}
+      onCapture={() => navigate("/#capture")}
+      onTag={(tag) => navigate(`/?tag=${encodeURIComponent(tag)}`)}
+    >
+      <div className="detail-back-row">
         <button className="back-button" onClick={goBack} disabled={busy}>
           <ArrowLeft size={17} />
           返回收件箱
         </button>
-        <Brand />
-      </header>
+        <span className="detail-save-state">
+          {entry.status === "pending" ? "已保存 · 整理中" : "已保存在本机"}
+        </span>
+      </div>
       <div className="detail-heading">
         <div>
-          <p className="eyebrow">让每个想法，都有后续</p>
+          <p className="eyebrow">我的收件箱</p>
           <h1>记录详情</h1>
         </div>
         <span className={`source-badge source-${entry.source}`}>
           {sourceLabels[entry.source]}
         </span>
       </div>
-      <article className="detail-card">
-        <div className="detail-meta">
-          <span>
-            创建于 <EntryTime value={entry.createdAt} />
-          </span>
-          {entry.updatedAt !== entry.createdAt && (
+      <div className="detail-layout">
+        <article className="detail-card">
+          <div className="detail-meta">
             <span>
-              编辑于 <EntryTime value={entry.updatedAt} />
+              创建于 <EntryTime value={entry.createdAt} />
             </span>
-          )}
-        </div>
-        {entry.title && <h2 className="detail-title">{entry.title}</h2>}
-        {entry.imageUrl && (
-          <div className="detail-image">
-            <Image
-              src={entry.imageUrl}
-              alt={entry.imageName || "记录图片"}
-              width={1200}
-              height={900}
-              unoptimized
-              className="detail-photo"
-            />
-            <span>{entry.imageName}</span>
+            {entry.updatedAt !== entry.createdAt && (
+              <span>
+                编辑于 <EntryTime value={entry.updatedAt} />
+              </span>
+            )}
           </div>
-        )}
-        {editing ? (
-          <form noValidate onSubmit={save} aria-busy={busy}>
-            <label htmlFor="edit-content" className="field-label">
-              原始内容
-            </label>
-            <AutoTextarea
-              autoFocus
-              id="edit-content"
-              name="content"
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              maxLength={50000}
-              rows={8}
-              disabled={busy}
-              aria-invalid={Boolean(error)}
-              aria-describedby={error ? "edit-error" : undefined}
-              className="edit-textarea"
-            />
-            {error && (
-              <Notice id="edit-error" tone="error">
-                {error}
-              </Notice>
-            )}
-            <div className="edit-actions">
-              <Button
-                type="button"
-                intent="neutral"
+          {entry.title && <h2 className="detail-title">{entry.title}</h2>}
+          {entry.imageUrl && (
+            <div className="detail-image">
+              <Image
+                src={entry.imageUrl}
+                alt={entry.imageName || "记录图片"}
+                width={1200}
+                height={900}
+                unoptimized
+                className="detail-photo"
+              />
+            </div>
+          )}
+          {editing ? (
+            <form noValidate onSubmit={save} aria-busy={busy}>
+              <label htmlFor="edit-content" className="field-label">
+                原始内容
+              </label>
+              <AutoTextarea
+                autoFocus
+                id="edit-content"
+                name="content"
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                maxLength={50000}
+                rows={8}
                 disabled={busy}
-                onClick={() => (dirty ? setDialog("cancel") : cancelEdit())}
-              >
-                取消编辑
-              </Button>
-              <Button type="submit" busy={busy}>
-                保存修改
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <>
-            <h2 className="section-label">原始内容</h2>
-            <p className="detail-content">
-              {entry.content || "这条记录只有图片。可添加说明，帮助自动整理。"}
-            </p>
-            {entry.url && (
-              <a
-                className="original-link"
-                href={entry.url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                打开原网页
-                <ExternalLink size={14} />
-              </a>
-            )}
-            <div className="detail-actions">
-              <Button
-                intent="neutral"
-                onClick={() => {
-                  setContent(entry.content);
-                  setEditing(true);
-                  setMessage("");
-                  setError("");
-                }}
-              >
-                <PencilLine size={16} />
-                编辑内容
-              </Button>
-              <button
-                className="delete-button"
-                onClick={() => {
-                  setDialog("delete");
-                  setError("");
-                }}
-              >
-                <Trash2 size={16} />
-                删除记录
-              </button>
-            </div>
-          </>
-        )}
-      </article>
-      {message && <Notice tone="success">{message}</Notice>}
-      <section
-        className="organization-card"
-        aria-labelledby="organization-title"
-      >
-        <div className="organization-heading">
-          <span>
-            <Sparkles size={19} />
-            <h2 id="organization-title">自动整理</h2>
-          </span>
-          <span className="organizer-label">
+                aria-invalid={Boolean(error)}
+                aria-describedby={error ? "edit-error" : undefined}
+                className="edit-textarea"
+              />
+              {error && (
+                <Notice id="edit-error" tone="error">
+                  {error}
+                </Notice>
+              )}
+              <div className="edit-actions">
+                <Button
+                  type="button"
+                  intent="neutral"
+                  disabled={busy}
+                  onClick={() => (dirty ? setDialog("cancel") : cancelEdit())}
+                >
+                  取消编辑
+                </Button>
+                <Button type="submit" busy={busy}>
+                  保存修改
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <h2 className="section-label">原始内容</h2>
+              <p className="detail-content">
+                {entry.content ||
+                  "这条记录只有图片。可添加说明，帮助自动整理。"}
+              </p>
+              {entry.url && (
+                <a
+                  className="original-link"
+                  href={entry.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  打开原网页
+                  <ExternalLink size={14} />
+                </a>
+              )}
+              <div className="detail-actions">
+                <Button
+                  intent="neutral"
+                  onClick={() => {
+                    setContent(entry.content);
+                    setEditing(true);
+                    setMessage("");
+                    setError("");
+                  }}
+                >
+                  <PencilLine size={16} />
+                  编辑内容
+                </Button>
+                <button
+                  className="delete-button"
+                  onClick={() => {
+                    setDialog("delete");
+                    setError("");
+                  }}
+                >
+                  <Trash2 size={16} />
+                  删除记录
+                </button>
+              </div>
+            </>
+          )}
+          {message && <Notice tone="success">{message}</Notice>}
+        </article>
+        <section
+          className="organization-card"
+          aria-labelledby="organization-title"
+        >
+          <div className="organization-heading">
+            <span>
+              <Sparkles size={19} />
+              <h2 id="organization-title">自动整理</h2>
+            </span>
+            <span className="organizer-label">
+              {entry.status === "pending"
+                ? "整理中"
+                : entry.provider === "rules"
+                  ? "规则整理"
+                  : entry.provider === "openai"
+                    ? "OpenAI"
+                    : "Anthropic"}
+            </span>
+          </div>
+          <p className="detail-summary">
             {entry.status === "pending"
-              ? "整理中"
-              : entry.provider === "rules"
-                ? "规则整理"
-                : entry.provider === "openai"
-                  ? "OpenAI"
-                  : "Anthropic"}
-          </span>
-        </div>
-        <p className="detail-summary">
-          {entry.status === "pending"
-            ? "原始内容已保存，摘要和标签正在整理中…"
-            : entry.summary}
-        </p>
-        <div className="tags">
-          {entry.tags.map((tag) => (
-            <button
-              className="tag"
-              key={tag}
-              onClick={() => navigate(`/?tag=${encodeURIComponent(tag)}`)}
-            >
-              # {tag}
-            </button>
-          ))}
-        </div>
-        {entry.status === "fallback" && (
-          <p className="subtle mt-4">
-            模型暂时不可用，已使用本地规则完成整理。
+              ? "原始内容已保存，摘要和标签正在整理中…"
+              : entry.summary}
           </p>
-        )}
-        {entry.source === "image" && (
-          <p className="subtle mt-4">
-            标签根据文字说明生成；当前版本不识别图片内容。
-          </p>
-        )}
-        {entry.url && entry.status !== "pending" && !entry.title && (
-          <p className="subtle mt-4">暂未获取到网页标题，原始链接已保留。</p>
-        )}
-        {refreshError && (
-          <Notice tone="error">
-            整理状态更新失败。
-            <button
-              className="inline-action"
-              onClick={() => {
-                setRefreshError(false);
-                setRetry((n) => n + 1);
-              }}
-            >
-              重试
-            </button>
-          </Notice>
-        )}
-      </section>
+          <div className="tags">
+            {entry.tags.map((tag) => (
+              <button
+                className="tag"
+                key={tag}
+                onClick={() => navigate(`/?tag=${encodeURIComponent(tag)}`)}
+              >
+                # {tag}
+              </button>
+            ))}
+          </div>
+          {entry.status === "fallback" && (
+            <p className="subtle mt-4">
+              模型暂时不可用，已使用本地规则完成整理。
+            </p>
+          )}
+          {entry.source === "image" && (
+            <p className="subtle mt-4">
+              标签根据文字说明生成；当前版本不识别图片内容。
+            </p>
+          )}
+          {entry.url && entry.status !== "pending" && !entry.title && (
+            <p className="subtle mt-4">暂未获取到网页标题，原始链接已保留。</p>
+          )}
+          {refreshError && (
+            <Notice tone="error">
+              整理状态更新失败。
+              <button
+                className="inline-action"
+                onClick={() => {
+                  setRefreshError(false);
+                  setRetry((n) => n + 1);
+                }}
+              >
+                重试
+              </button>
+            </Notice>
+          )}
+        </section>
+      </div>
       <footer className="page-footer">
-        <span>Spark · 留住每一个小念头</span>
+        <span>Spark · 个人记录空间</span>
       </footer>
       <ConfirmDialog
         open={Boolean(dialog)}
@@ -372,6 +383,6 @@ export function EntryDetail({
         </p>
         {error && dialog === "delete" && <Notice tone="error">{error}</Notice>}
       </ConfirmDialog>
-    </main>
+    </WorkspaceShell>
   );
 }

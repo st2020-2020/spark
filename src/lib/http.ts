@@ -2,7 +2,13 @@ import { InputError } from "./validation";
 
 export function checkOrigin(request: Request) {
   const origin = request.headers.get("origin");
-  if (origin && origin !== new URL(request.url).origin)
+  if (!origin) return;
+  const target = new URL(request.url);
+  // NextURL normalizes loopback hostnames to localhost. The Host header retains
+  // the actual browser authority, including its port; do not use forwarded hosts.
+  const host = request.headers.get("host");
+  if (host) target.host = host;
+  if (origin !== target.origin)
     throw new InputError("请求来源无效，请从 Spark 页面重新操作。", 403);
 }
 export function apiError(error: unknown) {

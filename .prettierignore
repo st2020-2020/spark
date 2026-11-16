@@ -4,3 +4,6 @@ data
 package-lock.json
 next-env.d.ts
 premium-audit.json
+.taste-skill
+public/assets
+public/fonts

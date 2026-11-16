@@ -64,6 +64,7 @@ async function main() {
     if (image) data.set("image", image, "spark.png");
     const response = await fetch(`${base}/api/entries`, {
       method: "POST",
+      headers: { Origin: base },
       body: data,
     });
     assert.equal(response.status, 201, await response.clone().text());
@@ -116,7 +117,7 @@ async function main() {
     console.log(`✓ URL fetched title: ${titled.title}`);
     const patch = await fetch(`${base}/api/entries/${text.id}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", Origin: base },
       body: JSON.stringify({
         content: "周末去旅行，记录美食。",
         version: text.version,
@@ -153,15 +154,23 @@ async function main() {
         .status,
       400,
     );
-    assert.equal(
-      (
-        await fetch(`${base}/api/entries/${image.id}`, {
-          method: "DELETE",
-          headers: { Origin: "https://other.example" },
-        })
-      ).status,
-      403,
-    );
+    for (const origin of [
+      "https://other.example",
+      `http://localhost:${port}`,
+      `http://127.0.0.1:${Number(port) + 1}`,
+      `https://127.0.0.1:${port}`,
+    ]) {
+      assert.equal(
+        (
+          await fetch(`${base}/api/entries/${image.id}`, {
+            method: "DELETE",
+            headers: { Origin: origin },
+          })
+        ).status,
+        403,
+        `Cross-origin request must be rejected: ${origin}`,
+      );
+    }
     console.log("✓ empty input / invalid image / cross-origin rejection");
     await stop();
     await start();
@@ -176,7 +185,12 @@ async function main() {
     );
     for (const id of [text.id, image.id, link.id])
       assert.equal(
-        (await fetch(`${base}/api/entries/${id}`, { method: "DELETE" })).status,
+        (
+          await fetch(`${base}/api/entries/${id}`, {
+            method: "DELETE",
+            headers: { Origin: base },
+          })
+        ).status,
         204,
       );
     assert.equal(
