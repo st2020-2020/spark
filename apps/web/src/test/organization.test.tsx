@@ -47,7 +47,10 @@ describe('Platform AI organization & UI states', () => {
 
     // 1. Enable AI directly from the prominent Inbox composer entry -> opens consent modal -> switches to lightweight status
     const composerRegion = screen.getByRole('region', { name: 'AI 自动整理入口' });
+    const composer = screen.getByRole('region', { name: '快速收集' });
+    expect(composer).not.toHaveClass('sp-composer--active');
     await user.click(within(composerRegion).getByRole('button', { name: '开启 AI 整理' }));
+    expect(composer).not.toHaveClass('sp-composer--active');
     await screen.findByRole('heading', { name: '开启平台 AI 自动整理' });
     await screen.findByText(/发送资料范围：/);
     await screen.findByText(/第三方服务范围：/);

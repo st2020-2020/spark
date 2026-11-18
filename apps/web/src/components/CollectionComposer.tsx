@@ -101,7 +101,7 @@ export function CollectionComposer({
     typeof navigator !== 'undefined' ? navigator.onLine : true,
   );
 
-  const composerRef = useRef<HTMLElement | null>(null);
+  const composerRef = useRef<HTMLDivElement | null>(null);
   const projectPickerRef = useRef<HTMLDivElement | null>(null);
   const projectTriggerRef = useRef<HTMLButtonElement | null>(null);
   const projectSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -320,10 +320,6 @@ export function CollectionComposer({
     setIsActivated(true);
   }, []);
 
-  const handleFocusCapture = () => {
-    activateComposer();
-  };
-
   const handleBlurCapture = (event: FocusEvent<HTMLElement>) => {
     const nextTarget = event.relatedTarget as Node | null;
     if (nextTarget && composerRef.current?.contains(nextTarget)) {
@@ -359,11 +355,8 @@ export function CollectionComposer({
 
   return (
     <section
-      ref={composerRef}
       className={`sp-composer ${effectiveActivated ? 'sp-composer--active' : ''}`}
       aria-label="快速收集"
-      onFocusCapture={handleFocusCapture}
-      onBlurCapture={handleBlurCapture}
     >
       {!isOnline && (
         <div className="sp-banner sp-banner--warning" style={{ marginBottom: 10 }} role="status">
@@ -380,6 +373,7 @@ export function CollectionComposer({
         </div>
       )}
 
+      <div ref={composerRef} onFocusCapture={activateComposer} onBlurCapture={handleBlurCapture}>
       <RichTextEditor
         value={documentValue}
         onChange={setDocumentValue}
@@ -691,6 +685,7 @@ export function CollectionComposer({
           </div>
         }
       />
+      </div>
 
       {showAiEntry && user && aiPlatformEnabled && aiTrialEligible && (
         user.ai_enabled ? (
