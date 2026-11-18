@@ -1,0 +1,8 @@
+overlay: 1.0.0
+info:
+  title: Go names only; wire contract unchanged
+  version: 1.0.0
+actions:
+  - target: $.components.schemas.UserStatus
+    update:
+      x-go-name: AccountStatusRequest

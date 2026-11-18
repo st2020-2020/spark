@@ -1,0 +1,66 @@
+name: spark-prod
+
+x-api-environment: &api-environment
+  SPARK_ENV: production
+  SPARK_CONTAINER: 'true'
+  SPARK_ADDR: 0.0.0.0:8080
+  SPARK_ORIGIN: ${SPARK_ORIGIN:?Set SPARK_ORIGIN}
+  DATABASE_URL: postgres://spark:${SPARK_DB_PASSWORD:?Set SPARK_DB_PASSWORD}@postgres:5432/spark?sslmode=disable
+  SPARK_SECRET: ${SPARK_SECRET:?Set SPARK_SECRET}
+  SPARK_ENCRYPTION_KEY: ${SPARK_ENCRYPTION_KEY:?Set SPARK_ENCRYPTION_KEY}
+  SPARK_MAIL_MODE: ${SPARK_MAIL_MODE:-disabled}
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spark
+      POSTGRES_DB: spark
+      POSTGRES_PASSWORD: ${SPARK_DB_PASSWORD:?Set SPARK_DB_PASSWORD}
+    volumes:
+      - spark_prod_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U spark -d spark"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+
+  api:
+    image: spark-api:prod
+    restart: unless-stopped
+    build:
+      context: ../server
+      target: runtime
+    environment: *api-environment
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /spark, healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    stop_grace_period: 15s
+    mem_limit: 512m
+
+  tools:
+    image: spark-api:prod
+    build:
+      context: ../server
+      target: runtime
+    entrypoint: [/spark]
+    environment: *api-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: [tools]
+    read_only: true
+    mem_limit: 512m
+
+volumes:
+  spark_prod_pg:

@@ -1,0 +1,87 @@
+import type { components, operations } from './schema';
+
+export type ApiErrorPayload = components['schemas']['Error'];
+export type Mark = components['schemas']['Mark'];
+export type TextNode = components['schemas']['TextNode'];
+export type BreakNode = components['schemas']['BreakNode'];
+export type Paragraph = components['schemas']['Paragraph'];
+export type ListItem = components['schemas']['ListItem'];
+export type BulletList = components['schemas']['BulletList'];
+export type OrderedList = components['schemas']['OrderedList'];
+export type DocumentRoot = components['schemas']['DocumentRoot'];
+export type SparkDocument = components['schemas']['Document'];
+
+export type User = components['schemas']['User'];
+export type SessionResult = components['schemas']['SessionResult'];
+export type Session = components['schemas']['Session'];
+export type SessionList = components['schemas']['SessionList'];
+export type VerificationRequest = components['schemas']['VerificationRequest'];
+export type VerificationResult = components['schemas']['VerificationResult'];
+export type RegisterRequest = components['schemas']['RegisterRequest'];
+export type LoginRequest = components['schemas']['LoginRequest'];
+export type PasswordReset = components['schemas']['PasswordReset'];
+export type Preferences = components['schemas']['Preferences'];
+
+export type ProjectCreate = components['schemas']['ProjectCreate'];
+export type ProjectUpdate = components['schemas']['ProjectUpdate'];
+export type Project = components['schemas']['Project'];
+export type ProjectPage = components['schemas']['ProjectPage'];
+
+export type TagCreate = components['schemas']['TagCreate'];
+export type Tag = components['schemas']['Tag'];
+export type TagPage = components['schemas']['TagPage'];
+export type TagRename = components['schemas']['TagRename'];
+
+export type UploadRequest = components['schemas']['UploadRequest'];
+export type UploadGrant = components['schemas']['UploadGrant'];
+export type Upload = components['schemas']['Upload'];
+export type Attachment = components['schemas']['Attachment'];
+export type DownloadGrant = components['schemas']['DownloadGrant'];
+
+export type CollectionCreate = components['schemas']['CollectionCreate'];
+export type CollectionUpdate = components['schemas']['CollectionUpdate'];
+export type ProjectAssociation = components['schemas']['ProjectAssociation'];
+export type TagAssociation = components['schemas']['TagAssociation'];
+export type AssociationUpdate = components['schemas']['AssociationUpdate'];
+export type Stage = components['schemas']['Stage'];
+export type Organization = components['schemas']['Organization'];
+export type Collection = components['schemas']['Collection'];
+export type CollectionSummary = components['schemas']['CollectionSummary'];
+export type CollectionPage = components['schemas']['CollectionPage'];
+export type SearchHit = components['schemas']['SearchHit'];
+export type SearchPage = components['schemas']['SearchPage'];
+export type Extraction = components['schemas']['Extraction'];
+export type ExtractionList = components['schemas']['ExtractionList'];
+export type Revision = components['schemas']['Revision'];
+export type RevisionPage = components['schemas']['RevisionPage'];
+export type Accepted = components['schemas']['Accepted'];
+export type ReadUpdate = components['schemas']['ReadUpdate'];
+export type AIExclusion = components['schemas']['AIExclusion'];
+export type ResourceCondition = components['schemas']['ResourceCondition'];
+
+export type InvitePreviewRequest = components['schemas']['InvitePreviewRequest'];
+export type InvitePreview = components['schemas']['InvitePreview'];
+export type InviteBatch = components['schemas']['InviteBatch'];
+export type InviteBatchPage = components['schemas']['InviteBatchPage'];
+export type InviteCode = components['schemas']['InviteCode'];
+export type InviteCodePage = components['schemas']['InviteCodePage'];
+export type BatchStatus = components['schemas']['BatchStatus'];
+export type CodeStatus = components['schemas']['CodeStatus'];
+export type UserPage = components['schemas']['UserPage'];
+export type UserStatus = components['schemas']['UserStatus'];
+export type BudgetConfig = components['schemas']['BudgetConfig'];
+export type BudgetUpdate = components['schemas']['BudgetUpdate'];
+export type ModelConfig = components['schemas']['ModelConfig'];
+export type ModelUpdate = components['schemas']['ModelUpdate'];
+export type Usage = components['schemas']['Usage'];
+export type FailureSummary = components['schemas']['FailureSummary'];
+export type FailureList = components['schemas']['FailureList'];
+export type Health = components['schemas']['Health'];
+
+export type ListProjectsQuery = operations['listProjects']['parameters']['query'];
+export type ListCollectionsQuery = operations['listCollections']['parameters']['query'];
+export type SearchCollectionsQuery = operations['searchCollections']['parameters']['query'];
+export type ListTagsQuery = operations['listTags']['parameters']['query'];
+export type CollectionScope = NonNullable<ListCollectionsQuery>['scope'];
+export type CollectionType = NonNullable<ListCollectionsQuery>['type'];
+export type ProjectState = Project['state'];

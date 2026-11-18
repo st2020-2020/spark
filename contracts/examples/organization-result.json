@@ -1,0 +1,22 @@
+{
+  "title": "离线同步方案",
+  "summary": "收藏了用于 Spark 多端同步的参考材料。",
+  "tag_candidates": [
+    {
+      "name": "多端同步"
+    }
+  ],
+  "project_candidates": [
+    {
+      "project_id": "22222222-2222-4222-8222-222222222222",
+      "reason": "用户明确说明资料用于 Spark 的多端同步。",
+      "evidence": [
+        {
+          "source_id": "intent",
+          "quote": "给 Spark 的多端同步参考"
+        }
+      ],
+      "confidence": 0.95
+    }
+  ]
+}

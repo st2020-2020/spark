@@ -1,0 +1,10 @@
+package: contract
+generate:
+  models: true
+  client: true
+  embedded-spec: true
+output: internal/contract/api.gen.go
+output-options:
+  skip-prune: true
+  overlay:
+    path: oapi-overlay.yaml

@@ -1,0 +1,222 @@
+import { useEffect, useState, type ReactNode } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { SparkApi } from './api/client';
+import { ApiError } from './api/errors';
+import { AppShell } from './components/AppShell';
+import { LoadingState } from './components/StateBlocks';
+import { ApiProvider } from './context/ApiContext';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
+import { AdminPage } from './pages/AdminPage';
+import { CollectionDetailPage } from './pages/CollectionDetailPage';
+import { CollectionsPage } from './pages/CollectionsPage';
+import { InboxPage } from './pages/InboxPage';
+import { LoginPage } from './pages/LoginPage';
+import { ProjectDetailPage } from './pages/ProjectDetailPage';
+import { ProjectsPage } from './pages/ProjectsPage';
+import { RegisterPage } from './pages/RegisterPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
+import { SettingsPage, applyThemePreference } from './pages/SettingsPage';
+import { TrashPage } from './pages/TrashPage';
+import { UnclassifiedPage } from './pages/UnclassifiedPage';
+
+function RequireAuth({ wide = false, children }: { wide?: boolean; children: ReactNode }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) {
+    return (
+      <div className="sp-auth-page">
+        <div style={{ width: '100%', maxWidth: 420 }}>
+          <LoadingState message="正在恢复登录会话…" />
+        </div>
+      </div>
+    );
+  }
+  if (!user) {
+    return <Navigate to="/login" replace />;
+  }
+  return <AppShell wide={wide}>{children}</AppShell>;
+}
+
+function PublicOnly({ children }: { children: ReactNode }) {
+  const { user, isLoading } = useAuth();
+  if (isLoading) {
+    return (
+      <div className="sp-auth-page">
+        <div style={{ width: '100%', maxWidth: 420 }}>
+          <LoadingState message="正在检查登录状态…" />
+        </div>
+      </div>
+    );
+  }
+  if (user) {
+    return <Navigate to="/inbox" replace />;
+  }
+  return <>{children}</>;
+}
+
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          <PublicOnly>
+            <LoginPage />
+          </PublicOnly>
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          <PublicOnly>
+            <RegisterPage />
+          </PublicOnly>
+        }
+      />
+      <Route
+        path="/reset-password"
+        element={
+          <PublicOnly>
+            <ResetPasswordPage />
+          </PublicOnly>
+        }
+      />
+
+      <Route
+        path="/inbox"
+        element={
+          <RequireAuth>
+            <InboxPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects"
+        element={
+          <RequireAuth>
+            <ProjectsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects/:id"
+        element={
+          <RequireAuth>
+            <ProjectDetailPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/collections"
+        element={
+          <RequireAuth>
+            <CollectionsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/unclassified"
+        element={
+          <RequireAuth>
+            <UnclassifiedPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/collections/:id"
+        element={
+          <RequireAuth>
+            <CollectionDetailPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/trash"
+        element={
+          <RequireAuth>
+            <TrashPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <RequireAuth>
+            <SettingsPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/admin"
+        element={
+          <RequireAuth wide>
+            <AdminPage />
+          </RequireAuth>
+        }
+      />
+
+      <Route path="/" element={<Navigate to="/inbox" replace />} />
+      <Route path="*" element={<Navigate to="/inbox" replace />} />
+    </Routes>
+  );
+}
+
+export function createAppQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: (failureCount, error) => {
+          if (
+            error instanceof ApiError &&
+            (error.status === 401 || error.status === 403 || error.status === 404)
+          ) {
+            return false;
+          }
+          return failureCount < 1;
+        },
+        refetchOnWindowFocus: false,
+      },
+    },
+  });
+}
+
+export function AppProviders({
+  api,
+  children,
+}: {
+  api?: SparkApi;
+  children: ReactNode;
+}) {
+  const [queryClient] = useState(() => createAppQueryClient());
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem('spark:theme');
+      if (saved === 'light' || saved === 'dark') {
+        applyThemePreference(saved);
+      }
+    } catch {
+      // Ignore storage error
+    }
+  }, []);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ApiProvider api={api}>
+        <ToastProvider>
+          <AuthProvider>{children}</AuthProvider>
+        </ToastProvider>
+      </ApiProvider>
+    </QueryClientProvider>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AppProviders>
+        <AppRoutes />
+      </AppProviders>
+    </BrowserRouter>
+  );
+}

@@ -1,0 +1,268 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Spark 富文本 v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "content": {
+      "$ref": "#/definitions/DocumentRoot"
+    }
+  },
+  "required": [
+    "schema_version",
+    "content"
+  ],
+  "definitions": {
+    "Mark": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "bold",
+                "highlight"
+              ]
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "link"
+              ]
+            },
+            "attrs": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "href": {
+                  "type": "string",
+                  "maxLength": 4096
+                }
+              },
+              "required": [
+                "href"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "attrs"
+          ]
+        }
+      ]
+    },
+    "TextNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "text"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "marks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Mark"
+          },
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "type",
+        "text"
+      ]
+    },
+    "BreakNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "hardBreak"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "Paragraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "paragraph"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/TextNode"
+              },
+              {
+                "$ref": "#/definitions/BreakNode"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "ListItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "listItem"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/Paragraph"
+              },
+              {
+                "$ref": "#/definitions/BulletList"
+              },
+              {
+                "$ref": "#/definitions/OrderedList"
+              }
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "type",
+        "content"
+      ]
+    },
+    "BulletList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "bulletList"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ListItem"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "type",
+        "content"
+      ]
+    },
+    "OrderedList": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "orderedList"
+          ]
+        },
+        "attrs": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "start": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            }
+          },
+          "required": [
+            "start"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ListItem"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "type",
+        "content"
+      ]
+    },
+    "DocumentRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "doc"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/Paragraph"
+              },
+              {
+                "$ref": "#/definitions/BulletList"
+              },
+              {
+                "$ref": "#/definitions/OrderedList"
+              }
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "type",
+        "content"
+      ]
+    }
+  }
+}

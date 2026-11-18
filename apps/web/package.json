@@ -1,0 +1,49 @@
+{
+  "name": "@spark/web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "gen:types": "openapi-typescript ../../contracts/openapi.json -o src/api/schema.d.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.66.0",
+    "@tiptap/extension-bold": "^2.11.5",
+    "@tiptap/extension-bullet-list": "^2.11.5",
+    "@tiptap/extension-document": "^2.11.5",
+    "@tiptap/extension-hard-break": "^2.11.5",
+    "@tiptap/extension-highlight": "^2.11.5",
+    "@tiptap/extension-history": "^2.11.5",
+    "@tiptap/extension-link": "^2.11.5",
+    "@tiptap/extension-list-item": "^2.11.5",
+    "@tiptap/extension-ordered-list": "^2.11.5",
+    "@tiptap/extension-paragraph": "^2.11.5",
+    "@tiptap/extension-placeholder": "^2.11.5",
+    "@tiptap/extension-text": "^2.11.5",
+    "@tiptap/pm": "^2.11.5",
+    "@tiptap/react": "^2.11.5",
+    "lucide-react": "^0.475.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.2.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@testing-library/user-event": "^14.6.0",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^26.0.0",
+    "openapi-typescript": "^7.6.1",
+    "typescript": "^5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^4.1.12"
+  }
+}

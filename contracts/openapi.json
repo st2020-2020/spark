@@ -1,0 +1,5187 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Spark 在线邀请内测 API",
+    "version": "1.0.0-design",
+    "description": "待实施接口契约。产品行为及安全、幂等和分页语义见 docs/design/API.md。"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "healthLive",
+        "summary": "进程存活",
+        "tags": [
+          "health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "healthReady",
+        "summary": "数据库与迁移就绪",
+        "tags": [
+          "health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/verification": {
+      "post": {
+        "operationId": "sendVerification",
+        "summary": "发送用途限定验证码",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "202": {
+            "description": "任务已持久化，异步处理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerificationResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerificationRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/register": {
+      "post": {
+        "operationId": "register",
+        "summary": "兑换邀请码并注册",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "login",
+        "summary": "建立 Web 会话",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/password-reset": {
+      "post": {
+        "operationId": "resetPassword",
+        "summary": "验证邮箱并重置密码",
+        "tags": [
+          "auth"
+        ],
+        "security": [],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PasswordReset"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "summary": "撤销当前会话",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/auth/session": {
+      "get": {
+        "operationId": "currentSession",
+        "summary": "读取当前账号及 CSRF token",
+        "tags": [
+          "auth"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/preferences": {
+      "patch": {
+        "operationId": "updatePreferences",
+        "summary": "更新 AI 偏好",
+        "tags": [
+          "me"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Preferences"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me/usage": {
+      "get": {
+        "operationId": "getUsage",
+        "summary": "获取当日 AI 额度",
+        "tags": [
+          "me"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "列出自己的会话",
+        "tags": [
+          "sessions"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sessions/{id}": {
+      "delete": {
+        "operationId": "revokeSession",
+        "summary": "撤销指定会话",
+        "tags": [
+          "sessions"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/projects": {
+      "post": {
+        "operationId": "createProject",
+        "summary": "创建项目",
+        "tags": [
+          "projects"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectCreate"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listProjects",
+        "summary": "分页列出项目",
+        "tags": [
+          "projects"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "paused",
+                "completed"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "/projects/{id}": {
+      "get": {
+        "operationId": "getProject",
+        "summary": "读取项目",
+        "tags": [
+          "projects"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateProject",
+        "summary": "版本化修改项目",
+        "tags": [
+          "projects"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/tags": {
+      "post": {
+        "operationId": "createTag",
+        "summary": "创建层级标签",
+        "tags": [
+          "tags"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagCreate"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listTags",
+        "summary": "搜索用户标签",
+        "tags": [
+          "tags"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/tags/{id}": {
+      "patch": {
+        "operationId": "renameTag",
+        "summary": "按原名称条件重命名标签",
+        "tags": [
+          "tags"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tag"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagRename"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uploads": {
+      "post": {
+        "operationId": "createUpload",
+        "summary": "申请图片临时上传授权",
+        "tags": [
+          "uploads"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadGrant"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/uploads/{id}": {
+      "get": {
+        "operationId": "getUpload",
+        "summary": "查询上传确认状态",
+        "tags": [
+          "uploads"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/uploads/{id}/complete": {
+      "post": {
+        "operationId": "completeUpload",
+        "summary": "确认上传并校验文件",
+        "tags": [
+          "uploads"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "任务已持久化，异步处理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Upload"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/attachments/{id}/download": {
+      "get": {
+        "operationId": "getDownload",
+        "summary": "取得私有附件短期访问地址",
+        "tags": [
+          "attachments"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadGrant"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/collections": {
+      "post": {
+        "operationId": "createCollection",
+        "summary": "创建收藏并安排后台整理",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionCreate"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listCollections",
+        "summary": "分页与组合筛选收藏",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tag_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "url",
+                "image"
+              ]
+            }
+          },
+          {
+            "name": "read",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "trash",
+                "unclassified"
+              ]
+            }
+          },
+          {
+            "name": "created_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "created_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        ]
+      }
+    },
+    "/collections/{id}": {
+      "get": {
+        "operationId": "getCollection",
+        "summary": "读取收藏详情",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateCollection",
+        "summary": "检查内容版本并编辑",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionUpdate"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "trashCollection",
+        "summary": "移入回收站",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceCondition"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/restore": {
+      "post": {
+        "operationId": "restoreCollection",
+        "summary": "恢复回收站收藏",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceCondition"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/purge": {
+      "post": {
+        "operationId": "purgeCollection",
+        "summary": "安排永久删除",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "任务已持久化，异步处理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceCondition"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/read": {
+      "put": {
+        "operationId": "setReadState",
+        "summary": "设置阅读状态",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/ai-exclusion": {
+      "put": {
+        "operationId": "setAIExclusion",
+        "summary": "设置单条 AI 排除",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AIExclusion"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/projects": {
+      "patch": {
+        "operationId": "updateProjectDecisions",
+        "summary": "调整项目人工决定",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssociationUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/tags": {
+      "patch": {
+        "operationId": "updateTagDecisions",
+        "summary": "调整标签人工决定",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssociationUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/organization": {
+      "get": {
+        "operationId": "getOrganization",
+        "summary": "读取当前整理阶段",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "restartOrganization",
+        "summary": "按最新内容重新整理",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "任务已持久化，异步处理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/collections/{id}/extractions": {
+      "get": {
+        "operationId": "getExtractions",
+        "summary": "读取当前版本提取材料",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/collections/{id}/revisions": {
+      "get": {
+        "operationId": "listRevisions",
+        "summary": "读取内容历史版本",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevisionPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/search": {
+      "get": {
+        "operationId": "searchCollections",
+        "summary": "当前用户内的字面关键词搜索",
+        "tags": [
+          "search"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "tag_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "text",
+                "url",
+                "image"
+              ]
+            }
+          },
+          {
+            "name": "read",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "active",
+                "trash",
+                "unclassified"
+              ]
+            }
+          },
+          {
+            "name": "created_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "created_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ]
+      }
+    },
+    "/admin/invite-imports": {
+      "post": {
+        "operationId": "previewInviteImport",
+        "summary": "校验 CSV 并返回导入预览",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePreview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitePreviewRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invite-imports/{id}/commit": {
+      "post": {
+        "operationId": "commitInviteImport",
+        "summary": "原子提交有效导入批次",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteBatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ]
+      }
+    },
+    "/admin/invite-batches": {
+      "get": {
+        "operationId": "listInviteBatches",
+        "summary": "列出邀请码批次",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteBatchPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          }
+        ]
+      }
+    },
+    "/admin/invite-batches/{id}": {
+      "patch": {
+        "operationId": "setInviteBatchStatus",
+        "summary": "启用或禁用批次",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteBatch"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchStatus"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/invite-batches/{id}/codes": {
+      "get": {
+        "operationId": "listInviteCodes",
+        "summary": "列出邀请码元数据",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteCodePage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/admin/invite-codes/{id}": {
+      "patch": {
+        "operationId": "setInviteCodeStatus",
+        "summary": "启用或禁用单个邀请码",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InviteCode"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeStatus"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/users": {
+      "get": {
+        "operationId": "listUsers",
+        "summary": "查看用户状态",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPage"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          }
+        ]
+      }
+    },
+    "/admin/users/{id}": {
+      "patch": {
+        "operationId": "setUserStatus",
+        "summary": "改变用户状态并撤销禁用用户会话",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/User"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserStatus"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/budgets": {
+      "get": {
+        "operationId": "getBudgets",
+        "summary": "读取预算配置",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetConfig"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。"
+      },
+      "put": {
+        "operationId": "setBudgets",
+        "summary": "更新预算与并发限制",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BudgetConfig"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/model-config": {
+      "get": {
+        "operationId": "getModelConfig",
+        "summary": "读取已脱敏模型配置",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfig"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。"
+      },
+      "put": {
+        "operationId": "setModelConfig",
+        "summary": "使用服务端凭证别名更新模型配置",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfig"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。",
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/failures": {
+      "get": {
+        "operationId": "listFailures",
+        "summary": "最近 24 小时失败阶段与错误计数",
+        "tags": [
+          "admin"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailureList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "description": "需要 active 管理员账号。返回内容限于运行元数据。"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "sessionCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "spark_session"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "request_id"
+            ]
+          }
+        },
+        "required": [
+          "error"
+        ]
+      },
+      "Mark": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "bold",
+                  "highlight"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "link"
+                ]
+              },
+              "attrs": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "href": {
+                    "type": "string",
+                    "maxLength": 4096
+                  }
+                },
+                "required": [
+                  "href"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "attrs"
+            ]
+          }
+        ]
+      },
+      "TextNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "text"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "marks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Mark"
+            },
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ]
+      },
+      "BreakNode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "hardBreak"
+            ]
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "Paragraph": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "paragraph"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/TextNode"
+                },
+                {
+                  "$ref": "#/components/schemas/BreakNode"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "ListItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "listItem"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Paragraph"
+                },
+                {
+                  "$ref": "#/components/schemas/BulletList"
+                },
+                {
+                  "$ref": "#/components/schemas/OrderedList"
+                }
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "type",
+          "content"
+        ]
+      },
+      "BulletList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "bulletList"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListItem"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "type",
+          "content"
+        ]
+      },
+      "OrderedList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "orderedList"
+            ]
+          },
+          "attrs": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "start": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              }
+            },
+            "required": [
+              "start"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ListItem"
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "type",
+          "content"
+        ]
+      },
+      "DocumentRoot": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "doc"
+            ]
+          },
+          "content": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Paragraph"
+                },
+                {
+                  "$ref": "#/components/schemas/BulletList"
+                },
+                {
+                  "$ref": "#/components/schemas/OrderedList"
+                }
+              ]
+            },
+            "minItems": 1
+          }
+        },
+        "required": [
+          "type",
+          "content"
+        ]
+      },
+      "Document": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {
+            "type": "integer",
+            "enum": [
+              1
+            ]
+          },
+          "content": {
+            "$ref": "#/components/schemas/DocumentRoot"
+          }
+        },
+        "required": [
+          "schema_version",
+          "content"
+        ]
+      },
+      "User": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "admin"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "ai_enabled": {
+            "type": "boolean"
+          },
+          "ai_policy_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "email",
+          "role",
+          "status",
+          "ai_enabled",
+          "ai_policy_version"
+        ]
+      },
+      "SessionResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "csrf_token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "user",
+          "csrf_token",
+          "expires_at"
+        ]
+      },
+      "Session": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "device_label": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "device_label",
+          "created_at",
+          "expires_at",
+          "current"
+        ]
+      },
+      "VerificationRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "register",
+              "password_reset"
+            ]
+          }
+        },
+        "required": [
+          "email",
+          "purpose"
+        ]
+      },
+      "VerificationResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "expires_in": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resend_after": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "challenge_id",
+          "expires_in",
+          "resend_after"
+        ]
+      },
+      "RegisterRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 128
+          },
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "verification_code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          },
+          "invite_code": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "challenge_id",
+          "verification_code",
+          "invite_code"
+        ]
+      },
+      "LoginRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "PasswordReset": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "challenge_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "verification_code": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          },
+          "new_password": {
+            "type": "string",
+            "minLength": 12,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "email",
+          "challenge_id",
+          "verification_code",
+          "new_password"
+        ]
+      },
+      "Preferences": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ai_enabled": {
+            "type": "boolean"
+          },
+          "consent_version": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "ai_enabled"
+        ]
+      },
+      "ProjectCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "focus_points": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 20
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "focus_points"
+        ]
+      },
+      "ProjectUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "focus_points": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 20
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "completed"
+            ]
+          },
+          "base_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "base_version"
+        ]
+      },
+      "Project": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "focus_points": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            },
+            "maxItems": 20
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "active",
+              "paused",
+              "completed"
+            ]
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "collection_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "focus_points",
+          "state",
+          "version",
+          "collection_count",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "TagCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "parent_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "Tag": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "parent_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "path": {
+            "type": "string"
+          },
+          "collection_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "path",
+          "collection_count"
+        ]
+      },
+      "UploadRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "filename": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5242880
+          },
+          "mime_type": {
+            "type": "string",
+            "enum": [
+              "image/jpeg",
+              "image/png",
+              "image/gif",
+              "image/webp"
+            ]
+          }
+        },
+        "required": [
+          "filename",
+          "size_bytes",
+          "mime_type"
+        ]
+      },
+      "UploadGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "PUT"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "method",
+          "url",
+          "headers",
+          "expires_at"
+        ]
+      },
+      "Upload": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "verifying",
+              "ready",
+              "attached",
+              "rejected",
+              "expired"
+            ]
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "expires_at"
+        ]
+      },
+      "Attachment": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "mime_type",
+          "size_bytes",
+          "position"
+        ]
+      },
+      "DownloadGrant": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "url",
+          "expires_at"
+        ]
+      },
+      "CollectionCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document": {
+            "$ref": "#/components/schemas/Document"
+          },
+          "intent": {
+            "type": "string",
+            "maxLength": 50000
+          },
+          "original_url": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "manual_title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "upload_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 9,
+            "uniqueItems": true
+          },
+          "project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "tag_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          },
+          "ai_excluded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "document",
+          "intent",
+          "upload_ids",
+          "project_ids",
+          "tag_ids"
+        ]
+      },
+      "CollectionUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_content_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "document": {
+            "$ref": "#/components/schemas/Document"
+          },
+          "intent": {
+            "type": "string",
+            "maxLength": 50000
+          },
+          "original_url": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "manual_title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "attachment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 9,
+            "uniqueItems": true
+          },
+          "upload_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 9,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "base_content_version"
+        ]
+      },
+      "ProjectAssociation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "confirmed",
+              "auto",
+              "rejected",
+              "suggested"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "project_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "project_id",
+          "name",
+          "decision"
+        ]
+      },
+      "TagAssociation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "tag_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "path": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "confirmed",
+              "auto",
+              "rejected"
+            ]
+          }
+        },
+        "required": [
+          "tag_id",
+          "path",
+          "decision"
+        ]
+      },
+      "AssociationUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_decision_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "include",
+                    "exclude",
+                    "reset"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "action"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "base_decision_version",
+          "operations"
+        ]
+      },
+      "Stage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "extract_url",
+              "extract_images",
+              "generate",
+              "match_projects",
+              "apply"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "skipped",
+              "blocked"
+            ]
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "attempts"
+        ]
+      },
+      "Organization": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "content_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "skipped",
+              "blocked",
+              "superseded"
+            ]
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Stage"
+            }
+          },
+          "generated_title": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "content_version",
+          "status",
+          "stages",
+          "updated_at"
+        ]
+      },
+      "Collection": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document": {
+            "$ref": "#/components/schemas/Document"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "original_url": {
+            "type": "string"
+          },
+          "manual_title": {
+            "type": "string"
+          },
+          "display_title": {
+            "type": "string"
+          },
+          "content_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "text",
+                "url",
+                "image"
+              ]
+            },
+            "uniqueItems": true
+          },
+          "content_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "resource_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "decision_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Attachment"
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAssociation"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagAssociation"
+            }
+          },
+          "organization": {
+            "$ref": "#/components/schemas/Organization"
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ai_excluded": {
+            "type": "boolean"
+          },
+          "deleted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "purge_after": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "document",
+          "intent",
+          "display_title",
+          "content_types",
+          "content_version",
+          "resource_version",
+          "decision_version",
+          "attachments",
+          "projects",
+          "tags",
+          "organization",
+          "ai_excluded",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CollectionSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "display_title": {
+            "type": "string"
+          },
+          "excerpt": {
+            "type": "string"
+          },
+          "content_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "text",
+                "url",
+                "image"
+              ]
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectAssociation"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagAssociation"
+            }
+          },
+          "organization_status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "skipped",
+              "blocked",
+              "superseded"
+            ]
+          },
+          "read_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resource_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "id",
+          "display_title",
+          "excerpt",
+          "content_types",
+          "projects",
+          "tags",
+          "organization_status",
+          "created_at",
+          "updated_at",
+          "resource_version"
+        ]
+      },
+      "SearchHit": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collection": {
+            "$ref": "#/components/schemas/CollectionSummary"
+          },
+          "snippets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "enum": [
+                    "title",
+                    "text",
+                    "intent",
+                    "url",
+                    "extraction",
+                    "tag"
+                  ]
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field",
+                "text"
+              ]
+            }
+          }
+        },
+        "required": [
+          "collection",
+          "snippets"
+        ]
+      },
+      "Extraction": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_kind": {
+            "type": "string",
+            "enum": [
+              "url",
+              "image"
+            ]
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "content_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "skipped",
+              "blocked"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "source_title": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "source_kind",
+          "source_id",
+          "content_version",
+          "status",
+          "updated_at"
+        ]
+      },
+      "Revision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "content_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "document": {
+            "$ref": "#/components/schemas/Document"
+          },
+          "intent": {
+            "type": "string"
+          },
+          "original_url": {
+            "type": "string"
+          },
+          "manual_title": {
+            "type": "string"
+          },
+          "attachment_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "content_version",
+          "document",
+          "intent",
+          "attachment_ids",
+          "created_at"
+        ]
+      },
+      "Accepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed"
+            ]
+          }
+        },
+        "required": [
+          "operation_id",
+          "status"
+        ]
+      },
+      "ReadUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "read": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "read"
+        ]
+      },
+      "AIExclusion": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excluded": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "excluded"
+        ]
+      },
+      "ResourceCondition": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_resource_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "base_resource_version"
+        ]
+      },
+      "InvitePreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "csv": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 262144
+          }
+        },
+        "required": [
+          "name",
+          "csv"
+        ]
+      },
+      "InvitePreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "valid_rows": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "row": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "row",
+                "code",
+                "message"
+              ]
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "valid_rows",
+          "errors",
+          "expires_at"
+        ]
+      },
+      "InviteBatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "total_codes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "used_codes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "total_codes",
+          "used_codes",
+          "created_at"
+        ]
+      },
+      "InviteCode": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "batch_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "max_uses": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "used_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "batch_id",
+          "max_uses",
+          "used_count",
+          "disabled"
+        ]
+      },
+      "BudgetConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "platform_daily_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "user_daily_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "worker_concurrency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          }
+        },
+        "required": [
+          "version",
+          "platform_daily_units",
+          "user_daily_units",
+          "worker_concurrency"
+        ]
+      },
+      "BudgetUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "platform_daily_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "user_daily_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "worker_concurrency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          }
+        },
+        "required": [
+          "base_version",
+          "platform_daily_units",
+          "user_daily_units",
+          "worker_concurrency"
+        ]
+      },
+      "ModelConfig": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "deployment_scope": {
+            "type": "string"
+          },
+          "credential_configured": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "version",
+          "enabled",
+          "provider",
+          "model_id",
+          "region",
+          "deployment_scope",
+          "credential_configured"
+        ]
+      },
+      "ModelUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1
+          },
+          "model_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "region": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deployment_scope": {
+            "type": "string",
+            "minLength": 1
+          },
+          "credential_alias": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "base_version",
+          "enabled",
+          "provider",
+          "model_id",
+          "region",
+          "deployment_scope",
+          "credential_alias"
+        ]
+      },
+      "Usage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "budget_day": {
+            "type": "string",
+            "format": "date"
+          },
+          "timezone": {
+            "type": "string",
+            "enum": [
+              "Asia/Shanghai"
+            ]
+          },
+          "limit_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reserved_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "settled_units": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "blocked": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "budget_day",
+          "timezone",
+          "limit_units",
+          "reserved_units",
+          "settled_units",
+          "blocked"
+        ]
+      },
+      "FailureSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "stage",
+          "error_code",
+          "count"
+        ]
+      },
+      "ProjectPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Project"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "CollectionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionSummary"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "SearchPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "TagPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tag"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "RevisionPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Revision"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "UserPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/User"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "InviteBatchPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InviteBatch"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "InviteCodePage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InviteCode"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "unavailable"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "SessionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "TagRename": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          },
+          "expected_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 24
+          }
+        },
+        "required": [
+          "name",
+          "expected_name"
+        ]
+      },
+      "ExtractionList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Extraction"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "BatchStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "CodeStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "disabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "disabled"
+        ]
+      },
+      "UserStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "FailureList": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FailureSummary"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      }
+    }
+  }
+}

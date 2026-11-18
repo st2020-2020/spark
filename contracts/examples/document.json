@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "content": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "content": [
+          {
+            "type": "text",
+            "text": "收藏离线同步方案",
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
