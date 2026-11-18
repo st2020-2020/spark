@@ -6,6 +6,7 @@ import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
 import { CollectionComposer } from '../components/CollectionComposer';
 import { PageHeader } from '../components/PageHeader';
+import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
 
@@ -58,6 +59,8 @@ export function InboxPage() {
       <PageHeader title="收件箱" />
 
       <CollectionComposer autoFocus={shouldFocusComposer} />
+
+      <PendingSuggestionsBanner />
 
       <div className="sp-filter-tabs" aria-label="收件箱筛选">
         <button

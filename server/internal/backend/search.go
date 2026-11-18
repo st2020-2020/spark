@@ -6,11 +6,24 @@ import (
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5"
 	"spark/server/internal/contract"
 )
 
 func (s *Server) listCollections(c *gin.Context) (any, error) {
-	rows, next, err := s.findCollections(c, nil)
+	ctx := c.Request.Context()
+	var q querier = s.Pool
+	var total *int
+	if c.Query("has_suggestion") != "" {
+		tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly, IsoLevel: pgx.RepeatableRead})
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback(ctx)
+		q = tx
+		total = new(int)
+	}
+	rows, next, err := s.findCollections(c, q, nil, total)
 	if err != nil {
 		return nil, err
 	}
@@ -18,7 +31,7 @@ func (s *Server) listCollections(c *gin.Context) (any, error) {
 	for _, row := range rows {
 		items = append(items, summary(row))
 	}
-	return contract.CollectionPage{Items: items, NextCursor: next}, nil
+	return contract.CollectionPage{Items: items, NextCursor: next, Total: total}, nil
 }
 func (s *Server) search(c *gin.Context) (any, error) {
 	terms := strings.Fields(strings.TrimSpace(c.Query("q")))
@@ -28,7 +41,7 @@ func (s *Server) search(c *gin.Context) (any, error) {
 	for i := range terms {
 		terms[i] = strings.ToLower(terms[i])
 	}
-	rows, next, err := s.findCollections(c, terms)
+	rows, next, err := s.findCollections(c, s.Pool, terms, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +79,7 @@ func matchingSnippet(text string, terms []string) (string, bool) {
 	end := min(len(runes), max(pos+80, start+160))
 	return string(runes[start:end]), true
 }
-func (s *Server) findCollections(c *gin.Context, terms []string) ([]collectionRow, *string, error) {
+func (s *Server) findCollections(c *gin.Context, q querier, terms []string, total *int) ([]collectionRow, *string, error) {
 	limit, cur, err := s.pagination(c)
 	if err != nil {
 		return nil, nil, err
@@ -110,19 +123,32 @@ func (s *Server) findCollections(c *gin.Context, terms []string) ([]collectionRo
 	if to := c.Query("created_to"); to != "" {
 		add("c.created_at < $%d::timestamptz", to)
 	}
-	if cur != nil {
-		args = append(args, cur.Time, cur.ID)
-		where = append(where, fmt.Sprintf("(c.created_at,c.id)<($%d::timestamptz,$%d::uuid)", len(args)-1, len(args)))
-	}
+
 	title := `COALESCE(NULLIF(c.manual_title,''),(SELECT NULLIF(generated_title,'') FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),NULLIF(c.plain_text,''),c.original_url)`
 	for _, term := range terms {
 		args = append(args, term)
 		n := len(args)
 		where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0)`, title, n, n, n, n))
 	}
+	if filter := c.Query("has_suggestion"); filter != "" {
+		prefix := ""
+		if filter == "false" {
+			prefix = "NOT "
+		}
+		where = append(where, prefix+"EXISTS (SELECT 1 FROM organization_pending_suggestions sp WHERE (sp.user_id,sp.collection_id)=(c.user_id,c.id))")
+	}
+	if total != nil {
+		if err := q.QueryRow(c.Request.Context(), "SELECT count(*) FROM collections c WHERE "+strings.Join(where, " AND "), args...).Scan(total); err != nil {
+			return nil, nil, err
+		}
+	}
+	if cur != nil {
+		args = append(args, cur.Time, cur.ID)
+		where = append(where, fmt.Sprintf("(c.created_at,c.id)<($%d::timestamptz,$%d::uuid)", len(args)-1, len(args)))
+	}
 	args = append(args, limit+1)
 	query := collectionSelect + "WHERE " + strings.Join(where, " AND ") + fmt.Sprintf(" ORDER BY c.created_at DESC,c.id DESC LIMIT $%d", len(args))
-	rows, err := s.Pool.Query(c.Request.Context(), query, args...)
+	rows, err := q.Query(c.Request.Context(), query, args...)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -486,6 +486,26 @@ export interface paths {
         patch: operations["updateTagDecisions"];
         trace?: never;
     };
+    "/organization/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 订阅当前账号的整理更新
+         * @description 同源 Cookie SSE。每次连接先发送 ready（data 为 {}），随后 organization（OrganizationEvent）。事件仅为刷新提示，无事件 ID 或重放。ready 时重新查询当前收藏和待确认建议。心跳为 SSE 注释。会话撤销或过期会关闭流。
+         */
+        get: operations["organizationEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections/{id}/organization": {
         parameters: {
             query?: never;
@@ -867,6 +887,10 @@ export interface components {
             csrf_token: string;
             /** Format: date-time */
             expires_at: string;
+            /** @description 当前账号是否符合平台试用范围。 */
+            ai_trial_eligible?: boolean;
+            /** @description 平台文字整理总开关。 */
+            ai_platform_enabled?: boolean;
         };
         Session: {
             /** Format: uuid */
@@ -1097,6 +1121,8 @@ export interface components {
             created_at: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description 当前有效且待确认的项目建议。 */
+            has_suggestion?: boolean;
         };
         CollectionSummary: {
             /** Format: uuid */
@@ -1115,6 +1141,8 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
             resource_version: number;
+            /** @description 当前有效且待确认的项目建议。 */
+            has_suggestion?: boolean;
         };
         SearchHit: {
             collection: components["schemas"]["CollectionSummary"];
@@ -1254,6 +1282,8 @@ export interface components {
         CollectionPage: {
             items: components["schemas"]["CollectionSummary"][];
             next_cursor?: string;
+            /** @description 提供 has_suggestion 过滤时返回，包含所有匹配页，不受 cursor 或 limit 影响。 */
+            total?: number;
         };
         SearchPage: {
             items: components["schemas"]["SearchHit"][];
@@ -1311,6 +1341,13 @@ export interface components {
             /** @enum {string} */
             source_id: "original_text" | "intent";
             quote: string;
+        };
+        OrganizationEvent: {
+            /** Format: uuid */
+            collection_id: string;
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "partial" | "failed" | "skipped" | "blocked" | "superseded";
+            has_suggestion: boolean;
         };
     };
     responses: never;
@@ -2077,6 +2114,8 @@ export interface operations {
                 scope?: "active" | "trash" | "unclassified";
                 created_from?: string;
                 created_to?: string;
+                /** @description 按当前有效待确认建议过滤。建议须来自当前正文版本，且项目仍活动、版本匹配。传入时响应包含 total。 */
+                has_suggestion?: boolean;
             };
             header?: never;
             path?: never;
@@ -2455,6 +2494,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Collection"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    organizationEvents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE 事件流，organization 的 JSON 负载见 OrganizationEvent。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

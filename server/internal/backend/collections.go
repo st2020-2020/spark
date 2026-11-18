@@ -25,10 +25,13 @@ const collectionSelect = `SELECT to_jsonb(c)||jsonb_build_object(
  'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,'stages',r.stages,'error_code',r.error_code,'updated_at',r.updated_at)) FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
  'generated_title',(SELECT generated_title FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'generated_summary',(SELECT summary FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
+ 'has_suggestion',EXISTS (SELECT 1 FROM organization_pending_suggestions sp WHERE (sp.user_id,sp.collection_id)=(c.user_id,c.id)),
  'projects',COALESCE(
  (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision,'reason',cp.reason,'evidence',cp.evidence,'project_version',cp.project_version)) ORDER BY p.id)
  FROM collection_projects cp JOIN projects p ON p.user_id=cp.user_id AND p.id=cp.project_id
- WHERE cp.user_id=c.user_id AND cp.collection_id=c.id),'[]'::jsonb)) FROM collections c `
+ WHERE cp.user_id=c.user_id AND cp.collection_id=c.id
+ AND (cp.decision <> 'suggested' OR EXISTS (SELECT 1 FROM organization_pending_suggestions sp
+ WHERE (sp.user_id,sp.collection_id,sp.project_id)=(cp.user_id,cp.collection_id,cp.project_id)))),'[]'::jsonb)) FROM collections c `
 
 func scanCollection(row pgx.Row) (collectionRow, error) {
 	var b []byte
@@ -376,7 +379,7 @@ func summary(row collectionRow) contract.CollectionSummary {
 	for _, t := range row.ContentTypes {
 		types = append(types, contract.CollectionSummaryContentTypes(t))
 	}
-	return contract.CollectionSummary{Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200), ContentTypes: types, Projects: row.Projects, Tags: row.Tags, OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status), ReadAt: row.ReadAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion}
+	return contract.CollectionSummary{Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200), ContentTypes: types, Projects: row.Projects, Tags: row.Tags, OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status), HasSuggestion: row.HasSuggestion, ReadAt: row.ReadAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion}
 }
 
 func (s *Server) collectionView(row collectionRow) collectionRow {

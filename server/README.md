@@ -19,7 +19,7 @@ dc up -d --build api web
 dc ps
 ```
 
-迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `002_text_organization.sql`（版本 2）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v2.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
+迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `003_organization_events.sql`（版本 3）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v3.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
 
 ## 文本自动整理 Worker 与 AI 路由（默认关闭）
 
@@ -100,6 +100,30 @@ prod --profile ai up -d --wait --no-deps --force-recreate worker
 ```
 
 完全停用时将 `SPARK_AI_ENABLED` 设为 `false`，仅重建 API，Worker 保持停止。停止时已在途的请求按现有超时和结算规则收尾。排队任务和既有结果会保留，Worker 日后领取任务时按新的名单、用户同意和单条排除状态决定是否处理。
+
+### 生产 Nginx SSE 代理说明
+
+API 的 `GET /api/v1/organization/events` 会返回 `X-Accel-Buffering: no`、`Cache-Control: no-store, no-transform` 并每 15 秒发送心跳注释帧。若前置 Nginx 默认 `proxy_http_version 1.0` 与 `proxy_read_timeout 60s`，建议在生产启用 SSE 前为精确路由增加专用 `location` 块以避免缓冲或长连接被过早断开：
+
+```nginx
+location = /api/v1/organization/events {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    gzip off;
+    proxy_read_timeout 300s;
+}
+```
+
+登录后的同源客户端可打开 `GET /api/v1/organization/events`。每次建连先收到 `ready`，客户端重新读取相关收藏和待确认列表，补偿断线期间的变化。`organization` 事件仅包含 `collection_id`、`status` 和 `has_suggestion`，用于提示重新查询。会话到期、撤销、账号停用、API 停机或 PostgreSQL 连接中断都会关闭相关流。流最长五分钟，空闲时每十五秒发心跳，每帧写入与 flush 期限五秒。每个 API 进程持有一个独立的 PostgreSQL LISTEN 连接，最多 256 条流、每账号最多 6 条，积压客户端会断开并通过重连补偿。
+
+`GET /api/v1/collections?has_suggestion=true` 可按账号分页找回待确认建议。`total` 统计当前筛选命中的全部收藏，与同次分页查询共享数据库快照。建议须来自收藏的当前内容版本，收藏未删除，项目仍活动且版本匹配。该判定同时用于事件、收藏列表和详情。`SessionResult` 的 `ai_trial_eligible`、`ai_platform_enabled` 分别表示名单资格与平台开关，用户同意状态仍取自 `user.ai_enabled`。
 
 ## 管理员、邀请码和开发邮件
 

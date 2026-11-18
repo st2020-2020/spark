@@ -1,4 +1,5 @@
-import type { Organization, ProjectAssociation, Stage } from '../api/types';
+import type { SparkApi } from '../api/client';
+import type { Collection, Organization, ProjectAssociation, Stage } from '../api/types';
 
 export type OrganizationDisplayKind =
   | 'excluded'
@@ -320,4 +321,39 @@ export function classifyOrganizationDisplay(params: {
     triggerLabel: '重新整理',
     noProjectSuggestion: false,
   };
+}
+
+export class StaleSuggestionError extends Error {
+  readonly freshCollection: Collection;
+
+  constructor(message: string, freshCollection: Collection) {
+    super(message);
+    this.name = 'StaleSuggestionError';
+    this.freshCollection = freshCollection;
+  }
+}
+
+export async function decideCollectionProjectSafely(
+  api: Pick<SparkApi, 'getCollection' | 'updateProjectDecisions'>,
+  params: {
+    collectionId: string;
+    projectId: string;
+    action: 'include' | 'exclude';
+    requireSuggested?: boolean;
+  },
+): Promise<Collection> {
+  const fresh = await api.getCollection(params.collectionId);
+  if (fresh.deleted_at) {
+    throw new StaleSuggestionError('该收藏已移入回收站，列表已为你同步最新状态。', fresh);
+  }
+  if (params.requireSuggested) {
+    const assoc = fresh.projects.find((p) => p.project_id === params.projectId);
+    if (!assoc || assoc.decision !== 'suggested') {
+      throw new StaleSuggestionError('该条建议已在其他页面处理完成，列表已为你同步最新状态。', fresh);
+    }
+  }
+  return api.updateProjectDecisions(params.collectionId, {
+    base_decision_version: fresh.decision_version,
+    operations: [{ id: params.projectId, action: params.action }],
+  });
 }

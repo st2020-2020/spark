@@ -1,5 +1,5 @@
 import { ApiError } from '../api/errors';
-import type { SparkApi } from '../api/client';
+import type { OrganizationEventsHandlers, SparkApi } from '../api/client';
 import type {
   Collection,
   CollectionCreate,
@@ -8,6 +8,7 @@ import type {
   InviteBatch,
   InviteCode,
   Organization,
+  OrganizationEvent,
   Project,
   Revision,
   SearchHit,
@@ -74,6 +75,11 @@ export interface TestAdapter extends SparkApi {
   getLastVerificationCode(email: string): string | undefined;
   simulateExternalCollectionEdit(collectionId: string, textAppend: string): void;
   setMockOrganizationMode(mode: MockOrganizationMode): void;
+  setMockTrialEligibility(opts: { ai_trial_eligible?: boolean; ai_platform_enabled?: boolean }): void;
+  emitMockOrganizationReady(): void;
+  emitMockOrganizationEvent(event: OrganizationEvent): void;
+  emitMockOrganizationError(closed?: boolean): void;
+  getOrganizationSubscriberCount(): number;
 }
 
 const DEFAULT_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
@@ -106,6 +112,17 @@ export function createTestAdapter(): TestAdapter {
   let collections: StoredCollection[] = [];
   let idempotencyStore: Map<string, { digest: string; result: unknown }> = new Map();
   let mockOrganizationMode: MockOrganizationMode = 'succeed';
+  let mockAiTrialEligible = true;
+  let mockAiPlatformEnabled = true;
+  const orgSubscribers = new Set<{ userId: string; handlers: OrganizationEventsHandlers }>();
+  const pendingOrgTimers = new Map<string, number>();
+
+  function clearPendingOrgTimers(): void {
+    for (const timerId of pendingOrgTimers.values()) {
+      window.clearTimeout(timerId);
+    }
+    pendingOrgTimers.clear();
+  }
 
   let budgetConfig = {
     version: 1,
@@ -177,6 +194,10 @@ export function createTestAdapter(): TestAdapter {
     collections = [];
     idempotencyStore = new Map();
     mockOrganizationMode = 'succeed';
+    mockAiTrialEligible = true;
+    mockAiPlatformEnabled = true;
+    clearPendingOrgTimers();
+    orgSubscribers.clear();
   }
 
   seed();
@@ -263,6 +284,17 @@ export function createTestAdapter(): TestAdapter {
     return '未命名收藏';
   }
 
+  function collectionHasActiveSuggestion(c: StoredCollection): boolean {
+    if (c.deleted_at) return false;
+    return c.projects.some((pa) => {
+      if (pa.decision !== 'suggested') return false;
+      const proj = projects.find((p) => p.id === pa.project_id && p.user_id === c.user_id);
+      if (!proj || proj.state !== 'active') return false;
+      if (pa.project_version !== undefined && proj.version !== pa.project_version) return false;
+      return true;
+    });
+  }
+
   function toSummary(c: StoredCollection): CollectionSummary {
     return {
       id: c.id,
@@ -272,11 +304,51 @@ export function createTestAdapter(): TestAdapter {
       projects: c.projects,
       tags: c.tags,
       organization_status: c.organization.status,
+      has_suggestion: collectionHasActiveSuggestion(c),
       read_at: c.read_at,
       created_at: c.created_at,
       updated_at: c.updated_at,
       resource_version: c.resource_version,
     };
+  }
+
+  function notifySubscribers(userId: string, event: OrganizationEvent): void {
+    for (const sub of orgSubscribers) {
+      if (sub.userId === userId) {
+        sub.handlers.onOrganization?.(event);
+      }
+    }
+  }
+
+  function scheduleMockOrganization(col: StoredCollection, user: StoredUser): void {
+    const existing = pendingOrgTimers.get(col.id);
+    if (existing !== undefined) {
+      window.clearTimeout(existing);
+      pendingOrgTimers.delete(col.id);
+    }
+    if (col.organization.status !== 'queued') return;
+
+    const runStep = () => {
+      pendingOrgTimers.delete(col.id);
+      const currentCol = collections.find((c) => c.id === col.id && c.user_id === user.id);
+      if (!currentCol) return;
+      if (currentCol.organization.status !== 'queued' && currentCol.organization.status !== 'running') {
+        return;
+      }
+      advanceMockOrganization(currentCol, user);
+      notifySubscribers(user.id, {
+        collection_id: currentCol.id,
+        status: currentCol.organization.status,
+        has_suggestion: collectionHasActiveSuggestion(currentCol),
+      });
+      if (currentCol.organization.status === 'running') {
+        const nextId = window.setTimeout(runStep, 60);
+        pendingOrgTimers.set(currentCol.id, nextId);
+      }
+    };
+
+    const timerId = window.setTimeout(runStep, 60);
+    pendingOrgTimers.set(col.id, timerId);
   }
 
   function refreshProjectCounts(userId: string): void {
@@ -297,7 +369,10 @@ export function createTestAdapter(): TestAdapter {
 
   function toPublicCollection(c: StoredCollection): Collection {
     const { user_id: _u, extractions: _e, revisions: _r, ...rest } = c;
-    return rest;
+    return {
+      ...rest,
+      has_suggestion: collectionHasActiveSuggestion(c),
+    };
   }
 
   function createSessionFor(user: StoredUser) {
@@ -322,6 +397,8 @@ export function createTestAdapter(): TestAdapter {
       user: toPublicUser(user),
       csrf_token: csrf,
       expires_at: sess.expires_at,
+      ai_trial_eligible: mockAiTrialEligible,
+      ai_platform_enabled: mockAiPlatformEnabled,
     };
   }
 
@@ -564,6 +641,61 @@ export function createTestAdapter(): TestAdapter {
       mockOrganizationMode = mode;
     },
 
+    setMockTrialEligibility(opts: { ai_trial_eligible?: boolean; ai_platform_enabled?: boolean }) {
+      if (opts.ai_trial_eligible !== undefined) mockAiTrialEligible = opts.ai_trial_eligible;
+      if (opts.ai_platform_enabled !== undefined) mockAiPlatformEnabled = opts.ai_platform_enabled;
+    },
+
+    emitMockOrganizationReady() {
+      const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
+      if (!sess) return;
+      for (const sub of orgSubscribers) {
+        if (sub.userId === sess.user_id) {
+          sub.handlers.onReady?.();
+        }
+      }
+    },
+
+    emitMockOrganizationEvent(event: OrganizationEvent) {
+      const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
+      if (!sess) return;
+      notifySubscribers(sess.user_id, event);
+    },
+
+    emitMockOrganizationError(closed = false) {
+      const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
+      if (!sess) return;
+      for (const sub of orgSubscribers) {
+        if (sub.userId === sess.user_id) {
+          sub.handlers.onError?.({ closed });
+        }
+      }
+    },
+
+    getOrganizationSubscriberCount() {
+      return orgSubscribers.size;
+    },
+
+    subscribeOrganizationEvents(handlers) {
+      const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
+      if (!sess) {
+        queueMicrotask(() => {
+          handlers.onError?.({ closed: true });
+        });
+        return () => {};
+      }
+      const entry = { userId: sess.user_id, handlers };
+      orgSubscribers.add(entry);
+      queueMicrotask(() => {
+        if (orgSubscribers.has(entry)) {
+          handlers.onReady?.();
+        }
+      });
+      return () => {
+        orgSubscribers.delete(entry);
+      };
+    },
+
     setCsrfToken(token) {
       clientCsrfToken = token;
     },
@@ -730,6 +862,8 @@ export function createTestAdapter(): TestAdapter {
         user: toPublicUser(user),
         csrf_token: sess.csrf_token,
         expires_at: sess.expires_at,
+        ai_trial_eligible: mockAiTrialEligible,
+        ai_platform_enabled: mockAiPlatformEnabled,
       };
     },
 
@@ -1111,6 +1245,7 @@ export function createTestAdapter(): TestAdapter {
       refreshProjectCounts(user.id);
       const pub = toPublicCollection(col);
       saveIdempotency(user.id, 'createCollection', idempotencyKey, body, pub);
+      scheduleMockOrganization(col, user);
       return pub;
     },
 
@@ -1150,6 +1285,10 @@ export function createTestAdapter(): TestAdapter {
           if (query?.read === undefined) return true;
           return query.read ? Boolean(c.read_at) : !c.read_at;
         })
+        .filter((c) => {
+          if (query?.has_suggestion === undefined) return true;
+          return collectionHasActiveSuggestion(c) === query.has_suggestion;
+        })
         .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
 
       const limit = query?.limit ?? 30;
@@ -1159,6 +1298,7 @@ export function createTestAdapter(): TestAdapter {
       return {
         items: slice.map(toSummary),
         next_cursor: nextCursor,
+        ...(query?.has_suggestion !== undefined ? { total: filtered.length } : {}),
       };
     },
 
@@ -1254,6 +1394,7 @@ export function createTestAdapter(): TestAdapter {
         created_at: col.updated_at,
       });
 
+      scheduleMockOrganization(col, user);
       return toPublicCollection(col);
     },
 
@@ -1439,7 +1580,6 @@ export function createTestAdapter(): TestAdapter {
       const user = requireUser(false);
       const col = collections.find((c) => c.id === id && c.user_id === user.id);
       if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
-      advanceMockOrganization(col, user);
       return col.organization;
     },
 
@@ -1492,6 +1632,7 @@ export function createTestAdapter(): TestAdapter {
       col.mock_org_step = 0;
       col.mock_org_attempts = nextAttempts;
       saveIdempotency(user.id, 'restartOrganization', idempotencyKey, { id }, nextOrg);
+      scheduleMockOrganization(col, user);
       return nextOrg;
     },
 

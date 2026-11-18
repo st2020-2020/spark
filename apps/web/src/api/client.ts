@@ -28,6 +28,7 @@ import type {
   ModelConfig,
   ModelUpdate,
   Organization,
+  OrganizationEvent,
   PasswordReset,
   Preferences,
   Project,
@@ -57,10 +58,17 @@ import type {
   VerificationResult,
 } from './types';
 
+export interface OrganizationEventsHandlers {
+  onReady?: () => void;
+  onOrganization?: (event: OrganizationEvent) => void;
+  onError?: (info: { closed: boolean }) => void;
+}
+
 export interface SparkApi {
   readonly isTestAdapter: boolean;
   setCsrfToken(token: string | null): void;
   setUnauthorizedHandler(handler: (() => void) | null): void;
+  subscribeOrganizationEvents(handlers: OrganizationEventsHandlers): () => void;
 
   healthLive(signal?: AbortSignal): Promise<Health>;
   healthReady(signal?: AbortSignal): Promise<Health>;
@@ -223,6 +231,49 @@ export function createRealApiClient(): SparkApi {
 
     setUnauthorizedHandler(handler) {
       unauthorizedHandler = handler;
+    },
+
+    subscribeOrganizationEvents(handlers) {
+      if (typeof EventSource === 'undefined') {
+        return () => {};
+      }
+      const es = new EventSource(`${API_BASE}/organization/events`, {
+        withCredentials: true,
+      });
+      const handleReady = () => {
+        handlers.onReady?.();
+      };
+      const handleOrganization = (ev: MessageEvent) => {
+        try {
+          const parsed = JSON.parse(String(ev.data)) as OrganizationEvent;
+          if (
+            parsed &&
+            typeof parsed.collection_id === 'string' &&
+            typeof parsed.status === 'string' &&
+            typeof parsed.has_suggestion === 'boolean'
+          ) {
+            handlers.onOrganization?.(parsed);
+          }
+        } catch {
+          // Ignore malformed event payload
+        }
+      };
+      const handleError = () => {
+        const closed = es.readyState === EventSource.CLOSED;
+        if (closed) {
+          es.close();
+        }
+        handlers.onError?.({ closed });
+      };
+      es.addEventListener('ready', handleReady);
+      es.addEventListener('organization', handleOrganization);
+      es.addEventListener('error', handleError);
+      return () => {
+        es.removeEventListener('ready', handleReady);
+        es.removeEventListener('organization', handleOrganization);
+        es.removeEventListener('error', handleError);
+        es.close();
+      };
     },
 
     healthLive: (signal) =>

@@ -1328,6 +1328,14 @@
               "type": "string",
               "format": "date-time"
             }
+          },
+          {
+            "name": "has_suggestion",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "按当前有效待确认建议过滤。建议须来自当前正文版本，且项目仍活动、版本匹配。传入时响应包含 total。"
           }
         ]
       }
@@ -1899,6 +1907,40 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/AssociationUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/organization/events": {
+      "get": {
+        "operationId": "organizationEvents",
+        "summary": "订阅当前账号的整理更新",
+        "description": "同源 Cookie SSE。每次连接先发送 ready（data 为 {}），随后 organization（OrganizationEvent）。事件仅为刷新提示，无事件 ID 或重放。ready 时重新查询当前收藏和待确认建议。心跳为 SSE 注释。会话撤销或过期会关闭流。",
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "SSE 事件流，organization 的 JSON 负载见 OrganizationEvent。",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
               }
             }
           }
@@ -3363,6 +3405,14 @@
           "expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "ai_trial_eligible": {
+            "type": "boolean",
+            "description": "当前账号是否符合平台试用范围。"
+          },
+          "ai_platform_enabled": {
+            "type": "boolean",
+            "description": "平台文字整理总开关。"
           }
         },
         "required": [
@@ -4283,6 +4333,10 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "has_suggestion": {
+            "type": "boolean",
+            "description": "当前有效且待确认的项目建议。"
           }
         },
         "required": [
@@ -4368,6 +4422,10 @@
           "resource_version": {
             "type": "integer",
             "minimum": 1
+          },
+          "has_suggestion": {
+            "type": "boolean",
+            "description": "当前有效且待确认的项目建议。"
           }
         },
         "required": [
@@ -4950,6 +5008,11 @@
           },
           "next_cursor": {
             "type": "string"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "提供 has_suggestion 过滤时返回，包含所有匹配页，不受 cursor 或 limit 影响。"
           }
         },
         "required": [
@@ -5209,6 +5272,37 @@
         "required": [
           "source_id",
           "quote"
+        ]
+      },
+      "OrganizationEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "collection_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "skipped",
+              "blocked",
+              "superseded"
+            ]
+          },
+          "has_suggestion": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "collection_id",
+          "status",
+          "has_suggestion"
         ]
       }
     }

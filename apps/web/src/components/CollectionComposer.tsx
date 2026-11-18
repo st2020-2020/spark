@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Folder, Loader2, SendHorizontal, WifiOff, X } from 'lucide-react';
+import { Folder, Loader2, SendHorizontal, Sparkles, WifiOff, X } from 'lucide-react';
 import type { SparkDocument } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
@@ -22,21 +23,25 @@ import {
   type CollectionDraft,
 } from '../lib/drafts';
 import { generateIdempotencyKey, generateUuid } from '../lib/idempotency';
+import { AIConsentModal } from './AIConsentModal';
 import { RichTextEditor } from './RichTextEditor';
 
 export function CollectionComposer({
   defaultProjectId,
   autoFocus = false,
+  showAiEntry = !defaultProjectId,
   onCreated,
 }: {
   defaultProjectId?: string;
   autoFocus?: boolean;
+  showAiEntry?: boolean;
   onCreated?: () => void;
 }) {
   const api = useApi();
-  const { user } = useAuth();
+  const { user, aiTrialEligible, aiPlatformEnabled } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
+  const [aiConsentOpen, setAiConsentOpen] = useState(false);
 
   const userId = user?.id ?? '';
   const draftScope = defaultProjectId ? `project:${defaultProjectId}` : 'inbox';
@@ -686,6 +691,51 @@ export function CollectionComposer({
           </div>
         }
       />
+
+      {showAiEntry && user && aiPlatformEnabled && aiTrialEligible && (
+        user.ai_enabled ? (
+          <div
+            className="sp-composer-ai-bar sp-composer-ai-bar--active"
+            role="status"
+            aria-label="AI 自动整理状态"
+          >
+            <div className="sp-composer-ai-status">
+              <span className="sp-ai-status-dot" aria-hidden="true" />
+              <Sparkles size={13} strokeWidth={2} aria-hidden="true" />
+              <span>{aiExcluded ? 'AI 已开启（本条暂不参与）' : 'AI 自动整理已开启'}</span>
+            </div>
+            <Link to="/settings" className="sp-composer-ai-link">
+              设置
+            </Link>
+          </div>
+        ) : (
+          <div
+            className="sp-composer-ai-bar sp-composer-ai-bar--invite"
+            role="region"
+            aria-label="AI 自动整理入口"
+          >
+            <div className="sp-composer-ai-copy">
+              <span className="sp-composer-ai-badge" aria-hidden="true">
+                <Sparkles size={14} strokeWidth={2} />
+              </span>
+              <div className="sp-composer-ai-text">
+                <strong>AI 自动整理</strong>
+                <span>保存后自动提炼标题、摘要并推荐归属项目</span>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="sp-btn sp-btn--sm sp-ai-enable-btn"
+              onClick={() => setAiConsentOpen(true)}
+            >
+              <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
+              <span>开启 AI 整理</span>
+            </button>
+          </div>
+        )
+      )}
+
+      <AIConsentModal open={aiConsentOpen} onClose={() => setAiConsentOpen(false)} />
     </section>
   );
 }

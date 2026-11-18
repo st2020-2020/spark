@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
-import { Modal } from '../components/Modal';
+import { AIConsentModal } from '../components/AIConsentModal';
 import { PageHeader } from '../components/PageHeader';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
@@ -37,7 +37,7 @@ export function applyThemePreference(pref: ThemePref): void {
 
 export function SettingsPage() {
   const api = useApi();
-  const { user, setUser, logout } = useAuth();
+  const { user, setUser, logout, aiTrialEligible, aiPlatformEnabled } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -140,28 +140,40 @@ export function SettingsPage() {
                   <span
                     className={`sp-pill ${user?.ai_enabled ? 'sp-pill--green' : ''}`}
                   >
-                    {user?.ai_enabled ? '已开启' : '未开启'}
+                    {user?.ai_enabled
+                      ? '已开启'
+                      : !aiPlatformEnabled
+                        ? '平台暂未启用'
+                        : !aiTrialEligible
+                          ? '试用暂未开放'
+                          : '未开启'}
                   </span>
                   {user?.ai_enabled && (
                     <span className="sp-help">授权版本 v{user.ai_policy_version}</span>
                   )}
                 </div>
                 <span className="sp-help">
-                  由平台统一管理模型、密钥与费用，无需个人配置模型或 API Key；可随时关闭，或在单条收藏详情页排除。
+                  {!aiPlatformEnabled
+                    ? '当前平台尚未启用 AI 服务，收藏内容仍会正常保存。'
+                    : !aiTrialEligible && !user?.ai_enabled
+                      ? '当前账号暂不在本批 AI 试用范围内，收藏与手动整理均不受影响。'
+                      : '由平台统一管理模型、密钥与费用，无需个人配置模型或 API Key；可随时关闭，或在单条收藏详情页排除。'}
                 </span>
               </div>
-              <button
-                type="button"
-                className={`sp-btn sp-btn--sm ${user?.ai_enabled ? '' : 'sp-btn--primary'}`}
-                style={{ flexShrink: 0 }}
-                disabled={prefsMutation.isPending}
-                onClick={() => {
-                  if (!user?.ai_enabled) setAiConsentOpen(true);
-                  else prefsMutation.mutate({ ai_enabled: false });
-                }}
-              >
-                {user?.ai_enabled ? '关闭 AI 整理' : '开启 AI 整理'}
-              </button>
+              {(user?.ai_enabled || (aiPlatformEnabled && aiTrialEligible)) && (
+                <button
+                  type="button"
+                  className={`sp-btn sp-btn--sm ${user?.ai_enabled ? '' : 'sp-btn--primary'}`}
+                  style={{ flexShrink: 0 }}
+                  disabled={prefsMutation.isPending}
+                  onClick={() => {
+                    if (!user?.ai_enabled) setAiConsentOpen(true);
+                    else prefsMutation.mutate({ ai_enabled: false });
+                  }}
+                >
+                  {user?.ai_enabled ? '关闭 AI 整理' : '开启 AI 整理'}
+                </button>
+              )}
             </div>
 
             {isUsageUnavailable ? (
@@ -232,46 +244,7 @@ export function SettingsPage() {
         </section>
       </div>
 
-      <Modal open={aiConsentOpen} title="开启平台 AI 自动整理" onClose={() => setAiConsentOpen(false)}>
-        <div className="sp-stack" style={{ gap: 14 }}>
-          <p style={{ margin: 0 }}>
-            开启后，你在保存新收藏时将自动进入后台整理队列，无需自行配置模型或密钥。请确认以下处理范围：
-          </p>
-          <ul className="sp-consent-list">
-            <li>
-              <strong>发送资料范围：</strong>
-              仅发送未排除单条的收藏文字正文、用途说明与关联网址；不发送账号密码、会话密钥或已排除收藏。
-            </li>
-            <li>
-              <strong>处理用途：</strong>
-              用于生成建议标题、简短摘要，以及至多一条带原文依据的项目建议；首批仅提供建议，需由你手动确认或忽略。
-            </li>
-            <li>
-              <strong>第三方服务范围：</strong>
-              由 Spark 平台统一采购并托管的第三方文本模型服务处理，普通用户无需申请 API Key 或切换模型。
-            </li>
-            <li>
-              <strong>历史收藏说明：</strong>
-              开启仅对后续新保存的收藏生效，不会自动重跑全部历史收藏；旧资料可在详情页按需点击「重新整理」。
-            </li>
-          </ul>
-          <div className="sp-row" style={{ justifyContent: 'flex-end' }}>
-            <button type="button" className="sp-btn" onClick={() => setAiConsentOpen(false)}>
-              取消
-            </button>
-            <button
-              type="button"
-              className="sp-btn sp-btn--primary"
-              disabled={prefsMutation.isPending}
-              onClick={() =>
-                prefsMutation.mutate({ ai_enabled: true, consent_version: 'spark-ai-v1' })
-              }
-            >
-              {prefsMutation.isPending ? '保存中…' : '我已了解并开启'}
-            </button>
-          </div>
-        </div>
-      </Modal>
+      <AIConsentModal open={aiConsentOpen} onClose={() => setAiConsentOpen(false)} />
     </div>
   );
 }

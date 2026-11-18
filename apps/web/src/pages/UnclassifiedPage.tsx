@@ -1,27 +1,38 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderPlus, X } from 'lucide-react';
 import type { CollectionSummary } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
+import { decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
+import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { useToast } from '../context/ToastContext';
 
 export function UnclassifiedPage() {
   const api = useApi();
   const { pushToast } = useToast();
+  const { pendingSuggestionsCount, markSuggestionPromptHandled } = useOrganizationEvents();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedProjectByCol, setSelectedProjectByCol] = useState<Record<string, string>>({});
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const activeTab = searchParams.get('tab') === 'suggested' ? 'suggested' : 'all';
+
   const unclassifiedQuery = useInfiniteQuery({
-    queryKey: ['collections', 'unclassified'],
+    queryKey: ['collections', 'unclassified', activeTab],
     queryFn: ({ pageParam, signal }) =>
-      api.listCollections({ scope: 'unclassified', cursor: pageParam, limit: 30 }, signal),
+      api.listCollections(
+        activeTab === 'suggested'
+          ? { scope: 'active', has_suggestion: true, cursor: pageParam, limit: 30 }
+          : { scope: 'unclassified', cursor: pageParam, limit: 30 },
+        signal,
+      ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor,
   });
@@ -32,19 +43,16 @@ export function UnclassifiedPage() {
   });
 
   const decideMutation = useMutation({
-    mutationFn: async (params: {
+    mutationFn: (params: {
       collectionId: string;
       projectId: string;
       action: 'include' | 'exclude';
-    }) => {
-      const fresh = await api.getCollection(params.collectionId);
-      return api.updateProjectDecisions(params.collectionId, {
-        base_decision_version: fresh.decision_version,
-        operations: [{ id: params.projectId, action: params.action }],
-      });
-    },
-    onSuccess: (_res, vars) => {
+      requireSuggested?: boolean;
+    }) => decideCollectionProjectSafely(api, params),
+    onSuccess: (updated, vars) => {
       setActionError(null);
+      markSuggestionPromptHandled(vars.collectionId);
+      queryClient.setQueryData(['collection', vars.collectionId], updated);
       pushToast({
         message: vars.action === 'include' ? '已归入项目' : '已忽略建议关联',
       });
@@ -53,7 +61,14 @@ export function UnclassifiedPage() {
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
-    onError: (err) => {
+    onError: (err, vars) => {
+      if (err instanceof StaleSuggestionError) {
+        markSuggestionPromptHandled(vars.collectionId);
+        queryClient.setQueryData(['collection', vars.collectionId], err.freshCollection);
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        setActionError(err.message);
+        return;
+      }
       setActionError(getFriendlyErrorMessage(err));
     },
   });
@@ -98,6 +113,7 @@ export function UnclassifiedPage() {
                       collectionId: col.id,
                       projectId: sug.project_id,
                       action: 'include',
+                      requireSuggested: true,
                     })
                   }
                 >
@@ -113,6 +129,7 @@ export function UnclassifiedPage() {
                       collectionId: col.id,
                       projectId: sug.project_id,
                       action: 'exclude',
+                      requireSuggested: true,
                     })
                   }
                 >
@@ -175,6 +192,30 @@ export function UnclassifiedPage() {
         }
       />
 
+      <div className="sp-filter-tabs" aria-label="待归类视图筛选">
+        <button
+          type="button"
+          className={`sp-filter-tab ${activeTab === 'all' ? 'active' : ''}`}
+          aria-pressed={activeTab === 'all'}
+          onClick={() => setSearchParams({}, { replace: true })}
+        >
+          全部待归类
+        </button>
+        <button
+          type="button"
+          className={`sp-filter-tab ${activeTab === 'suggested' ? 'active' : ''}`}
+          aria-pressed={activeTab === 'suggested'}
+          onClick={() => setSearchParams({ tab: 'suggested' }, { replace: true })}
+        >
+          <span>待确认 AI 建议</span>
+          {pendingSuggestionsCount > 0 && (
+            <span className="sp-pill sp-pill--green" style={{ marginLeft: 6, padding: '1px 7px' }}>
+              {pendingSuggestionsCount}
+            </span>
+          )}
+        </button>
+      </div>
+
       {projects.length === 0 && !projectsQuery.isLoading && (
         <div className="sp-banner sp-banner--info" style={{ marginBottom: 14 }}>
           <span>
@@ -202,12 +243,26 @@ export function UnclassifiedPage() {
       )}
       {!unclassifiedQuery.isLoading && !unclassifiedQuery.isError && items.length === 0 && (
         <EmptyState
-          title="没有待归类的收藏"
-          description="所有有效收藏都已经关联到项目了。"
+          title={activeTab === 'suggested' ? '没有待确认的 AI 建议' : '没有待归类的收藏'}
+          description={
+            activeTab === 'suggested'
+              ? '当 AI 整理生成新的项目关联建议时，会保留在这里等你确认。'
+              : '所有有效收藏都已经关联到项目了。'
+          }
           action={
-            <Link to="/inbox" className="sp-btn sp-btn--primary">
-              返回收件箱
-            </Link>
+            activeTab === 'suggested' ? (
+              <button
+                type="button"
+                className="sp-btn sp-btn--primary"
+                onClick={() => setSearchParams({}, { replace: true })}
+              >
+                查看全部待归类
+              </button>
+            ) : (
+              <Link to="/inbox" className="sp-btn sp-btn--primary">
+                返回收件箱
+              </Link>
+            )
           }
         />
       )}

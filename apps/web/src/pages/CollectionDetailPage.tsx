@@ -56,7 +56,7 @@ interface EditDraft {
 export function CollectionDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const api = useApi();
-  const { user } = useAuth();
+  const { user, aiTrialEligible, aiPlatformEnabled } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -77,10 +77,6 @@ export function CollectionDetailPage() {
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
   const [orgActionError, setOrgActionError] = useState<string | null>(null);
-  const [orgPollError, setOrgPollError] = useState<string | null>(null);
-  const [isPageVisible, setIsPageVisible] = useState(
-    typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
-  );
 
   const autoReadMarkedRef = useRef<string | null>(null);
   const autoEditOpenedRef = useRef<string | null>(null);
@@ -127,13 +123,6 @@ export function CollectionDetailPage() {
       });
   }, [api, collection, id, queryClient]);
 
-  useEffect(() => {
-    const onVis = () => setIsPageVisible(document.visibilityState === 'visible');
-    document.addEventListener('visibilitychange', onVis);
-    return () => document.removeEventListener('visibilitychange', onVis);
-  }, []);
-
-  const orgStatus = collection?.organization.status;
   const orgRetryContext = collection
     ? `${collection.id}:${collection.content_version}:${collection.ai_excluded ? '1' : '0'}`
     : '';
@@ -143,58 +132,6 @@ export function CollectionDetailPage() {
       orgRetryKeyRef.current = generateIdempotencyKey();
     }
   }, [orgRetryContext]);
-
-  useEffect(() => {
-    if (!collection || collection.deleted_at || !isPageVisible) return;
-    if (!isOrganizationActiveStatus(orgStatus)) return;
-
-    let cancelled = false;
-    let timerId: number | null = null;
-
-    const pollOnce = async () => {
-      try {
-        const org = await api.getOrganization(collection.id);
-        if (cancelled) return;
-        setOrgPollError(null);
-        queryClient.setQueryData<Collection | undefined>(['collection', id], (prev) =>
-          prev ? { ...prev, organization: org } : prev,
-        );
-        if (!isOrganizationActiveStatus(org.status)) {
-          try {
-            const refreshed = await api.getCollection(collection.id);
-            if (!cancelled) {
-              queryClient.setQueryData(['collection', id], refreshed);
-              void queryClient.invalidateQueries({ queryKey: ['collections'] });
-              void queryClient.invalidateQueries({ queryKey: ['projects'] });
-              void queryClient.invalidateQueries({ queryKey: ['project'] });
-              void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
-            }
-          } catch (refreshErr) {
-            if (!cancelled) setOrgPollError(getFriendlyErrorMessage(refreshErr));
-          }
-          return;
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setOrgPollError(getFriendlyErrorMessage(err));
-      }
-
-      if (!cancelled) {
-        timerId = window.setTimeout(() => {
-          void pollOnce();
-        }, 2000);
-      }
-    };
-
-    timerId = window.setTimeout(() => {
-      void pollOnce();
-    }, 2000);
-
-    return () => {
-      cancelled = true;
-      if (timerId !== null) window.clearTimeout(timerId);
-    };
-  }, [api, collection?.id, collection?.deleted_at, id, isPageVisible, orgStatus, queryClient]);
 
   useBeforeUnloadWarning(isEditing && Boolean(editDraft));
 
@@ -401,7 +338,6 @@ export function CollectionDetailPage() {
     mutationFn: () => api.restartOrganization(id, orgRetryKeyRef.current),
     onSuccess: async (org) => {
       setOrgActionError(null);
-      setOrgPollError(null);
       orgRetryKeyRef.current = generateIdempotencyKey();
       queryClient.setQueryData<Collection | undefined>(['collection', id], (prev) =>
         prev ? { ...prev, organization: org } : prev,
@@ -780,6 +716,7 @@ export function CollectionDetailPage() {
               return (
                 <div
                   key={pa.project_id}
+                  id={isSuggested ? 'ai-suggestion-section' : undefined}
                   className={`sp-suggestion-card ${
                     isSuggested ? 'sp-suggestion-card--highlighted' : ''
                   }`}
@@ -969,7 +906,7 @@ export function CollectionDetailPage() {
 
             <p className="sp-help" style={{ margin: 0 }}>
               {orgDisplay.description}
-              {orgDisplay.kind === 'disabled' && (
+              {orgDisplay.kind === 'disabled' && aiTrialEligible && aiPlatformEnabled && (
                 <>
                   {' '}
                   <Link to="/settings" style={{ fontWeight: 500 }}>
@@ -982,22 +919,6 @@ export function CollectionDetailPage() {
             {orgActionError && (
               <div className="sp-banner sp-banner--error" role="alert">
                 <span>{orgActionError}</span>
-              </div>
-            )}
-
-            {orgPollError && (
-              <div className="sp-banner sp-banner--warning" role="status">
-                <span>刷新整理进度失败：{orgPollError}</span>
-                <button
-                  type="button"
-                  className="sp-btn sp-btn--sm"
-                  onClick={() => {
-                    setOrgPollError(null);
-                    void collectionQuery.refetch();
-                  }}
-                >
-                  立即刷新
-                </button>
               </div>
             )}
 

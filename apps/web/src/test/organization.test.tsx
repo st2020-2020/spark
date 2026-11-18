@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
-import { ApiError } from '../api/errors';
 import type { Organization } from '../api/types';
 import { classifyOrganizationDisplay, evidenceSourceLabel } from '../lib/organization';
 import { createTestAdapter } from '../test-adapter/mockServer';
@@ -34,31 +33,31 @@ describe('Platform AI organization & UI states', () => {
     vi.restoreAllMocks();
   });
 
-  it('completes consent -> project creation -> save -> polling -> terminal refresh -> evidence & confirm/ignore', async () => {
+  it('enables AI prominently from Inbox, subscribes once via SSE with zero detail polling, prompts on has_suggestion=true, and confirms with evidence', async () => {
     const user = userEvent.setup();
-    const { adapter } = renderApp(['/login']);
+    const adapter = createTestAdapter();
+    const subscribeSpy = vi.spyOn(adapter, 'subscribeOrganizationEvents');
+    renderApp(['/login'], adapter);
+    expect(adapter.getOrganizationSubscriberCount()).toBe(0);
     await loginAsAdmin(user);
 
-    // 1. Open Settings and verify user does not configure models; /me/usage 404 does not block consent
-    vi.spyOn(adapter, 'getUsage').mockRejectedValueOnce(
-      new ApiError({ status: 404, code: 'not_found', message: 'not open' }),
-    );
-    const sidebar = within(screen.getByRole('complementary', { name: '主导航' }));
-    await user.click(sidebar.getByRole('button', { name: '账号菜单' }));
-    await user.click(screen.getByRole('menuitem', { name: '设置与会话' }));
-    await screen.findByRole('heading', { name: '设置' });
-    await screen.findByText(/无需个人配置模型或 API Key/);
-    expect(screen.getByRole('button', { name: '开启 AI 整理' })).toBeEnabled();
+    // Single aggregated SSE stream opened once authenticated shell mounts
+    expect(adapter.getOrganizationSubscriberCount()).toBe(1);
+    expect(subscribeSpy).toHaveBeenCalledTimes(1);
 
-    await user.click(screen.getByRole('button', { name: '开启 AI 整理' }));
+    // 1. Enable AI directly from the prominent Inbox composer entry -> opens consent modal -> switches to lightweight status
+    const composerRegion = screen.getByRole('region', { name: 'AI 自动整理入口' });
+    await user.click(within(composerRegion).getByRole('button', { name: '开启 AI 整理' }));
     await screen.findByRole('heading', { name: '开启平台 AI 自动整理' });
     await screen.findByText(/发送资料范围：/);
     await screen.findByText(/第三方服务范围：/);
     await screen.findByText(/历史收藏说明：/);
     await user.click(screen.getByRole('button', { name: '我已了解并开启' }));
-    await screen.findByText(/授权版本 v\d+/);
+    await screen.findByText('AI 自动整理已开启');
+    expect(screen.queryByRole('region', { name: 'AI 自动整理入口' })).not.toBeInTheDocument();
 
     // 2. Create a project so AI matcher can suggest it with evidence
+    const sidebar = within(screen.getByRole('complementary', { name: '主导航' }));
     await user.click(sidebar.getByRole('link', { name: '创建项目' }));
     await user.type(await screen.findByLabelText('项目名称（必填）'), '前端交互升级');
     await user.type(
@@ -67,6 +66,8 @@ describe('Platform AI organization & UI states', () => {
     );
     await user.click(screen.getByRole('button', { name: '创建项目' }));
     await screen.findByRole('heading', { name: '前端交互升级' });
+    // Navigating across routes keeps the single SSE connection alive without recreating it
+    expect(adapter.getOrganizationSubscriberCount()).toBe(1);
 
     // 3. Save a collection with URL + intent in Inbox
     await user.click(sidebar.getByRole('link', { name: '收件箱' }));
@@ -87,18 +88,14 @@ describe('Platform AI organization & UI states', () => {
     await user.click(screen.getByRole('button', { name: '保存收藏' }));
     await screen.findByText('example.com');
 
-    // 4. Open detail and observe polling queued -> running -> succeeded + single collection refresh
-    await user.click(screen.getByRole('link', { name: '查看全文' }));
-    await screen.findByText('整理排队中');
+    // Actionable completion prompt arrives via SSE when has_suggestion === true
+    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+    const toastActionBtn = await screen.findByRole('button', { name: '查看并确认' });
 
-    await waitFor(
-      () => {
-        expect(screen.getByText('已整理')).toBeInTheDocument();
-      },
-      { timeout: 7000 },
-    );
-    expect(getOrgSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
-    // Initial detail load + 1 terminal refresh = 2 calls (not repeated after terminal)
+    // Click toast CTA to jump straight to collection detail
+    await user.click(toastActionBtn);
+    await screen.findByText('已整理');
+    expect(getOrgSpy).not.toHaveBeenCalled();
     expect(getCollectionSpy).toHaveBeenCalledTimes(2);
 
     // Generated title, summary, AI suggestion & evidence quote are displayed
@@ -111,7 +108,8 @@ describe('Platform AI organization & UI states', () => {
       within(evidenceList).getByText(/前端交互升级需要参考这个卡片对齐细节/),
     ).toBeInTheDocument();
 
-    // 5. Verify Unclassified page also displays AI suggestion + evidence before confirming
+    // 5. Verify sidebar badge + Unclassified page also displays AI suggestion + evidence before confirming
+    await sidebar.findByRole('link', { name: '1 条待确认 AI 建议' });
     await user.click(sidebar.getByRole('link', { name: '待归类' }));
     await screen.findByText(/建议归入：前端交互升级/);
     const unclassifiedEvidence = await screen.findByRole('list', { name: '推荐依据摘录' });
@@ -119,10 +117,13 @@ describe('Platform AI organization & UI states', () => {
       within(unclassifiedEvidence).getByText(/前端交互升级需要参考这个卡片对齐细节/),
     ).toBeInTheDocument();
 
-    // Confirm ("加入项目") moves it out of unclassified
+    // Confirm ("加入项目") moves it out of unclassified and clears pending count badge
     await user.click(screen.getByRole('button', { name: '加入项目' }));
     await screen.findByText('已归入项目');
     await screen.findByText('没有待归类的收藏');
+    expect(sidebar.queryByRole('link', { name: /待确认 AI 建议/ })).not.toBeInTheDocument();
+    // Navigating across Inbox -> Projects -> Inbox -> Detail -> Unclassified kept the exact same single SSE subscription
+    expect(subscribeSpy).toHaveBeenCalledTimes(1);
   }, 15000);
 
   it('supports per-item AI exclusion on create and detail, plus ignore/reset on detail', async () => {
@@ -281,7 +282,7 @@ describe('Platform AI organization & UI states', () => {
     await screen.findByText('未配置模型服务');
   });
 
-  it('pauses organization polling while document is hidden and resumes when visible', async () => {
+  it('never falls back to detail polling on SSE disconnect, deduplicates prompts, only prompts on has_suggestion=true, and syncs once on ready/resume', async () => {
     const adapter = createTestAdapter();
     await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
     await adapter.updatePreferences({ ai_enabled: true, consent_version: 'v1' });
@@ -292,7 +293,7 @@ describe('Platform AI organization & UI states', () => {
           schema_version: 1,
           content: {
             type: 'doc',
-            content: [{ type: 'paragraph', content: [{ type: 'text', text: '可见性轮询控制' }] }],
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: 'SSE 去重与重连补偿校验' }] }],
           },
         },
         intent: '',
@@ -303,27 +304,246 @@ describe('Platform AI organization & UI states', () => {
       'create-col-key-3333333333',
     );
 
-    let visState: DocumentVisibilityState = 'hidden';
-    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visState);
-
     const getOrgSpy = vi.spyOn(adapter, 'getOrganization');
+    const listCollectionsSpy = vi.spyOn(adapter, 'listCollections');
+    const listProjectsSpy = vi.spyOn(adapter, 'listProjects');
     renderApp([`/collections/${col.id}`], adapter);
-    await screen.findByText('可见性轮询控制');
+    await screen.findByText('SSE 去重与重连补偿校验');
+    expect(adapter.getOrganizationSubscriberCount()).toBe(1);
 
-    await new Promise((resolve) => setTimeout(resolve, 2300));
+    // Wait for initial SSE ready sync to settle, then attach getCollection spy
+    await waitFor(() => {
+      expect(getOrgSpy).not.toHaveBeenCalled();
+    });
+    const getCollectionSpy = vi.spyOn(adapter, 'getCollection');
+
+    // Simulate transient SSE error and settle initial mock auto-run: MUST NOT fall back to polling
+    act(() => {
+      adapter.emitMockOrganizationError(false);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 250));
     expect(getOrgSpy).not.toHaveBeenCalled();
 
-    visState = 'visible';
+    const callsBeforeNoSuggestion = getCollectionSpy.mock.calls.length;
+    const listColsBeforeEvent = listCollectionsSpy.mock.calls.length;
+    const listProjsBeforeEvent = listProjectsSpy.mock.calls.length;
+    // Terminal event with has_suggestion=false must refresh detail once, NOT reload lists/projects, and NOT prompt confirmation toast
+    act(() => {
+      adapter.emitMockOrganizationEvent({
+        collection_id: col.id,
+        status: 'succeeded',
+        has_suggestion: false,
+      });
+    });
+    await waitFor(() => {
+      expect(getCollectionSpy.mock.calls.length).toBe(callsBeforeNoSuggestion + 1);
+    });
+    expect(listCollectionsSpy.mock.calls.length).toBe(listColsBeforeEvent);
+    expect(listProjectsSpy.mock.calls.length).toBe(listProjsBeforeEvent);
+    expect(
+      screen.queryByText('AI 已整理完成并生成项目建议，等待你的确认'),
+    ).not.toBeInTheDocument();
+
+    // Terminal event with has_suggestion=true shows ONE deduplicated confirmation toast even if delivered twice
+    act(() => {
+      adapter.emitMockOrganizationEvent({
+        collection_id: col.id,
+        status: 'succeeded',
+        has_suggestion: true,
+      });
+      adapter.emitMockOrganizationEvent({
+        collection_id: col.id,
+        status: 'succeeded',
+        has_suggestion: true,
+      });
+    });
+    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+    expect(screen.getAllByText('AI 已整理完成并生成项目建议，等待你的确认')).toHaveLength(1);
+
+    // Burst of ready + online + visibilitychange within coalesce window triggers only ONE compensation sync
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const callsBeforeBurst = getCollectionSpy.mock.calls.length;
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    act(() => {
+      adapter.emitMockOrganizationReady();
+      window.dispatchEvent(new Event('online'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await waitFor(() => {
+      expect(getCollectionSpy.mock.calls.length).toBe(callsBeforeBurst + 1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getCollectionSpy.mock.calls.length).toBe(callsBeforeBurst + 1);
+    expect(getOrgSpy).not.toHaveBeenCalled();
+
+    // After coalesce window, foreground visibility resume triggers a single on-demand compensation sync
+    await new Promise((resolve) => setTimeout(resolve, 220));
+    const callsBeforeVis = getCollectionSpy.mock.calls.length;
     act(() => {
       document.dispatchEvent(new Event('visibilitychange'));
     });
-    await waitFor(
-      () => {
-        expect(getOrgSpy).toHaveBeenCalled();
-      },
-      { timeout: 4000 },
-    );
+    await waitFor(() => {
+      expect(getCollectionSpy.mock.calls.length).toBe(callsBeforeVis + 1);
+    });
+    expect(getOrgSpy).not.toHaveBeenCalled();
   }, 12000);
+
+  it('recovers pending suggestions cleanly after returning offline and respects trial eligibility', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({ ai_enabled: true, consent_version: 'v1' });
+    await adapter.createProject(
+      { name: '离线回访验证项目', description: '离线归档与恢复', focus_points: [] },
+      'proj-offline-1111111111',
+    );
+    await adapter.createCollection(
+      {
+        id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: '离线期间完成的 AI 建议待确认' }] },
+            ],
+          },
+        },
+        intent: '离线回访验证项目整理测试',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'create-col-offline-1111111111',
+    );
+    // Let background mock finish while no UI SSE subscriber was mounted
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // User returns and mounts Inbox
+    renderApp(['/inbox'], adapter);
+    const pendingBanner = await screen.findByTestId('pending-suggestions-banner');
+    expect(pendingBanner).toHaveTextContent(/有\s*1\s*条 AI 项目建议待确认/);
+
+    // Expand inline list in Inbox and verify item + suggested project + evidence appear
+    await user.click(within(pendingBanner).getByRole('button', { name: '查看列表' }));
+    await within(pendingBanner).findByText(/建议归入：离线回访验证项目/);
+
+    // Jump to /unclassified?tab=suggested and confirm from persistent list
+    await user.click(within(pendingBanner).getByRole('link', { name: '去确认' }));
+    await screen.findByRole('button', { name: /待确认 AI 建议/ });
+    await screen.findByText(/建议归入：离线回访验证项目/);
+    await user.click(screen.getByRole('button', { name: '加入项目' }));
+    await screen.findByText('没有待确认的 AI 建议');
+
+    // Logout closes SSE cleanly
+    await user.click(screen.getByRole('button', { name: '账号菜单' }));
+    await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
+    await screen.findByRole('heading', { name: '登录你的空间' });
+    expect(adapter.getOrganizationSubscriberCount()).toBe(0);
+
+    // Non-trial user must not see a failing AI enable CTA on Inbox
+    cleanup();
+    adapter.setMockTrialEligibility({ ai_trial_eligible: false, ai_platform_enabled: true });
+    await adapter.updatePreferences({ ai_enabled: false }).catch(() => undefined);
+    // Login again after disabling AI on ineligible account
+    const adminUser = await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    if (adminUser.user.ai_enabled) {
+      await adapter.updatePreferences({ ai_enabled: false });
+    }
+    await adapter.logout();
+
+    renderApp(['/login'], adapter);
+    await loginAsAdmin(user);
+    expect(screen.queryByRole('region', { name: 'AI 自动整理入口' })).not.toBeInTheDocument();
+  }, 15000);
+
+  it('guards PendingSuggestionsBanner against overwriting newer decisions made in another tab and clears dedupe across accounts', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({ ai_enabled: true, consent_version: 'v1' });
+    const proj = await adapter.createProject(
+      { name: '跨标签防覆盖项目', description: '冲突防护', focus_points: [] },
+      'proj-stale-guard-1111111111',
+    );
+    const col = await adapter.createCollection(
+      {
+        id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '跨标签防覆盖项目测试文档' }] }],
+          },
+        },
+        intent: '跨标签防覆盖项目测试',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'create-col-stale-1111111111',
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    renderApp(['/inbox'], adapter);
+    const pendingBanner = await screen.findByTestId('pending-suggestions-banner');
+    await user.click(within(pendingBanner).getByRole('button', { name: '查看列表' }));
+    await within(pendingBanner).findByText(/建议归入：跨标签防覆盖项目/);
+
+    // Simulate another tab rejecting the suggestion (bumping decision_version and resolving suggested -> rejected)
+    const beforeTab2 = await adapter.getCollection(col.id);
+    await adapter.updateProjectDecisions(col.id, {
+      base_decision_version: beforeTab2.decision_version,
+      operations: [{ id: proj.id, action: 'exclude' }],
+    });
+
+    const updateDecisionsSpy = vi.spyOn(adapter, 'updateProjectDecisions');
+    await user.click(within(pendingBanner).getByRole('button', { name: '加入项目' }));
+
+    await screen.findByText('该条建议已在其他页面处理完成，列表已为你同步最新状态。');
+    expect(updateDecisionsSpy).not.toHaveBeenCalled();
+    const latest = await adapter.getCollection(col.id);
+    expect(latest.projects.find((p) => p.project_id === proj.id)?.decision).toBe('rejected');
+
+    // Cross-account isolation: SSE dedupe history clears cleanly on logout / account switch
+    act(() => {
+      adapter.emitMockOrganizationEvent({
+        collection_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        status: 'succeeded',
+        has_suggestion: true,
+      });
+    });
+    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+
+    await user.click(screen.getByRole('button', { name: '账号菜单' }));
+    await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
+    await screen.findByRole('heading', { name: '登录你的空间' });
+
+    // Register a second account and verify same collection_id event is NOT suppressed by Account A's dedupe history
+    const verif = await adapter.sendVerification({ email: 'userb@spark.local', purpose: 'register' });
+    const code = adapter.getLastVerificationCode('userb@spark.local')!;
+    await adapter.register({
+      email: 'userb@spark.local',
+      password: 'PasswordB123456!',
+      challenge_id: verif.challenge_id,
+      verification_code: code,
+      invite_code: 'SPARK-TEST-0002',
+    });
+
+    cleanup();
+    renderApp(['/inbox'], adapter);
+    await screen.findByRole('heading', { name: '收件箱' });
+    expect(screen.queryByText('跨标签防覆盖项目测试文档')).not.toBeInTheDocument();
+
+    act(() => {
+      adapter.emitMockOrganizationEvent({
+        collection_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        status: 'succeeded',
+        has_suggestion: true,
+      });
+    });
+    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+  }, 15000);
 });
 
 describe('organization display helpers', () => {

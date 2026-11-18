@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -16,6 +17,8 @@ interface AuthState {
   user: User | null;
   csrfToken: string | null;
   expiresAt: string | null;
+  aiTrialEligible: boolean;
+  aiPlatformEnabled: boolean;
   isLoading: boolean;
   sessionError: string | null;
 }
@@ -37,32 +40,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user: null,
     csrfToken: null,
     expiresAt: null,
+    aiTrialEligible: true,
+    aiPlatformEnabled: true,
     isLoading: true,
     sessionError: null,
   });
 
+  const currentUserIdRef = useRef<string | null>(null);
+
   const applySession = useCallback(
     (session: SessionResult) => {
+      if (currentUserIdRef.current && currentUserIdRef.current !== session.user.id) {
+        queryClient.clear();
+      }
+      currentUserIdRef.current = session.user.id;
       api.setCsrfToken(session.csrf_token);
       setState({
         user: session.user,
         csrfToken: session.csrf_token,
         expiresAt: session.expires_at,
+        aiTrialEligible: session.ai_trial_eligible ?? true,
+        aiPlatformEnabled: session.ai_platform_enabled ?? true,
         isLoading: false,
         sessionError: null,
       });
     },
-    [api],
+    [api, queryClient],
   );
 
   const clearSessionState = useCallback(
     (message: string | null = null) => {
+      currentUserIdRef.current = null;
       api.setCsrfToken(null);
       queryClient.clear();
       setState({
         user: null,
         csrfToken: null,
         expiresAt: null,
+        aiTrialEligible: false,
+        aiPlatformEnabled: false,
         isLoading: false,
         sessionError: message,
       });

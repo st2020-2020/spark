@@ -14,7 +14,7 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-const Version = 2
+const Version = 3
 
 func RiverSchema(pool *pgxpool.Pool) string {
 	if s := pool.Config().ConnConfig.RuntimeParams["search_path"]; s != "" {
@@ -59,7 +59,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if version > Version {
 		return fmt.Errorf("database schema %d is newer than supported %d", version, Version)
 	}
-	names := []string{"001_initial.sql", "002_text_organization.sql"}
+	names := []string{"001_initial.sql", "002_text_organization.sql", "003_organization_events.sql"}
 	for v := version + 1; v <= Version; v++ {
 		sql, err := migrations.ReadFile("migrations/" + names[v-1])
 		if err != nil {

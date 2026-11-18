@@ -34,6 +34,7 @@ type Server struct {
 	hashes    chan struct{}
 	dummyHash string
 	Organizer *Organizer
+	events    *organizationHub
 }
 type apiError struct {
 	Status        int
@@ -56,7 +57,7 @@ func New(ctx context.Context, cfg Config, pool *pgxpool.Pool) (*Server, error) {
 	if err = spec.Validate(ctx); err != nil {
 		return nil, err
 	}
-	s := &Server{Config: cfg, Pool: pool, spec: spec, hashes: make(chan struct{}, 2)}
+	s := &Server{Config: cfg, Pool: pool, spec: spec, events: newOrganizationHub(), hashes: make(chan struct{}, 2)}
 	s.Organizer, err = NewOrganizer(pool, cfg.AIEnabled, cfg.AITrial)
 	if err != nil {
 		return nil, err
@@ -74,9 +75,11 @@ func (s *Server) Router() *gin.Engine {
 		c.Header("X-Request-ID", id)
 		c.Header("Cache-Control", "no-store")
 		c.Header("X-Content-Type-Options", "nosniff")
-		ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
-		defer cancel()
-		c.Request = c.Request.WithContext(ctx)
+		if c.Request.Method != http.MethodGet || c.FullPath() != organizationEventsPath {
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+			defer cancel()
+			c.Request = c.Request.WithContext(ctx)
+		}
 		started := time.Now()
 		c.Next()
 		slog.Info("request completed", "request_id", id, "operation", c.Request.Method+" "+c.FullPath(), "status", c.Writer.Status(), "duration_ms", time.Since(started).Milliseconds())
@@ -122,6 +125,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.GET("/collections/:id/organization", s.handle(s.getOrganization))
 	secured.POST("/collections/:id/organization", s.handle(s.restartOrganization))
 	secured.PUT("/collections/:id/ai-exclusion", s.handle(s.setAIExclusion))
+	secured.GET("/organization/events", s.handle(s.organizationEvents))
 	secured.GET("/search", s.handle(s.search))
 	admin := secured.Group("/admin")
 	admin.Use(func(c *gin.Context) {

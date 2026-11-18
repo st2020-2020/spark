@@ -70,4 +70,86 @@ describe('realApiClient', () => {
 
     vi.unstubAllGlobals();
   });
+
+  it('subscribes to same-origin /api/v1/organization/events with credentials and cleans up', () => {
+    const listeners = new Map<string, Set<(ev: MessageEvent) => void>>();
+    const closeMock = vi.fn();
+    let capturedUrl = '';
+    let capturedInit: EventSourceInit | undefined;
+    let instanceReadyState = 1;
+
+    class MockEventSource {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSED = 2;
+      constructor(url: string | URL, init?: EventSourceInit) {
+        capturedUrl = String(url);
+        capturedInit = init;
+      }
+      get readyState() {
+        return instanceReadyState;
+      }
+      addEventListener(type: string, cb: (ev: MessageEvent) => void) {
+        let set = listeners.get(type);
+        if (!set) {
+          set = new Set();
+          listeners.set(type, set);
+        }
+        set.add(cb);
+      }
+      removeEventListener(type: string, cb: (ev: MessageEvent) => void) {
+        listeners.get(type)?.delete(cb);
+      }
+      close() {
+        instanceReadyState = 2;
+        closeMock();
+      }
+    }
+
+    vi.stubGlobal('EventSource', MockEventSource);
+    const client = createRealApiClient();
+    const onReady = vi.fn();
+    const onOrganization = vi.fn();
+    const onError = vi.fn();
+
+    const unsub = client.subscribeOrganizationEvents({ onReady, onOrganization, onError });
+    expect(capturedUrl).toBe('/api/v1/organization/events');
+    expect(capturedInit).toEqual({ withCredentials: true });
+
+    for (const cb of listeners.get('ready') ?? []) {
+      cb(new MessageEvent('ready', { data: '{}' }));
+    }
+    expect(onReady).toHaveBeenCalledTimes(1);
+
+    for (const cb of listeners.get('organization') ?? []) {
+      cb(
+        new MessageEvent('organization', {
+          data: JSON.stringify({
+            collection_id: 'col-1',
+            status: 'succeeded',
+            has_suggestion: true,
+          }),
+        }),
+      );
+      cb(new MessageEvent('organization', { data: 'not-json' }));
+    }
+    expect(onOrganization).toHaveBeenCalledTimes(1);
+    expect(onOrganization).toHaveBeenCalledWith({
+      collection_id: 'col-1',
+      status: 'succeeded',
+      has_suggestion: true,
+    });
+
+    instanceReadyState = 2;
+    for (const cb of listeners.get('error') ?? []) {
+      cb(new MessageEvent('error'));
+    }
+    expect(onError).toHaveBeenCalledWith({ closed: true });
+    expect(closeMock).toHaveBeenCalled();
+
+    unsub();
+    expect(listeners.get('ready')?.size ?? 0).toBe(0);
+    expect(listeners.get('organization')?.size ?? 0).toBe(0);
+    vi.unstubAllGlobals();
+  });
 });

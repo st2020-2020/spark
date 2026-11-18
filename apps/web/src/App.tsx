@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SparkApi } from './api/client';
 import { ApiError } from './api/errors';
@@ -7,6 +7,7 @@ import { AppShell } from './components/AppShell';
 import { LoadingState } from './components/StateBlocks';
 import { ApiProvider } from './context/ApiContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { OrganizationEventsProvider } from './context/OrganizationEventsContext';
 import { ToastProvider } from './context/ToastContext';
 import { AdminPage } from './pages/AdminPage';
 import { CollectionDetailPage } from './pages/CollectionDetailPage';
@@ -21,8 +22,9 @@ import { SettingsPage, applyThemePreference } from './pages/SettingsPage';
 import { TrashPage } from './pages/TrashPage';
 import { UnclassifiedPage } from './pages/UnclassifiedPage';
 
-function RequireAuth({ wide = false, children }: { wide?: boolean; children: ReactNode }) {
+function AuthenticatedShell() {
   const { user, isLoading } = useAuth();
+  const location = useLocation();
   if (isLoading) {
     return (
       <div className="sp-auth-page">
@@ -35,7 +37,14 @@ function RequireAuth({ wide = false, children }: { wide?: boolean; children: Rea
   if (!user) {
     return <Navigate to="/login" replace />;
   }
-  return <AppShell wide={wide}>{children}</AppShell>;
+  const wide = location.pathname.startsWith('/admin');
+  return (
+    <OrganizationEventsProvider>
+      <AppShell wide={wide}>
+        <Outlet />
+      </AppShell>
+    </OrganizationEventsProvider>
+  );
 }
 
 function PublicOnly({ children }: { children: ReactNode }) {
@@ -83,78 +92,17 @@ export function AppRoutes() {
         }
       />
 
-      <Route
-        path="/inbox"
-        element={
-          <RequireAuth>
-            <InboxPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/projects"
-        element={
-          <RequireAuth>
-            <ProjectsPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/projects/:id"
-        element={
-          <RequireAuth>
-            <ProjectDetailPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/collections"
-        element={
-          <RequireAuth>
-            <CollectionsPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/unclassified"
-        element={
-          <RequireAuth>
-            <UnclassifiedPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/collections/:id"
-        element={
-          <RequireAuth>
-            <CollectionDetailPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/trash"
-        element={
-          <RequireAuth>
-            <TrashPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
-          <RequireAuth>
-            <SettingsPage />
-          </RequireAuth>
-        }
-      />
-      <Route
-        path="/admin"
-        element={
-          <RequireAuth wide>
-            <AdminPage />
-          </RequireAuth>
-        }
-      />
+      <Route element={<AuthenticatedShell />}>
+        <Route path="/inbox" element={<InboxPage />} />
+        <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        <Route path="/collections" element={<CollectionsPage />} />
+        <Route path="/unclassified" element={<UnclassifiedPage />} />
+        <Route path="/collections/:id" element={<CollectionDetailPage />} />
+        <Route path="/trash" element={<TrashPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/admin" element={<AdminPage />} />
+      </Route>
 
       <Route path="/" element={<Navigate to="/inbox" replace />} />
       <Route path="*" element={<Navigate to="/inbox" replace />} />

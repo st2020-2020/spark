@@ -39,6 +39,9 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	eventsDone := make(chan struct{})
+	go func() { defer close(eventsDone); app.RunOrganizationEvents(ctx) }()
+	defer func() { stop(); <-eventsDone }()
 	srv := &http.Server{Addr: cfg.Addr, Handler: app.Router(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	done := make(chan error, 1)
 	go func() { done <- srv.ListenAndServe() }()

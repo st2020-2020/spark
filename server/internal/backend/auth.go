@@ -193,7 +193,7 @@ func (s *Server) register(c *gin.Context) (any, error) {
 	}
 	s.cookie(c, sess.Token, sess.Expires)
 	c.Set("status", 201)
-	return sessionResult(sess), nil
+	return s.sessionResult(sess), nil
 }
 func (s *Server) login(c *gin.Context) (any, error) {
 	req, err := bind[contract.LoginRequest](s, c)
@@ -249,7 +249,7 @@ func (s *Server) login(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	s.cookie(c, sess.Token, sess.Expires)
-	return sessionResult(sess), nil
+	return s.sessionResult(sess), nil
 }
 func (s *Server) resetPassword(c *gin.Context) (any, error) {
 	req, err := bind[contract.PasswordReset](s, c)

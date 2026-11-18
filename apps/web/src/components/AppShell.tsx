@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
+import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
 
 export function AppShell({
@@ -28,6 +29,7 @@ export function AppShell({
 }) {
   const api = useApi();
   const { user, logout } = useAuth();
+  const { pendingSuggestionsCount } = useOrganizationEvents();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -148,8 +150,10 @@ export function AppShell({
         <ul className="sp-nav-list">
           {primaryNav.map((item) => {
             const Icon = item.icon;
+            const showSuggestionBadge =
+              item.to === '/unclassified' && pendingSuggestionsCount > 0;
             return (
-              <li key={item.to}>
+              <li key={item.to} className="sp-nav-item">
                 <NavLink
                   to={item.to}
                   className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
@@ -157,6 +161,16 @@ export function AppShell({
                   <Icon size={16} strokeWidth={2} aria-hidden="true" />
                   <span>{item.label}</span>
                 </NavLink>
+                {showSuggestionBadge && (
+                  <Link
+                    to="/unclassified?tab=suggested"
+                    className="sp-nav-badge"
+                    aria-label={`${pendingSuggestionsCount} 条待确认 AI 建议`}
+                    title={`${pendingSuggestionsCount} 条待确认 AI 建议`}
+                  >
+                    {pendingSuggestionsCount > 99 ? '99+' : pendingSuggestionsCount}
+                  </Link>
+                )}
               </li>
             );
           })}
@@ -387,12 +401,17 @@ export function AppShell({
         </NavLink>
         <button
           type="button"
-          className="sp-mobile-nav-item"
+          className="sp-mobile-nav-item sp-mobile-nav-item--relative"
           aria-label="更多导航"
           onClick={() => setDrawerOpen(true)}
         >
           <MoreHorizontal size={18} strokeWidth={2} aria-hidden="true" />
           <span>更多</span>
+          {pendingSuggestionsCount > 0 && (
+            <span className="sp-mobile-nav-badge" aria-hidden="true">
+              {pendingSuggestionsCount > 99 ? '99+' : pendingSuggestionsCount}
+            </span>
+          )}
         </button>
       </nav>
 

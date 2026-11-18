@@ -126,7 +126,9 @@ func (s *Server) authenticate(c *gin.Context) {
 		s.fail(c, problem(401, "session_expired", "请重新登录。"))
 		return
 	}
-	row, err := store.New(s.Pool).GetSession(c.Request.Context(), digest(token))
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	row, err := store.New(s.Pool).GetSession(ctx, digest(token))
+	cancel()
 	if errors.Is(err, pgx.ErrNoRows) {
 		s.fail(c, problem(401, "session_expired", "请重新登录。"))
 		return
@@ -171,8 +173,8 @@ func (s *Server) newSession(ctx context.Context, tx pgx.Tx, c *gin.Context, u us
 	_, err := tx.Exec(ctx, `INSERT INTO sessions(id,user_id,token_digest,csrf_digest,expires_at,device_label) VALUES($1,$2,$3,$4,$5,$6)`, sess.ID, u.ID, digest(token), digest(csrf), sess.Expires, string(label))
 	return sess, err
 }
-func sessionResult(v *signedIn) any {
-	return gin.H{"user": v.User, "csrf_token": v.CSRF, "expires_at": v.Expires}
+func (s *Server) sessionResult(v *signedIn) any {
+	return gin.H{"user": v.User, "csrf_token": v.CSRF, "expires_at": v.Expires, "ai_trial_eligible": s.Organizer.Trial.allows(v.User.ID), "ai_platform_enabled": s.Organizer.Enabled}
 }
 func (s *Server) rate(ctx context.Context, key string, limit int, window time.Duration) error {
 	now := time.Now().UTC().Truncate(window)
@@ -193,7 +195,7 @@ func (s *Server) authRate(c *gin.Context, operation, email string) error {
 	}
 	return s.rate(c.Request.Context(), operation+":email:"+email, 10, 10*time.Minute)
 }
-func (s *Server) currentSession(c *gin.Context) (any, error) { return sessionResult(current(c)), nil }
+func (s *Server) currentSession(c *gin.Context) (any, error) { return s.sessionResult(current(c)), nil }
 func (s *Server) logout(c *gin.Context) (any, error) {
 	_, err := s.Pool.Exec(c.Request.Context(), `UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND id=$2`, current(c).User.ID, current(c).ID)
 	if err != nil {
