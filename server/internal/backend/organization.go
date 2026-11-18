@@ -27,14 +27,15 @@ type Organizer struct {
 	Pool    *pgxpool.Pool
 	Queue   *river.Client[pgx.Tx]
 	Enabled bool
+	Trial   AITrialScope
 }
 
-func NewOrganizer(pool *pgxpool.Pool, enabled bool) (*Organizer, error) {
+func NewOrganizer(pool *pgxpool.Pool, enabled bool, trial AITrialScope) (*Organizer, error) {
 	q, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: db.RiverSchema(pool)})
 	if err != nil {
 		return nil, err
 	}
-	return &Organizer{Pool: pool, Queue: q, Enabled: enabled}, nil
+	return &Organizer{Pool: pool, Queue: q, Enabled: enabled, Trial: trial}, nil
 }
 func materialAvailable(text, intent string) bool {
 	return strings.TrimSpace(urlInText.ReplaceAllString(text, "")) != "" || strings.TrimSpace(intent) != ""
@@ -55,6 +56,8 @@ func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	switch {
 	case !o.Enabled:
 		reason = "integration_not_configured"
+	case !o.Trial.allows(uid):
+		reason = aiTrialUnavailable
 	case !enabled || status != "active":
 		reason = "ai_disabled"
 	case excluded:
@@ -184,6 +187,9 @@ func (s *Server) restartOrganization(c *gin.Context) (any, error) {
 			return nil, err
 		}
 		if reason != "" {
+			if reason == aiTrialUnavailable {
+				return nil, problem(403, reason, "AI 整理暂未向此账号开放。")
+			}
 			status := 403
 			switch reason {
 			case "integration_not_configured":

@@ -71,7 +71,7 @@ func TestTextWorkerUsesEvidenceAndPreservesManualDecisions(t *testing.T) {
 	cfg := AIConfig{Version: "synthetic-price-v1", MaxAttempts: 1, TimeoutSeconds: 2, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: provider.URL + "/v1/chat/completions", Model: "synthetic-model", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 1000000, OutputPrice: 2000000}}}
 	client := NewTextClient()
 	defer client.Close()
-	worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+	worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestWorkerRejectsUntrustedCandidates(t *testing.T) {
 			cfg := AIConfig{Version: "test-price-v1", MaxAttempts: 1, TimeoutSeconds: 1, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: provider.URL + "/v1/chat/completions", Model: "synthetic", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 1, OutputPrice: 1}}}
 			client := NewTextClient()
 			defer client.Close()
-			worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+			worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -208,7 +208,7 @@ func TestBudgetRefusalAndUncertainUsageSurviveLimitChanges(t *testing.T) {
 	cfg := AIConfig{Version: "estimate-v1", MaxAttempts: 1, TimeoutSeconds: 2, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: provider.URL + "/v1/chat/completions", Model: "synthetic", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 1000000, OutputPrice: 2000000}}}
 	client := NewTextClient()
 	defer client.Close()
-	worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+	worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestWorkerFailoverOnlyForKnownSafeFailures(t *testing.T) {
 			cfg := AIConfig{Version: "fallback-price-v1", MaxAttempts: 2, TimeoutSeconds: 1, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: primary.URL + "/v1/chat/completions", Model: "synthetic-primary", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 1000000, OutputPrice: 2000000}, {Name: "backup", Endpoint: backup.URL + "/v1/chat/completions", Model: "synthetic-backup", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 2000000, OutputPrice: 3000000}}}
 			client := NewTextClient()
 			defer client.Close()
-			worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+			worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -359,7 +359,7 @@ func TestWorkerDoesNotApplyObsoleteInputsOrRevokedConsent(t *testing.T) {
 			cfg := AIConfig{Version: "race-estimate-v1", MaxAttempts: 1, TimeoutSeconds: 2, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: provider.URL + "/v1/chat/completions", Model: "synthetic", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 1000000, OutputPrice: 1000000}}}
 			client := NewTextClient()
 			defer client.Close()
-			worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+			worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -439,7 +439,7 @@ func TestConcurrentUsersCannotOverReservePlatformBudget(t *testing.T) {
 	cfg := AIConfig{Version: "platform-estimate-v1", MaxAttempts: 1, TimeoutSeconds: 2, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: provider.URL + "/v1/chat/completions", Model: "synthetic", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 0, OutputPrice: 1000000}}}
 	client := NewTextClient()
 	defer client.Close()
-	worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+	worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestRecoveredUnknownAttemptDoesNotCallModelAgain(t *testing.T) {
 	cfg := AIConfig{Version: "recovery-v1", MaxAttempts: 1, TimeoutSeconds: 1, MaxInputChars: 1000, Routes: []AIRoute{{Name: "primary", Endpoint: provider.URL + "/v1/chat/completions", Model: "synthetic", OutputMode: "json_object", MaxOutputTokens: 500, MaxContextTokens: 32768, InputPrice: 1, OutputPrice: 1}}}
 	client := NewTextClient()
 	defer client.Close()
-	worker, err := StartTextWorker(ctx, app.Pool, cfg, client)
+	worker, err := StartTextWorker(ctx, app.Pool, cfg, app.Organizer.Trial, client)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -78,6 +78,29 @@ API 的 `SPARK_CONTAINER=true` 显式允许开发容器内部监听 `0.0.0.0:808
 
 停止本项目服务使用 `dc stop`，保留卷；后续 `dc up -d` 继续使用数据。不要执行全局 prune，不用 `down -v` 清除已有数据，也不要把 macOS PostgreSQL 物理数据目录挂到 Linux 容器。
 
+## 生产文字整理的小额试用
+
+[生产 Compose](../deploy/compose.prod.yaml) 默认关闭 `SPARK_AI_ENABLED`，Worker 仅通过 `ai` profile 启动。API 和 Worker 从同一受控生产环境文件读取 `SPARK_AI_TRIAL_USER_IDS`，值为逗号分隔的账号 UUID。可从获准账号的 `GET /api/v1/auth/session` 响应中取得 `user.id`。空名单拒绝全部生产账号，非 UUID 值会导致配置校验失败。名单外账号可继续保存、编辑和人工归类。新的自动整理会跳过，主动重整返回 `403 ai_trial_not_available`，Worker 领取旧任务时也会重新检查范围。名单内账号仍须明确同意，且收藏未排除并满足材料和额度要求。
+
+在仓库外准备生产路由 JSON 和网关调用密钥文件，分别由 `SPARK_AI_CONFIG_HOST_PATH` 和 `SPARK_AI_GATEWAY_KEY_HOST_PATH` 指定。默认路径是 `/etc/spark/ai/routes.json` 与 `/etc/spark/ai/gateway-key`。两者仅只读挂载给 Worker，须允许容器 UID/GID `65532` 读取，可使用受控目录和 `root:65532`、`0440` 文件权限。路由使用已批准的鉴权端点，`api_key_file` 指向 `/run/secrets/spark-ai-gateway-key`。Worker 不发布端口，内置健康检查读取本地就绪状态和数据库迁移状态。
+
+首次开启前，先完成现有数据库迁移并通过管理员预算接口设置获准的小额平台和单账号日限额。在同一生产环境文件填入批准的 UUID，并将 `SPARK_AI_ENABLED` 设为 `true`。使用根 README 的 `prod` 函数部署同一镜像的 API 和 Worker。
+
+```sh
+prod build api
+prod up -d --wait --no-deps api
+prod --profile ai up -d --wait --no-deps worker
+```
+
+名单和开关在进程启动时读取。修改名单或停用试用时，先执行 `prod --profile ai stop worker` 并等待停止，再更新环境文件、重建 API 容器。继续试用时用新配置重建 Worker，`restart` 不会载入更新后的环境变量。
+
+```sh
+prod up -d --wait --no-deps --force-recreate api
+prod --profile ai up -d --wait --no-deps --force-recreate worker
+```
+
+完全停用时将 `SPARK_AI_ENABLED` 设为 `false`，仅重建 API，Worker 保持停止。停止时已在途的请求按现有超时和结算规则收尾。排队任务和既有结果会保留，Worker 日后领取任务时按新的名单、用户同意和单条排除状态决定是否处理。
+
 ## 管理员、邀请码和开发邮件
 
 初始管理员通过容器 CLI 创建，密码从标准输入读取，不通过命令参数、聊天或普通日志传递。可以从权限为 `0600` 的临时密码文件输入；命令不会打印密码，已存在邮箱会拒绝创建，不会覆盖账号或提权：

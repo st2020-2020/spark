@@ -67,7 +67,7 @@ func testBackend(t *testing.T) (*Server, string) {
 	if err = db.Ready(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	app, err := New(ctx, Config{Env: "development", Addr: "127.0.0.1:8080", Origin: "http://127.0.0.1:5173", Secret: bytes.Repeat([]byte{1}, 32), EncryptionKey: bytes.Repeat([]byte{2}, 32), MailMode: "development"}, pool)
+	app, err := New(ctx, Config{Env: "development", Addr: "127.0.0.1:8080", Origin: "http://127.0.0.1:5173", Secret: bytes.Repeat([]byte{1}, 32), EncryptionKey: bytes.Repeat([]byte{2}, 32), MailMode: "development", AITrial: AITrialScope{development: true}}, pool)
 	if err != nil {
 		t.Fatal(err)
 	}

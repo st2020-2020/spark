@@ -1,6 +1,11 @@
 name: spark-prod
 
+x-ai-environment: &ai-environment
+  SPARK_AI_ENABLED: ${SPARK_AI_ENABLED:-false}
+  SPARK_AI_TRIAL_USER_IDS: ${SPARK_AI_TRIAL_USER_IDS:-}
+
 x-api-environment: &api-environment
+  <<: *ai-environment
   SPARK_ENV: production
   SPARK_CONTAINER: 'true'
   SPARK_ADDR: 0.0.0.0:8080
@@ -9,7 +14,6 @@ x-api-environment: &api-environment
   SPARK_SECRET: ${SPARK_SECRET:?Set SPARK_SECRET}
   SPARK_ENCRYPTION_KEY: ${SPARK_ENCRYPTION_KEY:?Set SPARK_ENCRYPTION_KEY}
   SPARK_MAIL_MODE: ${SPARK_MAIL_MODE:-disabled}
-  SPARK_AI_ENABLED: ${SPARK_AI_ENABLED:-false}
 
 services:
   postgres:
@@ -61,6 +65,43 @@ services:
         condition: service_healthy
     profiles: [tools]
     read_only: true
+    mem_limit: 512m
+
+  worker:
+    image: spark-api:prod
+    build:
+      context: ../server
+      target: runtime
+    entrypoint: [/spark-worker]
+    profiles: [ai]
+    environment:
+      <<: *ai-environment
+      SPARK_ENV: production
+      DATABASE_URL: postgres://spark:${SPARK_DB_PASSWORD:?Set SPARK_DB_PASSWORD}@postgres:5432/spark?sslmode=disable
+      SPARK_AI_CONFIG_FILE: /run/spark-ai/routes.json
+    volumes:
+      - type: bind
+        source: ${SPARK_AI_CONFIG_HOST_PATH:-/etc/spark/ai/routes.json}
+        target: /run/spark-ai/routes.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPARK_AI_GATEWAY_KEY_HOST_PATH:-/etc/spark/ai/gateway-key}
+        target: /run/secrets/spark-ai-gateway-key
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /spark-worker, healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    stop_grace_period: 30s
     mem_limit: 512m
 
 volumes:

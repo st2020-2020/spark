@@ -12,6 +12,7 @@ import (
 
 type collectionRow struct {
 	contract.Collection
+	UserID             string                 `json:"user_id"`
 	PlainText          string                 `json:"plain_text"`
 	StoredOrganization *contract.Organization `json:"stored_organization"`
 	UserAIEnabled      bool                   `json:"user_ai_enabled"`
@@ -379,9 +380,14 @@ func summary(row collectionRow) contract.CollectionSummary {
 }
 
 func (s *Server) collectionView(row collectionRow) collectionRow {
-	if !s.Config.AIEnabled && row.StoredOrganization == nil {
-		code := "integration_not_configured"
-		row.Organization.ErrorCode = &code
+	if row.StoredOrganization == nil {
+		if !s.Organizer.Enabled {
+			code := "integration_not_configured"
+			row.Organization.ErrorCode = &code
+		} else if !s.Organizer.Trial.allows(row.UserID) {
+			code := aiTrialUnavailable
+			row.Organization.ErrorCode = &code
+		}
 	}
 	return row
 }

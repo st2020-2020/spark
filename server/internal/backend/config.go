@@ -14,6 +14,7 @@ type Config struct {
 	Secret, EncryptionKey                    []byte
 	Container                                bool
 	AIEnabled                                bool
+	AITrial                                  AITrialScope
 }
 
 func LoadConfig() (Config, error) {
@@ -28,6 +29,10 @@ func LoadConfig() (Config, error) {
 		c.MailMode = "disabled"
 	}
 	var err error
+	c.AITrial, err = ParseAITrialScope(c.Env, os.Getenv("SPARK_AI_TRIAL_USER_IDS"))
+	if err != nil {
+		return c, err
+	}
 	c.Secret, err = base64.StdEncoding.DecodeString(os.Getenv("SPARK_SECRET"))
 	if err != nil || len(c.Secret) != 32 {
 		return c, errors.New("SPARK_SECRET must be base64 encoded 32 random bytes")

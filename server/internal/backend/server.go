@@ -57,7 +57,7 @@ func New(ctx context.Context, cfg Config, pool *pgxpool.Pool) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{Config: cfg, Pool: pool, spec: spec, hashes: make(chan struct{}, 2)}
-	s.Organizer, err = NewOrganizer(pool, cfg.AIEnabled)
+	s.Organizer, err = NewOrganizer(pool, cfg.AIEnabled, cfg.AITrial)
 	if err != nil {
 		return nil, err
 	}

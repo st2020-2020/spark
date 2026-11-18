@@ -29,7 +29,7 @@ type TextWorker struct {
 	Organizer *Organizer
 }
 
-func StartTextWorker(ctx context.Context, pool *pgxpool.Pool, cfg AIConfig, generator TextGenerator) (*river.Client[pgx.Tx], error) {
+func StartTextWorker(ctx context.Context, pool *pgxpool.Pool, cfg AIConfig, trial AITrialScope, generator TextGenerator) (*river.Client[pgx.Tx], error) {
 	schema, err := jsonschema.CompileString("organization-result.json", organizationResultSchema)
 	if err != nil {
 		return nil, err
@@ -38,7 +38,7 @@ func StartTextWorker(ctx context.Context, pool *pgxpool.Pool, cfg AIConfig, gene
 	if err != nil {
 		return nil, err
 	}
-	organizer, err := NewOrganizer(pool, true)
+	organizer, err := NewOrganizer(pool, true, trial)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +101,10 @@ func lockOrganization(ctx context.Context, tx pgx.Tx, uid, run string) (runSnaps
 	err := tx.QueryRow(ctx, `SELECT collection_id,content_version,user_policy_version,collection_policy_version,status,attempts,created_at FROM organization_runs WHERE user_id=$1 AND id=$2 FOR UPDATE`, uid, run).Scan(&r.CollectionID, &r.CV, &r.UV, &r.PV, &r.State, &r.Attempts, &r.Created)
 	return r, err
 }
-func runValidity(ctx context.Context, tx pgx.Tx, r runSnapshot) (string, error) {
+func (w *TextWorker) runValidity(ctx context.Context, tx pgx.Tx, r runSnapshot) (string, error) {
+	if !w.Organizer.Trial.allows(r.UID) {
+		return aiTrialUnavailable, nil
+	}
 	var enabled, excluded bool
 	var status string
 	var cv, uv, pv int64
@@ -160,7 +163,7 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 	if r.State != "queued" && r.State != "running" {
 		return r, input, false, nil
 	}
-	reason, err := runValidity(ctx, tx, r)
+	reason, err := w.runValidity(ctx, tx, r)
 	if err != nil {
 		return r, input, false, err
 	}
@@ -307,7 +310,7 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 	if r.State != "running" {
 		return "", "input_changed", nil
 	}
-	reason, err := runValidity(ctx, tx, r)
+	reason, err := w.runValidity(ctx, tx, r)
 	if err != nil {
 		return "", "", err
 	}
@@ -380,7 +383,7 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		}
 		slog.Warn("AI route disabled", "route", route.Name, "config_version", w.Config.Version, "error_code", out.ErrorCode)
 	}
-	reason, err := runValidity(ctx, tx, r)
+	reason, err := w.runValidity(ctx, tx, r)
 	if err != nil {
 		return false, err
 	}

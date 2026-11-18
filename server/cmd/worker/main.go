@@ -41,6 +41,16 @@ func run() error {
 	if env == "" {
 		env = "production"
 	}
+	if env != "production" && env != "development" {
+		return errors.New("SPARK_ENV must be development or production")
+	}
+	if env == "production" && os.Getenv("SPARK_AI_ENABLED") != "true" {
+		return errors.New("production text worker requires SPARK_AI_ENABLED=true")
+	}
+	trial, err := backend.ParseAITrialScope(env, os.Getenv("SPARK_AI_TRIAL_USER_IDS"))
+	if err != nil {
+		return err
+	}
 	cfg, err := backend.LoadAIConfig(os.Getenv("SPARK_AI_CONFIG_FILE"), env)
 	if err != nil {
 		return err
@@ -73,7 +83,7 @@ func run() error {
 	// allowing in-flight work to settle its budget before pool shutdown.
 	working, cancelWorking := context.WithCancel(context.Background())
 	defer cancelWorking()
-	worker, err := backend.StartTextWorker(working, pool, cfg, client)
+	worker, err := backend.StartTextWorker(working, pool, cfg, trial, client)
 	if err != nil {
 		return err
 	}
