@@ -127,19 +127,26 @@ export function CollectionCard({
         </time>
         {isUnread && <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />}
 
-        {showOrgStatus && (
-          <span
-            className={`sp-pill ${
-              collection.organization_status === 'failed'
-                ? 'sp-pill--danger'
-                : collection.organization_status === 'blocked'
-                  ? 'sp-pill--warning'
-                  : ''
-            }`}
-          >
-            {organizationStatusLabel(collection.organization_status)}
-          </span>
-        )}
+        {showOrgStatus &&
+          (collection.organization_status === 'failed' ||
+          collection.organization_status === 'blocked' ? (
+            <Link
+              to={`/collections/${collection.id}`}
+              state={detailState}
+              className={`sp-pill ${
+                collection.organization_status === 'failed'
+                  ? 'sp-pill--danger'
+                  : 'sp-pill--warning'
+              }`}
+              style={{ textDecoration: 'none' }}
+            >
+              {organizationStatusLabel(collection.organization_status)}
+            </Link>
+          ) : (
+            <span className="sp-pill">
+              {organizationStatusLabel(collection.organization_status)}
+            </span>
+          ))}
 
         <div
           className="sp-note-more-wrap"

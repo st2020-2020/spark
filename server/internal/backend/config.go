@@ -13,10 +13,11 @@ type Config struct {
 	Env, Addr, Origin, DatabaseURL, MailMode string
 	Secret, EncryptionKey                    []byte
 	Container                                bool
+	AIEnabled                                bool
 }
 
 func LoadConfig() (Config, error) {
-	c := Config{Container: os.Getenv("SPARK_CONTAINER") == "true", Env: os.Getenv("SPARK_ENV"), Addr: os.Getenv("SPARK_ADDR"), Origin: os.Getenv("SPARK_ORIGIN"), DatabaseURL: os.Getenv("DATABASE_URL"), MailMode: os.Getenv("SPARK_MAIL_MODE")}
+	c := Config{AIEnabled: os.Getenv("SPARK_AI_ENABLED") == "true", Container: os.Getenv("SPARK_CONTAINER") == "true", Env: os.Getenv("SPARK_ENV"), Addr: os.Getenv("SPARK_ADDR"), Origin: os.Getenv("SPARK_ORIGIN"), DatabaseURL: os.Getenv("DATABASE_URL"), MailMode: os.Getenv("SPARK_MAIL_MODE")}
 	if c.Env == "" {
 		c.Env = "production"
 	}

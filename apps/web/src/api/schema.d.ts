@@ -1031,6 +1031,7 @@ export interface components {
             decision: "manual" | "confirmed" | "auto" | "rejected" | "suggested";
             reason?: string;
             project_version?: number;
+            evidence?: components["schemas"]["ProjectEvidence"][];
         };
         TagAssociation: {
             /** Format: uuid */
@@ -1305,6 +1306,11 @@ export interface components {
         };
         FailureList: {
             items: components["schemas"]["FailureSummary"][];
+        };
+        ProjectEvidence: {
+            /** @enum {string} */
+            source_id: "original_text" | "intent";
+            quote: string;
         };
     };
     responses: never;

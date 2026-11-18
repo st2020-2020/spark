@@ -39,10 +39,19 @@ interface StoredInviteCode extends InviteCode {
   raw_code: string;
 }
 
+export type MockOrganizationMode =
+  | 'succeed'
+  | 'succeed_no_project'
+  | 'fail_then_succeed'
+  | 'quota_exceeded'
+  | 'integration_not_configured';
+
 interface StoredCollection extends Collection {
   user_id: string;
   extractions: Extraction[];
   revisions: Revision[];
+  mock_org_step?: number;
+  mock_org_attempts?: number;
 }
 
 interface StoredUpload extends Upload {
@@ -64,6 +73,7 @@ export interface TestAdapter extends SparkApi {
   reset(): void;
   getLastVerificationCode(email: string): string | undefined;
   simulateExternalCollectionEdit(collectionId: string, textAppend: string): void;
+  setMockOrganizationMode(mode: MockOrganizationMode): void;
 }
 
 const DEFAULT_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
@@ -95,6 +105,7 @@ export function createTestAdapter(): TestAdapter {
   let attachments: Map<string, StoredAttachmentMeta> = new Map();
   let collections: StoredCollection[] = [];
   let idempotencyStore: Map<string, { digest: string; result: unknown }> = new Map();
+  let mockOrganizationMode: MockOrganizationMode = 'succeed';
 
   let budgetConfig = {
     version: 1,
@@ -165,6 +176,7 @@ export function createTestAdapter(): TestAdapter {
     attachments = new Map();
     collections = [];
     idempotencyStore = new Map();
+    mockOrganizationMode = 'succeed';
   }
 
   seed();
@@ -334,6 +346,190 @@ export function createTestAdapter(): TestAdapter {
     idempotencyStore.set(mapKey, { digest: JSON.stringify(payload), result });
   }
 
+  function hasTextOrIntentMaterial(col: Pick<StoredCollection, 'document' | 'intent'>): boolean {
+    return derivePlainText(col.document).trim().length > 0 || col.intent.trim().length > 0;
+  }
+
+  function buildInitialOrganization(
+    col: Pick<StoredCollection, 'content_version' | 'document' | 'intent' | 'ai_excluded'>,
+    user: StoredUser,
+  ): Organization {
+    const now = new Date().toISOString();
+    if (!user.ai_enabled) {
+      return {
+        content_version: col.content_version,
+        status: 'skipped',
+        stages: [{ name: 'generate', status: 'skipped', attempts: 0, error_code: 'ai_disabled' }],
+        error_code: 'ai_disabled',
+        updated_at: now,
+      };
+    }
+    if (col.ai_excluded) {
+      return {
+        content_version: col.content_version,
+        status: 'skipped',
+        stages: [{ name: 'generate', status: 'skipped', attempts: 0, error_code: 'ai_excluded' }],
+        error_code: 'ai_excluded',
+        updated_at: now,
+      };
+    }
+    if (mockOrganizationMode === 'integration_not_configured') {
+      return {
+        content_version: col.content_version,
+        status: 'skipped',
+        stages: [
+          {
+            name: 'generate',
+            status: 'skipped',
+            attempts: 0,
+            error_code: 'integration_not_configured',
+          },
+        ],
+        error_code: 'integration_not_configured',
+        updated_at: now,
+      };
+    }
+    if (mockOrganizationMode === 'quota_exceeded') {
+      return {
+        run_id: generateUuid(),
+        content_version: col.content_version,
+        status: 'blocked',
+        stages: [
+          { name: 'generate', status: 'blocked', attempts: 0, error_code: 'quota_exceeded' },
+        ],
+        error_code: 'quota_exceeded',
+        updated_at: now,
+      };
+    }
+    if (!hasTextOrIntentMaterial(col)) {
+      return {
+        content_version: col.content_version,
+        status: 'skipped',
+        stages: [
+          {
+            name: 'generate',
+            status: 'skipped',
+            attempts: 0,
+            error_code: 'insufficient_material',
+          },
+        ],
+        error_code: 'insufficient_material',
+        updated_at: now,
+      };
+    }
+    return {
+      run_id: generateUuid(),
+      content_version: col.content_version,
+      status: 'queued',
+      stages: [
+        { name: 'generate', status: 'queued', attempts: 0 },
+        { name: 'match_projects', status: 'queued', attempts: 0 },
+        { name: 'apply', status: 'queued', attempts: 0 },
+      ],
+      updated_at: now,
+    };
+  }
+
+  function advanceMockOrganization(col: StoredCollection, user: StoredUser): void {
+    const status = col.organization.status;
+    if (status !== 'queued' && status !== 'running') return;
+    const now = new Date().toISOString();
+    const step = (col.mock_org_step ?? 0) + 1;
+    col.mock_org_step = step;
+
+    if (step === 1) {
+      col.organization = {
+        ...col.organization,
+        status: 'running',
+        stages: [
+          { name: 'generate', status: 'running', attempts: 1 },
+          { name: 'match_projects', status: 'queued', attempts: 0 },
+          { name: 'apply', status: 'queued', attempts: 0 },
+        ],
+        updated_at: now,
+      };
+      return;
+    }
+
+    const attempts = col.mock_org_attempts ?? 1;
+    if (mockOrganizationMode === 'fail_then_succeed' && attempts === 1) {
+      col.organization = {
+        ...col.organization,
+        status: 'failed',
+        stages: [
+          { name: 'generate', status: 'failed', attempts: 1, error_code: 'provider_timeout' },
+          { name: 'match_projects', status: 'skipped', attempts: 0 },
+          { name: 'apply', status: 'skipped', attempts: 0 },
+        ],
+        error_code: 'provider_timeout',
+        updated_at: now,
+      };
+      return;
+    }
+
+    const plain = derivePlainText(col.document).trim();
+    const intentText = col.intent.trim();
+    const sourceSnippet = (plain || intentText).slice(0, 60);
+    const evidenceSource: 'original_text' | 'intent' = plain ? 'original_text' : 'intent';
+    const generatedTitle = (plain.split('\n')[0] || intentText || '整理结果').slice(0, 32);
+    const summary = plain
+      ? `核心内容围绕「${plain.slice(0, 48)}」${intentText ? `，用途为${intentText.slice(0, 36)}` : ''}。`
+      : `用途记录：${intentText.slice(0, 60)}。`;
+
+    if (mockOrganizationMode !== 'succeed_no_project') {
+      const activeProjects = projects.filter(
+        (p) => p.user_id === user.id && p.state === 'active',
+      );
+      const matchedProject =
+        activeProjects.find((p) => {
+          const hay = `${plain}\n${intentText}`.toLowerCase();
+          return (
+            hay.includes(p.name.toLowerCase()) ||
+            p.focus_points.some((fp) => hay.includes(fp.toLowerCase()))
+          );
+        }) ?? activeProjects[0];
+
+      if (matchedProject) {
+        const existingIdx = col.projects.findIndex(
+          (pa) => pa.project_id === matchedProject.id,
+        );
+        if (existingIdx === -1) {
+          col.projects.push({
+            project_id: matchedProject.id,
+            name: matchedProject.name,
+            decision: 'suggested',
+            reason: `内容与项目「${matchedProject.name}」的关注方向相符`,
+            project_version: matchedProject.version,
+            evidence: [
+              {
+                source_id: evidenceSource,
+                quote: sourceSnippet,
+              },
+            ],
+          });
+          col.decision_version += 1;
+        }
+      }
+    }
+
+    col.organization = {
+      run_id: col.organization.run_id ?? generateUuid(),
+      content_version: col.content_version,
+      status: 'succeeded',
+      stages: [
+        { name: 'generate', status: 'succeeded', attempts: 1 },
+        { name: 'match_projects', status: 'succeeded', attempts: 1 },
+        { name: 'apply', status: 'succeeded', attempts: 1 },
+      ],
+      generated_title: generatedTitle,
+      summary,
+      updated_at: now,
+    };
+    col.display_title = computeDisplayTitle(col);
+    col.resource_version += 1;
+    col.updated_at = now;
+  }
+
   return {
     isTestAdapter: true,
 
@@ -362,6 +558,10 @@ export function createTestAdapter(): TestAdapter {
       };
       col.display_title = computeDisplayTitle(col);
       col.updated_at = new Date().toISOString();
+    },
+
+    setMockOrganizationMode(mode: MockOrganizationMode) {
+      mockOrganizationMode = mode;
     },
 
     setCsrfToken(token) {
@@ -862,12 +1062,15 @@ export function createTestAdapter(): TestAdapter {
       if (boundAttachments.length > 0) contentTypes.push('image');
 
       const now = new Date().toISOString();
-      const org: Organization = {
-        content_version: 1,
-        status: 'skipped',
-        stages: [],
-        updated_at: now,
-      };
+      const org = buildInitialOrganization(
+        {
+          content_version: 1,
+          document: body.document,
+          intent: body.intent,
+          ai_excluded: Boolean(body.ai_excluded),
+        },
+        user,
+      );
 
       const col: StoredCollection = {
         id: body.id,
@@ -900,6 +1103,8 @@ export function createTestAdapter(): TestAdapter {
             created_at: now,
           },
         ],
+        mock_org_step: 0,
+        mock_org_attempts: org.status === 'queued' ? 1 : 0,
       };
       col.display_title = computeDisplayTitle(col);
       collections.unshift(col);
@@ -1035,6 +1240,9 @@ export function createTestAdapter(): TestAdapter {
       col.content_version += 1;
       col.resource_version += 1;
       col.updated_at = new Date().toISOString();
+      col.organization = buildInitialOrganization(col, user);
+      col.mock_org_step = 0;
+      col.mock_org_attempts = col.organization.status === 'queued' ? 1 : 0;
       col.display_title = computeDisplayTitle(col);
       col.revisions.unshift({
         content_version: col.content_version,
@@ -1122,7 +1330,28 @@ export function createTestAdapter(): TestAdapter {
       const user = requireUser(true);
       const col = collections.find((c) => c.id === id && c.user_id === user.id);
       if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，无法修改 AI 整理授权',
+        });
+      }
       col.ai_excluded = body.excluded;
+      if (
+        body.excluded &&
+        (col.organization.status === 'queued' || col.organization.status === 'running')
+      ) {
+        col.organization = {
+          content_version: col.content_version,
+          status: 'skipped',
+          stages: [
+            { name: 'generate', status: 'skipped', attempts: 0, error_code: 'ai_excluded' },
+          ],
+          error_code: 'ai_excluded',
+          updated_at: new Date().toISOString(),
+        };
+      }
       col.resource_version += 1;
       return toPublicCollection(col);
     },
@@ -1210,30 +1439,60 @@ export function createTestAdapter(): TestAdapter {
       const user = requireUser(false);
       const col = collections.find((c) => c.id === id && c.user_id === user.id);
       if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      advanceMockOrganization(col, user);
       return col.organization;
     },
 
-    async restartOrganization(id) {
+    async restartOrganization(id, idempotencyKey) {
       const user = requireUser(true);
+      const replay = checkIdempotency<Organization>(user.id, 'restartOrganization', idempotencyKey, {
+        id,
+      });
+      if (replay) return replay;
+
       const col = collections.find((c) => c.id === id && c.user_id === user.id);
       if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，请先恢复后再整理',
+        });
+      }
       if (!user.ai_enabled) {
         throw new ApiError({ status: 403, code: 'ai_disabled', message: 'AI 自动整理未开启' });
       }
       if (col.ai_excluded) {
-        throw new ApiError({ status: 403, code: 'ai_disabled', message: '该条收藏已设置不参与 AI 整理' });
+        throw new ApiError({ status: 403, code: 'ai_excluded', message: '该条收藏已设置不参与 AI 整理' });
       }
-      col.organization = {
-        run_id: generateUuid(),
-        content_version: col.content_version,
-        status: 'skipped',
-        stages: [
-          { name: 'generate', status: 'skipped', attempts: 0, error_code: 'test_adapter_no_model' },
-        ],
-        error_code: 'test_adapter_no_model',
-        updated_at: new Date().toISOString(),
-      };
-      return col.organization;
+      if (mockOrganizationMode === 'integration_not_configured') {
+        throw new ApiError({
+          status: 503,
+          code: 'integration_not_configured',
+          message: '当前平台尚未配置模型服务凭证，已完整保存你的原文。',
+        });
+      }
+      if (!hasTextOrIntentMaterial(col)) {
+        throw new ApiError({
+          status: 422,
+          code: 'insufficient_material',
+          message: '当前收藏缺少可供整理的文字或用途说明，补充后再试。',
+        });
+      }
+      if (mockOrganizationMode === 'quota_exceeded') {
+        throw new ApiError({
+          status: 429,
+          code: 'quota_exceeded',
+          message: '今日 AI 额度已达上限，收藏仍可正常保存。',
+        });
+      }
+      const nextAttempts = (col.mock_org_attempts ?? 0) + 1;
+      const nextOrg = buildInitialOrganization(col, user);
+      col.organization = nextOrg;
+      col.mock_org_step = 0;
+      col.mock_org_attempts = nextAttempts;
+      saveIdempotency(user.id, 'restartOrganization', idempotencyKey, { id }, nextOrg);
+      return nextOrg;
     },
 
     async getExtractions(id) {

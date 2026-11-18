@@ -134,18 +134,27 @@ export function AdminPage() {
   });
 
   const saveBudgetMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!budgetsQuery.data) throw new Error('预算配置未加载');
-      return api.setBudgets({
+      const prevConc = budgetsQuery.data.worker_concurrency;
+      const updated = await api.setBudgets({
         base_version: budgetsQuery.data.version,
         platform_daily_units: Number(budgetPlatform),
         user_daily_units: Number(budgetUser),
         worker_concurrency: Number(workerConc),
       });
+      return {
+        updated,
+        concurrencyChanged: updated.worker_concurrency !== prevConc,
+      };
     },
-    onSuccess: (updated) => {
+    onSuccess: ({ updated, concurrencyChanged }) => {
       queryClient.setQueryData(['admin', 'budgets'], updated);
-      pushToast({ message: '预算与并发配置已更新' });
+      pushToast({
+        message: concurrencyChanged
+          ? '预算与并发配置已更新；Worker 并发数变更需重启 Worker 后生效'
+          : '预算配置已更新（日额度对后续预留即时生效）',
+      });
     },
     onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
   });
@@ -494,56 +503,61 @@ export function AdminPage() {
                   <div className="sp-help">额度配置暂未开放</div>
                 )}
                 {budgetsQuery.data && (
-                  <div className="sp-row">
-                    <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
-                      <label htmlFor="budget-platform" className="sp-label">
-                        平台日预算 (units, {formatUnitsToYuan(Number(budgetPlatform) || 0)})
-                      </label>
-                      <input
-                        id="budget-platform"
-                        type="number"
-                        min={0}
-                        className="sp-input sp-mono"
-                        value={budgetPlatform}
-                        onChange={(e) => setBudgetPlatform(e.target.value)}
-                      />
+                  <div className="sp-stack" style={{ gap: 8 }}>
+                    <div className="sp-row">
+                      <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
+                        <label htmlFor="budget-platform" className="sp-label">
+                          平台日预算 (units, {formatUnitsToYuan(Number(budgetPlatform) || 0)})
+                        </label>
+                        <input
+                          id="budget-platform"
+                          type="number"
+                          min={0}
+                          className="sp-input sp-mono"
+                          value={budgetPlatform}
+                          onChange={(e) => setBudgetPlatform(e.target.value)}
+                        />
+                      </div>
+                      <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
+                        <label htmlFor="budget-user" className="sp-label">
+                          单用户日额度 (units, {formatUnitsToYuan(Number(budgetUser) || 0)})
+                        </label>
+                        <input
+                          id="budget-user"
+                          type="number"
+                          min={0}
+                          className="sp-input sp-mono"
+                          value={budgetUser}
+                          onChange={(e) => setBudgetUser(e.target.value)}
+                        />
+                      </div>
+                      <div className="sp-field" style={{ width: 130 }}>
+                        <label htmlFor="worker-conc" className="sp-label">
+                          Worker 并发 (1-8)
+                        </label>
+                        <input
+                          id="worker-conc"
+                          type="number"
+                          min={1}
+                          max={8}
+                          className="sp-input sp-mono"
+                          value={workerConc}
+                          onChange={(e) => setWorkerConc(e.target.value)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn--primary"
+                        style={{ alignSelf: 'flex-end' }}
+                        disabled={saveBudgetMutation.isPending}
+                        onClick={() => saveBudgetMutation.mutate()}
+                      >
+                        保存预算
+                      </button>
                     </div>
-                    <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
-                      <label htmlFor="budget-user" className="sp-label">
-                        单用户日额度 (units, {formatUnitsToYuan(Number(budgetUser) || 0)})
-                      </label>
-                      <input
-                        id="budget-user"
-                        type="number"
-                        min={0}
-                        className="sp-input sp-mono"
-                        value={budgetUser}
-                        onChange={(e) => setBudgetUser(e.target.value)}
-                      />
+                    <div className="sp-help">
+                      当前配置版本 v{budgetsQuery.data.version} · 日额度对后续预留即时生效；修改 Worker 并发数需重启 Worker 容器后生效。
                     </div>
-                    <div className="sp-field" style={{ width: 130 }}>
-                      <label htmlFor="worker-conc" className="sp-label">
-                        Worker 并发 (1-8)
-                      </label>
-                      <input
-                        id="worker-conc"
-                        type="number"
-                        min={1}
-                        max={8}
-                        className="sp-input sp-mono"
-                        value={workerConc}
-                        onChange={(e) => setWorkerConc(e.target.value)}
-                      />
-                    </div>
-                    <button
-                      type="button"
-                      className="sp-btn sp-btn--primary"
-                      style={{ alignSelf: 'flex-end' }}
-                      disabled={saveBudgetMutation.isPending}
-                      onClick={() => saveBudgetMutation.mutate()}
-                    >
-                      保存预算
-                    </button>
                   </div>
                 )}
 

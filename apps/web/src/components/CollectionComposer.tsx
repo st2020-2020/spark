@@ -67,6 +67,7 @@ export function CollectionComposer({
   const [originalUrl, setOriginalUrl] = useState(initialDraft.originalUrl);
   const [manualTitle, setManualTitle] = useState(initialDraft.manualTitle);
   const [projectIds, setProjectIds] = useState<string[]>(initialDraft.projectIds);
+  const [aiExcluded, setAiExcluded] = useState(Boolean(initialDraft.aiExcluded));
 
   const [showIntentField, setShowIntentField] = useState(Boolean(initialDraft.intent));
   const [showUrlField, setShowUrlField] = useState(Boolean(initialDraft.originalUrl));
@@ -199,7 +200,7 @@ export function CollectionComposer({
       manualTitle,
       projectIds,
       tagIds: [],
-      aiExcluded: false,
+      aiExcluded,
       updatedAt: new Date().toISOString(),
     });
     setStorageWarning(res.ok ? null : (res.error ?? null));
@@ -214,6 +215,7 @@ export function CollectionComposer({
     originalUrl,
     manualTitle,
     projectIds,
+    aiExcluded,
   ]);
 
   const resetForm = useCallback(() => {
@@ -224,6 +226,7 @@ export function CollectionComposer({
     setOriginalUrl('');
     setManualTitle('');
     setProjectIds(defaultProjectId ? [defaultProjectId] : []);
+    setAiExcluded(false);
     setShowIntentField(false);
     setShowUrlField(false);
     setShowTitleField(false);
@@ -260,12 +263,12 @@ export function CollectionComposer({
           upload_ids: [],
           project_ids: projectIds,
           tag_ids: [],
-          ai_excluded: false,
+          ai_excluded: aiExcluded,
         },
         idempotencyKey,
       );
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       const activeEl = document.activeElement;
       const focusInsideEditor =
         activeEl instanceof HTMLElement &&
@@ -281,7 +284,9 @@ export function CollectionComposer({
         setIsActivated(false);
       }
 
-      pushToast({ message: '已保存' });
+      const isQueued =
+        created.organization.status === 'queued' || created.organization.status === 'running';
+      pushToast({ message: isQueued ? '已保存，正在后台整理' : '已保存' });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
@@ -463,7 +468,7 @@ export function CollectionComposer({
         }
         betweenEditorAndToolbar={
           <>
-            {selectedProjects.length > 0 && (
+            {(selectedProjects.length > 0 || aiExcluded) && (
               <div className="sp-row" style={{ marginTop: 10 }}>
                 {selectedProjects.map((proj) => (
                   <span key={proj.id} className="sp-pill sp-pill--green">
@@ -479,6 +484,19 @@ export function CollectionComposer({
                     </button>
                   </span>
                 ))}
+                {aiExcluded && (
+                  <span className="sp-pill">
+                    <span>不参与 AI 整理</span>
+                    <button
+                      type="button"
+                      aria-label="取消排除 AI 整理"
+                      onClick={() => setAiExcluded(false)}
+                      style={{ padding: '0 2px', display: 'inline-flex', alignItems: 'center' }}
+                    >
+                      <X size={12} strokeWidth={2} />
+                    </button>
+                  </span>
+                )}
               </div>
             )}
 
@@ -610,6 +628,24 @@ export function CollectionComposer({
             >
               可选标题
             </button>
+            {(user?.ai_enabled || aiExcluded) && (
+              <>
+                <div className="sp-menu-divider" role="separator" />
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={aiExcluded}
+                  className="sp-menu-item"
+                  onClick={() => {
+                    activateComposer();
+                    setAiExcluded((v) => !v);
+                    closeMenu();
+                  }}
+                >
+                  {aiExcluded ? '允许本条参与 AI 整理' : '本条不参与 AI 整理'}
+                </button>
+              </>
+            )}
           </>
         )}
         trailingSlot={

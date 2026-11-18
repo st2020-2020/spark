@@ -40,6 +40,7 @@ export type DownloadGrant = components['schemas']['DownloadGrant'];
 
 export type CollectionCreate = components['schemas']['CollectionCreate'];
 export type CollectionUpdate = components['schemas']['CollectionUpdate'];
+export type ProjectEvidence = components['schemas']['ProjectEvidence'];
 export type ProjectAssociation = components['schemas']['ProjectAssociation'];
 export type TagAssociation = components['schemas']['TagAssociation'];
 export type AssociationUpdate = components['schemas']['AssociationUpdate'];

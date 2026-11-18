@@ -97,6 +97,10 @@ GET /collections 默认 scope=active，按 created_at DESC、id DESC 稳定排�
 
 预算 units 定义为微元，1,000,000 units 等于 1 元人民币，用于内部费用预留与结算。供应商用量依据锁定价格配置换算并向上取整，价格版本随调用记录。预算按 Asia/Shanghai 日期计算，用户界面展示可理解的额度状态。
 
+首批平台 AI 的预算配置以 PostgreSQL 单行 `ai_budget_config` 为唯一来源。管理员通过 `GET /admin/budgets` 读取，使用 `PUT /admin/budgets` 按版本更新。平台和每用户的日额度初始均为 0，管理员分配后才可发起计费调用。新预留按当前限额检查，调低限额保留已有预留及待对账金额，两者继续占用当日额度。`GET /me/usage` 合并当前配置和登录用户的当日账本。
+
+`worker_concurrency` 随预算配置存储，Worker 启动时读取；调整并发需重启 Worker，调整日额度对后续预留即时生效。路由 JSON 管理模型、计价和单次任务的输入输出、超时及尝试上限，拒绝额外的日额度和并发配置字段。
+
 模型配置使用服务端已配置的 credential_alias。配置写入要验证别名、供应商、地域与模型组合，并记录操作者。enabled=true 前必须完成真实连通性和结构化输出验证，失败保留原配置。管理员查看接口永远返回脱敏配置。
 
 ## 契约变更

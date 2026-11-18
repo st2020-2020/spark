@@ -33,6 +33,7 @@ type Server struct {
 	spec      *openapi3.T
 	hashes    chan struct{}
 	dummyHash string
+	Organizer *Organizer
 }
 type apiError struct {
 	Status        int
@@ -56,6 +57,10 @@ func New(ctx context.Context, cfg Config, pool *pgxpool.Pool) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{Config: cfg, Pool: pool, spec: spec, hashes: make(chan struct{}, 2)}
+	s.Organizer, err = NewOrganizer(pool, cfg.AIEnabled)
+	if err != nil {
+		return nil, err
+	}
 	s.dummyHash, err = s.passwordHash("unused-dummy-password-" + uuid.NewString())
 	return s, err
 }
@@ -96,6 +101,8 @@ func (s *Server) Router() *gin.Engine {
 	auth.POST("/password-reset", s.handle(s.resetPassword))
 	secured := api.Group("")
 	secured.Use(s.authenticate, s.origin, s.csrf)
+	secured.PATCH("/me/preferences", s.handle(s.updatePreferences))
+	secured.GET("/me/usage", s.handle(s.getUsage))
 	secured.GET("/auth/session", s.handle(s.currentSession))
 	secured.POST("/auth/logout", s.handle(s.logout))
 	secured.GET("/sessions", s.handle(s.listSessions))
@@ -113,6 +120,8 @@ func (s *Server) Router() *gin.Engine {
 	secured.DELETE("/collections/:id", s.handle(s.trashCollection))
 	secured.POST("/collections/:id/restore", s.handle(s.restoreCollection))
 	secured.GET("/collections/:id/organization", s.handle(s.getOrganization))
+	secured.POST("/collections/:id/organization", s.handle(s.restartOrganization))
+	secured.PUT("/collections/:id/ai-exclusion", s.handle(s.setAIExclusion))
 	secured.GET("/search", s.handle(s.search))
 	admin := secured.Group("/admin")
 	admin.Use(func(c *gin.Context) {
@@ -122,6 +131,8 @@ func (s *Server) Router() *gin.Engine {
 		}
 		c.Next()
 	})
+	admin.GET("/budgets", s.handle(s.getBudgets))
+	admin.PUT("/budgets", s.handle(s.setBudgets))
 	admin.POST("/invite-imports", s.handle(s.previewInvites))
 	admin.POST("/invite-imports/:id/commit", s.handle(s.commitInvites))
 	admin.GET("/invite-batches", s.handle(s.listBatches))

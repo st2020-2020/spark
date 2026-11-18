@@ -6,12 +6,14 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -o /out/spark-api ./cmd/api && \
-    CGO_ENABLED=0 go build -trimpath -o /out/spark ./cmd/spark
+    CGO_ENABLED=0 go build -trimpath -o /out/spark ./cmd/spark && \
+    CGO_ENABLED=0 go build -trimpath -o /out/spark-worker ./cmd/worker
 
 FROM scratch AS runtime
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/spark-api /spark-api
 COPY --from=build /out/spark /spark
+COPY --from=build /out/spark-worker /spark-worker
 USER 65532:65532
 EXPOSE 8080
 ENTRYPOINT ["/spark-api"]

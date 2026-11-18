@@ -19,7 +19,58 @@ dc up -d --build api web
 dc ps
 ```
 
-迁移只在显式 `tools migrate` 中执行，API 启动会检查版本并拒绝未迁移的库，不会重置数据。当前版本为 `001_initial.sql`（版本 1），重复迁移不重复执行。全新环境先迁移；从已有逻辑备份恢复的环境先恢复，再执行迁移。
+迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `002_text_organization.sql`（版本 2）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v2.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
+
+## 文本自动整理 Worker 与 AI 路由（默认关闭）
+
+AI 整理默认关闭：`SPARK_AI_ENABLED` 默认为 `false`，且 `worker` 位于 Compose `ai` profile 下，普通 `dc up -d` 不会启动 `worker`、API 也不会读模型密钥；保存收藏保持原有 `skipped / integration_not_configured`，手动重整返回 `503`。
+
+如需在本机 OrbStack 联调本机 Magpie 网关（`127.0.0.1:3425`，容器内经 `http://host.docker.internal:3425/v1/chat/completions` 访问）：
+
+1. 在已忽略目录准备只读路由配置 `server/.local/ai-routes.json`（权限 `0444`，容器以 UID `65532` 只读挂载至 `/run/spark-ai/routes.json`；配置缺失、格式错误或含预算/并发/未知字段时 `worker` 拒绝启动并退出非 0）：
+
+```json
+{
+  "version": "local-deepseek-estimate-v1",
+  "max_attempts": 1,
+  "timeout_seconds": 30,
+  "max_input_chars": 8000,
+  "routes": [
+    {
+      "name": "primary",
+      "endpoint": "http://host.docker.internal:3425/v1/chat/completions",
+      "model": "codebuddy/deepseek-v4.1-flash",
+      "allow_unauthenticated_development": true,
+      "output_mode": "json_object",
+      "max_output_tokens": 1000,
+      "input_price_units_per_million_tokens": 1000000,
+      "output_price_units_per_million_tokens": 2000000
+    }
+  ]
+}
+```
+
+- 上述 `input_price_units_per_million_tokens` / `output_price_units_per_million_tokens`（单位：微元，`1e6` 微元 = 1 元）仅为按估算汇率标定的本地记账单价，不等同于供应商实收结算；`allow_unauthenticated_development` 仅允许在 `SPARK_ENV=development` 且指向 `host.docker.internal` 或回环地址时使用。生产环境严禁开启该标志，必须改用 `api_key_file`（只读挂载且 UID `65532` 可读）。
+- 预算限额与并发（`worker_concurrency`）的唯一数据源为 PostgreSQL `ai_budget_config`（由管理员通过 `GET/PUT /api/v1/admin/budgets` 管理）；初始日额度为 `0`，在管理员分配额度前不会发起外部模型调用。修改 `worker_concurrency` 后需重启 `worker` 容器生效（`dc --profile ai restart worker`）。
+- 仅配置已批准的主路由；若未批准或未验证第二独立厂商备用路由，不添加 `backup` 路由（双厂商切换当前未测）。
+
+2. 显式开启并启动（仅联调时）：
+
+```sh
+SPARK_AI_ENABLED=true dc up -d api
+SPARK_AI_ENABLED=true dc --profile ai up -d worker
+```
+
+`worker` 仅在容器内部 `127.0.0.1:9091/ready` 提供健康检查（不映射宿主机端口），`read_only: true`、`stop_grace_period: 30s`。
+
+3. **完整回退（停止全部新 AI 调用）**：必须**同时**关闭 API 入队开关并停止 `worker`：
+
+```sh
+SPARK_AI_ENABLED=false dc up -d api
+dc --profile ai stop worker
+```
+
+仅停止 `worker` 而不关闭 `SPARK_AI_ENABLED` 会导致新收藏继续入队并停留在 `queued`（而非 `skipped`）；仅把 `SPARK_AI_ENABLED` 改回 `false` 仅阻止新入队，已入队任务仍会被运行中的 `worker` 按当前用户授权执行。
 
 宿主机浏览器使用 `http://127.0.0.1:5173`，Vite `/api` 代理到容器内 `http://api:8080`。`GET http://127.0.0.1:8080/api/v1/health/live` 检查进程；`/api/v1/health/ready` 检查真实 PostgreSQL 和迁移版本。没有 `/api/v1/health` 别名。PostgreSQL 仅映射 `127.0.0.1:54329`，容器使用服务名 `postgres:5432`；宿主服务端口不参与部署。
 
@@ -59,7 +110,8 @@ dc run --rm -T tools dev-mail CHALLENGE_ID
 - 项目创建、分页、详情、版本化修改（名称、描述、关注点、活动/暂停/完成状态）。
 - 收藏创建、分页筛选、详情、内容编辑、人工项目决定、已读、移入回收站/恢复、当前整理状态。
 - 中文/英文关键词搜索、字面 SQL 通配字符、匹配片段、按用户与筛选绑定并签名的游标。
-- 管理员邀请导入预览/提交、批次/代码列表与启用/禁用。
+- 管理员邀请导入预览/提交、批次/代码列表与启用/禁用；版本化预算管理。
+- AI 同意偏好、单条排除、手动重整、整理进度/结果、每日额度，以及带来源引文的单项目建议。
 
 正文遵循共享 OpenAPI 中与 `contracts/document.schema.json` 一致的允许结构，保留原始 JSON 和派生纯文本，校验 HTTP(S) 链接、无凭据 URL、最多三层列表、10,000 个节点和原文+用途合计 50,000 Unicode 字符。未知字段/节点不会静默丢弃。网址只保存，不在请求中抓取。
 
@@ -71,7 +123,7 @@ dc run --rm -T tools dev-mail CHALLENGE_ID
 
 ## 生成与验证
 
-Go module 与构建镜像固定 Go 1.27.3，Gin 1.11.0、pgx 5.7.6；完整依赖版本见 `go.mod/go.sum`。生成器固定 oapi-codegen 2.4.1、sqlc 1.29.0。共享 contracts 只读；`oapi-overlay.yaml` 仅将 Go `UserStatus` 类型命名为 `AccountStatusRequest`，解决与 `User.status` 枚举的名称碰撞，不改变 JSON 字段、枚举或必填性。
+Go module 与构建镜像固定 Go 1.27.3，Gin 1.11.0、pgx 5.7.6；完整依赖版本见 `go.mod/go.sum`。生成器固定 oapi-codegen 2.4.1、sqlc 1.29.0。类型生成以共享 contracts 为唯一来源；`oapi-overlay.yaml` 仅将 Go `UserStatus` 类型命名为 `AccountStatusRequest`，解决与 `User.status` 枚举的名称碰撞，不改变 JSON 字段、枚举或必填性。
 
 在容器内重新生成（绑定本模块目录接收生成文件，契约只读挂载）：
 
@@ -97,7 +149,7 @@ test 镜像设置 `CGO_ENABLED=0`；默认运行 `go test ./... -count=1`，实�
 
 ## 范围与限制
 
-尚未实现真实邮件投递、OSS/附件、网页提取、OCR、模型、River Worker/自动整理、标签、AI 偏好与预算、永久删除/到期清理、完整管理后台及后续同步。相应未实现路由返回结构化 404；带附件/标签的收藏请求明确拒绝。当前收藏原文可靠落库，整理状态始终明确为 `skipped` / `integration_not_configured`，没有虚构队列任务或模型成功。保留 30 天的字段不表示已有自动清理任务。
+尚未实现真实邮件投递、OSS/附件、网页提取、OCR、标签、自动采纳项目、永久删除/到期清理、完整管理后台及后续同步。相应未实现路由返回结构化 404；带附件/标签的收藏请求明确拒绝。文字整理已经使用真实 River 队列和独立 Worker，模型调用由只读平台配置选择，首批仅生成建议；平台关闭时仍明确返回 `skipped` / `integration_not_configured`。保留 30 天的字段不表示已有自动清理任务。
 
 正式邮件缺凭证只阻止相应集成；`disabled` 模式验证码接口返回 503，不假报已发送。首批没有以仿真实现代替真实 PostgreSQL。容器中的 pgx/sqlc 与真实数据库验证和前端浏览器闭环分别报告；容量压测、真实云服务和备份恢复 RPO/RTO 属于后续验收。
 
@@ -106,3 +158,26 @@ test 镜像设置 `CGO_ENABLED=0`；默认运行 `go test ./... -count=1`，实�
 OrbStack Docker 29.8.2 内以 `postgres:17.6-alpine`、`golang:1.27.3-alpine`、前端 `node:22-alpine` 完成镜像构建与启动；API 运行用户为 `65532:65532`。已有测试开发库通过逻辑备份/恢复迁入容器，随后显式迁移检查成功。宿主机旧 API 与两个 PostgreSQL 实例已停止，原目录及 `0600` 逻辑备份保留。
 
 `dc run --rm test`（`CGO_ENABLED=0 go test ./... -count=1`，连接容器 PostgreSQL）、`go build ./...`、`go vet ./...` 均在容器通过。集成测试退出后 `spark_test` 中没有残留的本轮测试 schema。API 直连 live/ready 及经 Web 代理的 ready 均真实返回 200 / `{"status":"ok"}`；匿名会话经代理返回 401。没有将未配置的云服务或后续里程碑报告为通过；完整浏览器验收由前端会话报告。
+
+## 文字整理的应用行为与验证
+
+`PATCH /api/v1/me/preferences` 开启时必须带非空 `consent_version`，记录同意时间与版本；切换偏好会增加用户策略版本，不重跑历史收藏。`PUT /collections/{id}/ai-exclusion` 修改单条策略，取消排除后也不自动重跑历史；可显式 `POST /collections/{id}/organization`（需幂等键）。内容编辑或恢复时按当前授权安排新任务。新内容与运行、River 任务同事务保存，模型等待不占数据库事务。平台开关只管新入队，停止 Worker 后已经保存的运行保持真实队列状态。
+
+手动重整复用同一输入/策略的活动运行。平台未配置返回 503 `integration_not_configured`，未同意或已排除为 403 `ai_disabled` / `ai_excluded`，无有效文字或用途为 422 `insufficient_material`，额度不足为 429 `quota_exceeded`。自动保存不因模型、额度或网关失败而丢失原文；任务可以在排队后进入 `blocked`。
+
+Worker 只发送截断后的 `original_text` / `intent` 以及当前账号的活动项目候选，不访问材料中的 URL、不提供工具。候选集先按项目名称、描述、关注点筛选并受上下文预算裁剪。共享结果 Schema、最多一个候选、空标签、具体来源中的逐字引文与候选 ID 白名单共同校验输出；未知来源、虚假引文或跨用户项目导致 `invalid_model_output`，不会写入关联。项目建议为 `suggested`，确认/忽略继续使用既有项目人工决定接口，`evidence`、`reason`、`project_version` 供展示依据。
+
+结果应用再次检查用户状态、内容与两种策略版本、回收站状态和最新人工决定。编辑、快速关闭再开启、排除、删除/恢复都会使旧结果失效；`manual` / `confirmed` / `rejected` 不被机器写回覆盖。手动标题优先；生成标题可参与搜索。项目版本过期时跳过该建议并安排按新项目版本的补充运行；用量不明时不自动补跑。
+
+预算与并发只有数据库管理配置生效，配置变更保留已有预留与待核对金额；同日的新预留使用最新限额，预留统一先锁平台再锁用户。每次供应商尝试独立记录路由、配置/估价版本、实际返回的模型标识和 token 用量；费用为按声明人民币微元单价向上取整的估算，不是供应商账单。发送前确认失败、401/403、429 可释放预留并在总尝试上限内重试/切备用；发送后超时、未知 5xx 或缺用量保留 `uncertain`，不会按零成本自动切备用。缺用量但结果有效时展示 `partial / usage_uncertain`，保留可用文字；供应商返回超过声明 token 上限的计量也视为待核对。
+
+鉴权失败会按路由配置版本持久停用路由并记录脱敏告警；修复凭证后应更换 `version` 再启动。单条运行的数据库锁、状态与应用标记防止重复执行造成重复应用；进程中断遗留的预留恢复为 `uncertain`，不自动再次收费调用。请求有超时和总尝试限制，Worker 优雅退出停止领取并完成或取消在途调用、有限时地完成结算。
+
+`internal/backend/model_schema.gen.go` 是共享 `contracts/organization-result.schema.json` 的生成嵌入，供独立镜像强校验；修改源 Schema 后在上述容器工具环境执行以下真实代码生成（无额外验收门禁）：
+
+```sh
+dc run --rm --no-deps -v "$PWD:/src" -v "$PWD/../contracts:/contracts:ro" test \
+  go run ./cmd/genmodel ../contracts/organization-result.schema.json internal/backend/model_schema.gen.go
+```
+
+新增隔离 PostgreSQL 测试覆盖 v1→v2 保留原文升级、事务入队/活动运行复用、真实 River+受控 HTTP 响应、虚假引文/未知来源/跨用户项目、并发人工排除、内容与授权竞争、平台预算竞争、零额度、同日额度调整、未知用量、主备安全切换及遗留预留恢复。这些测试中的模型响应明确为合成控制响应；真实 Magpie 调用与浏览器验收由部署、前端会话分别报告，不等同于双厂商计量/隐私或完整 M3 评测已完成。

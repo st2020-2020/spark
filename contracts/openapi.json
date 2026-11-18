@@ -4018,6 +4018,13 @@
           "project_version": {
             "type": "integer",
             "minimum": 1
+          },
+          "evidence": {
+            "type": "array",
+            "maxItems": 5,
+            "items": {
+              "$ref": "#/components/schemas/ProjectEvidence"
+            }
           }
         },
         "required": [
@@ -5180,6 +5187,28 @@
         },
         "required": [
           "items"
+        ]
+      },
+      "ProjectEvidence": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "enum": [
+              "original_text",
+              "intent"
+            ]
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "source_id",
+          "quote"
         ]
       }
     }

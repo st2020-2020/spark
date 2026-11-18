@@ -114,7 +114,7 @@ func (s *Server) findCollections(c *gin.Context, terms []string) ([]collectionRo
 		args = append(args, cur.Time, cur.ID)
 		where = append(where, fmt.Sprintf("(c.created_at,c.id)<($%d::timestamptz,$%d::uuid)", len(args)-1, len(args)))
 	}
-	title := `COALESCE(NULLIF(c.manual_title,''),NULLIF(c.plain_text,''),c.original_url)`
+	title := `COALESCE(NULLIF(c.manual_title,''),(SELECT NULLIF(generated_title,'') FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),NULLIF(c.plain_text,''),c.original_url)`
 	for _, term := range terms {
 		args = append(args, term)
 		n := len(args)
@@ -133,7 +133,7 @@ func (s *Server) findCollections(c *gin.Context, terms []string) ([]collectionRo
 		if e != nil {
 			return nil, nil, e
 		}
-		items = append(items, row)
+		items = append(items, s.collectionView(row))
 	}
 	if err = rows.Err(); err != nil {
 		return nil, nil, err

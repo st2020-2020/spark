@@ -4,11 +4,12 @@ x-api-environment: &api-environment
   SPARK_ENV: development
   SPARK_CONTAINER: 'true'
   SPARK_ADDR: 0.0.0.0:8080
-  SPARK_ORIGIN: http://127.0.0.1:5173
+  SPARK_ORIGIN: ${SPARK_ORIGIN:-http://127.0.0.1:5173}
   DATABASE_URL: postgres://spark:${SPARK_DEV_DB_PASSWORD:?Set SPARK_DEV_DB_PASSWORD}@postgres:5432/spark_dev?sslmode=disable
   SPARK_SECRET: ${SPARK_SECRET:?Set SPARK_SECRET}
   SPARK_ENCRYPTION_KEY: ${SPARK_ENCRYPTION_KEY:?Set SPARK_ENCRYPTION_KEY}
   SPARK_MAIL_MODE: development
+  SPARK_AI_ENABLED: ${SPARK_AI_ENABLED:-false}
 
 services:
   postgres:
@@ -18,7 +19,7 @@ services:
       POSTGRES_DB: spark_dev
       POSTGRES_PASSWORD: ${SPARK_DEV_DB_PASSWORD:?Set SPARK_DEV_DB_PASSWORD for isolated local database}
     ports:
-      - "127.0.0.1:54329:5432"
+      - "127.0.0.1:${SPARK_PG_PORT:-54329}:5432"
     volumes:
       - spark_dev_pg:/var/lib/postgresql/data
     healthcheck:
@@ -34,7 +35,7 @@ services:
       target: runtime
     environment: *api-environment
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${SPARK_API_PORT:-8080}:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,7 +54,7 @@ services:
       VITE_DEV_HOST: 0.0.0.0
       VITE_API_PROXY_TARGET: http://api:8080
     ports:
-      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:${SPARK_WEB_PORT:-5173}:5173"
     depends_on:
       api:
         condition: service_healthy
@@ -70,6 +71,30 @@ services:
         condition: service_healthy
     profiles: [tools]
     read_only: true
+    mem_limit: 512m
+  worker:
+    image: spark-api:dev
+    build:
+      context: ../server
+      target: runtime
+    entrypoint: [/spark-worker]
+    environment:
+      SPARK_ENV: development
+      DATABASE_URL: postgres://spark:${SPARK_DEV_DB_PASSWORD:?Set SPARK_DEV_DB_PASSWORD}@postgres:5432/spark_dev?sslmode=disable
+      SPARK_AI_CONFIG_FILE: /run/spark-ai/routes.json
+    volumes:
+      - ${SPARK_AI_CONFIG_HOST_PATH:-../server/.local/ai-routes.json}:/run/spark-ai/routes.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /spark-worker, healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    profiles: [ai]
+    read_only: true
+    stop_grace_period: 30s
     mem_limit: 512m
   test:
     image: spark-server-test:dev

@@ -12,11 +12,20 @@ import (
 
 type collectionRow struct {
 	contract.Collection
-	PlainText string `json:"plain_text"`
+	PlainText          string                 `json:"plain_text"`
+	StoredOrganization *contract.Organization `json:"stored_organization"`
+	UserAIEnabled      bool                   `json:"user_ai_enabled"`
+	GeneratedTitle     *string                `json:"generated_title"`
+	GeneratedSummary   *string                `json:"generated_summary"`
 }
 
-const collectionSelect = `SELECT to_jsonb(c)||jsonb_build_object('projects',COALESCE(
- (SELECT jsonb_agg(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision) ORDER BY p.id)
+const collectionSelect = `SELECT to_jsonb(c)||jsonb_build_object(
+ 'user_ai_enabled',(SELECT ai_enabled FROM users WHERE id=c.user_id),
+ 'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,'stages',r.stages,'error_code',r.error_code,'updated_at',r.updated_at)) FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
+ 'generated_title',(SELECT generated_title FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
+ 'generated_summary',(SELECT summary FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
+ 'projects',COALESCE(
+ (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision,'reason',cp.reason,'evidence',cp.evidence,'project_version',cp.project_version)) ORDER BY p.id)
  FROM collection_projects cp JOIN projects p ON p.user_id=cp.user_id AND p.id=cp.project_id
  WHERE cp.user_id=c.user_id AND cp.collection_id=c.id),'[]'::jsonb)) FROM collections c `
 
@@ -40,18 +49,34 @@ func scanCollection(row pgx.Row) (collectionRow, error) {
 	out.Attachments = []contract.Attachment{}
 	out.Tags = []contract.TagAssociation{}
 	code := "integration_not_configured"
+	if !out.UserAIEnabled {
+		code = "ai_disabled"
+	} else if out.AiExcluded {
+		code = "ai_excluded"
+	} else if !materialAvailable(out.PlainText, out.Intent) {
+		code = "insufficient_material"
+	}
 	out.Organization = contract.Organization{ContentVersion: out.ContentVersion, Status: "skipped", Stages: []contract.Stage{}, ErrorCode: &code, UpdatedAt: out.UpdatedAt}
+	if out.StoredOrganization != nil {
+		out.Organization = *out.StoredOrganization
+	}
+	out.Organization.GeneratedTitle = out.GeneratedTitle
+	out.Organization.Summary = out.GeneratedSummary
+	if value(out.ManualTitle) == "" && value(out.GeneratedTitle) != "" {
+		out.DisplayTitle = *out.GeneratedTitle
+	}
 	return out, nil
 }
-func loadCollection(ctx context.Context, q querier, uid, id string) (collectionRow, error) {
-	return scanCollection(q.QueryRow(ctx, collectionSelect+`WHERE c.user_id=$1 AND c.id=$2`, uid, id))
+func (s *Server) loadCollection(ctx context.Context, q querier, uid, id string) (collectionRow, error) {
+	row, err := scanCollection(q.QueryRow(ctx, collectionSelect+`WHERE c.user_id=$1 AND c.id=$2`, uid, id))
+	return s.collectionView(row), err
 }
 func (s *Server) getCollection(c *gin.Context) (any, error) {
-	row, err := loadCollection(c.Request.Context(), s.Pool, current(c).User.ID, c.Param("id"))
+	row, err := s.loadCollection(c.Request.Context(), s.Pool, current(c).User.ID, c.Param("id"))
 	return row.Collection, err
 }
 func (s *Server) getOrganization(c *gin.Context) (any, error) {
-	row, err := loadCollection(c.Request.Context(), s.Pool, current(c).User.ID, c.Param("id"))
+	row, err := s.loadCollection(c.Request.Context(), s.Pool, current(c).User.ID, c.Param("id"))
 	return row.Organization, err
 }
 func snapshot(ctx context.Context, tx pgx.Tx, uid, id string) error {
@@ -106,7 +131,10 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 		if err = record(ctx, tx, uid, "collection", id, 1); err != nil {
 			return nil, err
 		}
-		row, err := loadCollection(ctx, tx, uid, id)
+		if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
+			return nil, err
+		}
+		row, err := s.loadCollection(ctx, tx, uid, id)
 		return row.Collection, err
 	})
 }
@@ -125,7 +153,7 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 	}
 	defer tx.Rollback(ctx)
 	uid, id := current(c).User.ID, c.Param("id")
-	row, err := loadCollection(ctx, tx, uid, id)
+	row, err := s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -163,8 +191,11 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 		if err = record(ctx, tx, uid, "collection", id, int64(row.ResourceVersion+1)); err != nil {
 			return nil, err
 		}
+		if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
+			return nil, err
+		}
 	}
-	row, err = loadCollection(ctx, tx, uid, id)
+	row, err = s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +223,7 @@ func (s *Server) projectDecisions(c *gin.Context) (any, error) {
 	}
 	defer tx.Rollback(ctx)
 	uid, id := current(c).User.ID, c.Param("id")
-	row, err := loadCollection(ctx, tx, uid, id)
+	row, err := s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -247,7 +278,7 @@ func (s *Server) projectDecisions(c *gin.Context) (any, error) {
 			return nil, err
 		}
 	}
-	row, err = loadCollection(ctx, tx, uid, id)
+	row, err = s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +299,7 @@ func (s *Server) readState(c *gin.Context) (any, error) {
 	}
 	defer tx.Rollback(ctx)
 	uid, id := current(c).User.ID, c.Param("id")
-	row, err := loadCollection(ctx, tx, uid, id)
+	row, err := s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +314,7 @@ func (s *Server) readState(c *gin.Context) (any, error) {
 			return nil, err
 		}
 	}
-	row, err = loadCollection(ctx, tx, uid, id)
+	row, err = s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +337,7 @@ func (s *Server) setTrash(c *gin.Context, trash bool) (any, error) {
 	}
 	defer tx.Rollback(ctx)
 	uid, id := current(c).User.ID, c.Param("id")
-	row, err := loadCollection(ctx, tx, uid, id)
+	row, err := s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -314,14 +345,23 @@ func (s *Server) setTrash(c *gin.Context, trash bool) (any, error) {
 		return nil, conflict("resource_conflict", "current_resource_version", int64(row.ResourceVersion))
 	}
 	if (row.DeletedAt != nil) != trash {
-		if _, err = tx.Exec(ctx, `UPDATE collections SET deleted_at=CASE WHEN $3 THEN now() ELSE NULL END,purge_after=CASE WHEN $3 THEN now()+interval '30 days' ELSE NULL END,resource_version=resource_version+1,updated_at=now() WHERE user_id=$1 AND id=$2`, uid, id, trash); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE collections SET deleted_at=CASE WHEN $3 THEN now() ELSE NULL END,purge_after=CASE WHEN $3 THEN now()+interval '30 days' ELSE NULL END,ai_policy_version=ai_policy_version+1,resource_version=resource_version+1,updated_at=now() WHERE user_id=$1 AND id=$2`, uid, id, trash); err != nil {
 			return nil, err
 		}
 		if err = record(ctx, tx, uid, "collection", id, int64(row.ResourceVersion+1)); err != nil {
 			return nil, err
 		}
+		if trash {
+			if _, err = tx.Exec(ctx, `UPDATE organization_runs SET status='skipped',error_code='collection_in_trash',updated_at=now(),completed_at=now() WHERE user_id=$1 AND collection_id=$2 AND status='queued'`, uid, id); err != nil {
+				return nil, err
+			}
+		} else {
+			if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
+				return nil, err
+			}
+		}
 	}
-	row, err = loadCollection(ctx, tx, uid, id)
+	row, err = s.loadCollection(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}
@@ -335,5 +375,13 @@ func summary(row collectionRow) contract.CollectionSummary {
 	for _, t := range row.ContentTypes {
 		types = append(types, contract.CollectionSummaryContentTypes(t))
 	}
-	return contract.CollectionSummary{Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200), ContentTypes: types, Projects: row.Projects, Tags: row.Tags, OrganizationStatus: "skipped", ReadAt: row.ReadAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion}
+	return contract.CollectionSummary{Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200), ContentTypes: types, Projects: row.Projects, Tags: row.Tags, OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status), ReadAt: row.ReadAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion}
+}
+
+func (s *Server) collectionView(row collectionRow) collectionRow {
+	if !s.Config.AIEnabled && row.StoredOrganization == nil {
+		code := "integration_not_configured"
+		row.Organization.ErrorCode = &code
+	}
+	return row
 }

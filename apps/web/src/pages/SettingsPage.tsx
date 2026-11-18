@@ -131,93 +131,130 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <section className="sp-card" aria-label="活跃会话与自动整理">
-          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>登录会话与 AI 整理</h2>
+        <section className="sp-card" aria-label="平台 AI 自动整理">
+          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>AI 自动整理</h2>
+          <div className="sp-stack" style={{ gap: 10 }}>
+            <div className="sp-row-between">
+              <div className="sp-stack" style={{ gap: 4, minWidth: 0 }}>
+                <div className="sp-row">
+                  <span
+                    className={`sp-pill ${user?.ai_enabled ? 'sp-pill--green' : ''}`}
+                  >
+                    {user?.ai_enabled ? '已开启' : '未开启'}
+                  </span>
+                  {user?.ai_enabled && (
+                    <span className="sp-help">授权版本 v{user.ai_policy_version}</span>
+                  )}
+                </div>
+                <span className="sp-help">
+                  由平台统一管理模型、密钥与费用，无需个人配置模型或 API Key；可随时关闭，或在单条收藏详情页排除。
+                </span>
+              </div>
+              <button
+                type="button"
+                className={`sp-btn sp-btn--sm ${user?.ai_enabled ? '' : 'sp-btn--primary'}`}
+                style={{ flexShrink: 0 }}
+                disabled={prefsMutation.isPending}
+                onClick={() => {
+                  if (!user?.ai_enabled) setAiConsentOpen(true);
+                  else prefsMutation.mutate({ ai_enabled: false });
+                }}
+              >
+                {user?.ai_enabled ? '关闭 AI 整理' : '开启 AI 整理'}
+              </button>
+            </div>
 
-          {isSessionsUnavailable && isUsageUnavailable ? (
+            {isUsageUnavailable ? (
+              <div className="sp-help">当日 AI 额度统计暂未开放</div>
+            ) : usageQuery.isError ? (
+              <div className="sp-help">{getFriendlyErrorMessage(usageQuery.error)}</div>
+            ) : usageQuery.data ? (
+              <div className="sp-stack" style={{ gap: 6 }}>
+                <div className="sp-help" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                  当日额度（{usageQuery.data.budget_day} · 北京时间）：已结算{' '}
+                  {formatUnitsToYuan(usageQuery.data.settled_units)} / 预留{' '}
+                  {formatUnitsToYuan(usageQuery.data.reserved_units)} / 上限{' '}
+                  {formatUnitsToYuan(usageQuery.data.limit_units)}
+                  {usageQuery.data.limit_units === 0 ? '（当前额度为 0）' : ''}
+                </div>
+                {usageQuery.data.limit_units === 0 ? (
+                  <div className="sp-banner sp-banner--info" role="status">
+                    <span>当前账号当日额度为 0（有效初始值），管理员分配预算前暂不发起计费整理；收藏仍可正常保存。</span>
+                  </div>
+                ) : (
+                  usageQuery.data.blocked && (
+                    <div className="sp-banner sp-banner--warning" role="status">
+                      <span>今日 AI 额度已用完，新收藏仍会正常保存；额度次日恢复后可在详情页重试整理。</span>
+                    </div>
+                  )
+                )}
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <section className="sp-card" aria-label="活跃设备会话">
+          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>活跃设备会话</h2>
+          {isSessionsUnavailable ? (
             <p className="sp-help" style={{ margin: 0 }}>
-              多设备会话管理与 AI 自动整理额度暂未开放，将在后续里程碑接入。
+              多设备会话管理暂未开放，将在后续里程碑接入。
             </p>
           ) : (
-            <div className="sp-stack" style={{ gap: 14 }}>
-              <div>
-                <div className="sp-label" style={{ marginBottom: 6 }}>AI 自动整理</div>
-                {isUsageUnavailable ? (
-                  <p className="sp-help" style={{ margin: 0 }}>暂未开放</p>
-                ) : (
-                  <div className="sp-stack" style={{ gap: 8 }}>
-                    <div className="sp-row-between">
-                      <span className="sp-help">
-                        {user?.ai_enabled ? '当前已启用' : '当前未启用'}
+            <div>
+              {(sessionsQuery.data?.items ?? []).map((sess) => (
+                <div key={sess.id} className="sp-session-row">
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div className="sp-row">
+                      <span style={{ fontWeight: 500 }} title={sess.device_label}>
+                        {formatDeviceLabel(sess.device_label)}
                       </span>
-                      <button
-                        type="button"
-                        className={`sp-btn sp-btn--sm ${user?.ai_enabled ? '' : 'sp-btn--primary'}`}
-                        disabled={prefsMutation.isPending}
-                        onClick={() => {
-                          if (!user?.ai_enabled) setAiConsentOpen(true);
-                          else prefsMutation.mutate({ ai_enabled: false });
-                        }}
-                      >
-                        {user?.ai_enabled ? '关闭 AI 整理' : '启用 AI 整理'}
-                      </button>
+                      {sess.current && <span className="sp-pill sp-pill--green">当前设备</span>}
                     </div>
-                    {usageQuery.data && (
-                      <div className="sp-help">
-                        {usageQuery.data.budget_day} · 已结算{' '}
-                        {formatUnitsToYuan(usageQuery.data.settled_units)} / 上限{' '}
-                        {formatUnitsToYuan(usageQuery.data.limit_units)}
-                      </div>
-                    )}
+                    <div className="sp-help" style={{ fontVariantNumeric: 'tabular-nums' }}>
+                      到期于 {formatDateTime(sess.expires_at)}
+                    </div>
                   </div>
-                )}
-              </div>
-
-              <div style={{ borderTop: '1px solid var(--sp-border)', paddingTop: 12 }}>
-                <div className="sp-label" style={{ marginBottom: 6 }}>活跃设备会话</div>
-                {isSessionsUnavailable ? (
-                  <p className="sp-help" style={{ margin: 0 }}>暂未开放</p>
-                ) : (
-                  <div>
-                    {(sessionsQuery.data?.items ?? []).map((sess) => (
-                      <div key={sess.id} className="sp-session-row">
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div className="sp-row">
-                            <span style={{ fontWeight: 500 }} title={sess.device_label}>
-                              {formatDeviceLabel(sess.device_label)}
-                            </span>
-                            {sess.current && <span className="sp-pill sp-pill--green">当前设备</span>}
-                          </div>
-                          <div className="sp-help" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                            到期于 {formatDateTime(sess.expires_at)}
-                          </div>
-                        </div>
-                        {!sess.current && (
-                          <button
-                            type="button"
-                            className="sp-btn sp-btn--sm sp-btn--danger"
-                            style={{ flexShrink: 0 }}
-                            disabled={revokeMutation.isPending}
-                            onClick={() => revokeMutation.mutate(sess.id)}
-                          >
-                            撤销
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
+                  {!sess.current && (
+                    <button
+                      type="button"
+                      className="sp-btn sp-btn--sm sp-btn--danger"
+                      style={{ flexShrink: 0 }}
+                      disabled={revokeMutation.isPending}
+                      onClick={() => revokeMutation.mutate(sess.id)}
+                    >
+                      撤销
+                    </button>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </section>
       </div>
 
-      <Modal open={aiConsentOpen} title="开启 AI 自动整理" onClose={() => setAiConsentOpen(false)}>
+      <Modal open={aiConsentOpen} title="开启平台 AI 自动整理" onClose={() => setAiConsentOpen(false)}>
         <div className="sp-stack" style={{ gap: 14 }}>
           <p style={{ margin: 0 }}>
-            启用后，Spark 会在你保存新收藏时，将文字、网址与用途说明发送给服务端配置的模型服务以生成标题、摘要与项目关联建议。
+            开启后，你在保存新收藏时将自动进入后台整理队列，无需自行配置模型或密钥。请确认以下处理范围：
           </p>
+          <ul className="sp-consent-list">
+            <li>
+              <strong>发送资料范围：</strong>
+              仅发送未排除单条的收藏文字正文、用途说明与关联网址；不发送账号密码、会话密钥或已排除收藏。
+            </li>
+            <li>
+              <strong>处理用途：</strong>
+              用于生成建议标题、简短摘要，以及至多一条带原文依据的项目建议；首批仅提供建议，需由你手动确认或忽略。
+            </li>
+            <li>
+              <strong>第三方服务范围：</strong>
+              由 Spark 平台统一采购并托管的第三方文本模型服务处理，普通用户无需申请 API Key 或切换模型。
+            </li>
+            <li>
+              <strong>历史收藏说明：</strong>
+              开启仅对后续新保存的收藏生效，不会自动重跑全部历史收藏；旧资料可在详情页按需点击「重新整理」。
+            </li>
+          </ul>
           <div className="sp-row" style={{ justifyContent: 'flex-end' }}>
             <button type="button" className="sp-btn" onClick={() => setAiConsentOpen(false)}>
               取消
@@ -226,9 +263,11 @@ export function SettingsPage() {
               type="button"
               className="sp-btn sp-btn--primary"
               disabled={prefsMutation.isPending}
-              onClick={() => prefsMutation.mutate({ ai_enabled: true, consent_version: 'v1' })}
+              onClick={() =>
+                prefsMutation.mutate({ ai_enabled: true, consent_version: 'spark-ai-v1' })
+              }
             >
-              我已了解并开启
+              {prefsMutation.isPending ? '保存中…' : '我已了解并开启'}
             </button>
           </div>
         </div>

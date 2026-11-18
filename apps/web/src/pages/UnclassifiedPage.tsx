@@ -6,6 +6,7 @@ import type { CollectionSummary } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
+import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
 import { useToast } from '../context/ToastContext';
@@ -79,43 +80,48 @@ export function UnclassifiedPage() {
         }}
       >
         {suggested.map((sug) => (
-          <div key={sug.project_id} className="sp-row-between">
-            <div className="sp-break-anywhere" style={{ fontSize: 13 }}>
-              <strong>建议归入：{sug.name}</strong>
-              {sug.reason && <span className="sp-help" style={{ marginLeft: 8 }}>{sug.reason}</span>}
+          <div key={sug.project_id} className="sp-suggestion-card sp-suggestion-card--highlighted">
+            <div className="sp-row-between">
+              <div className="sp-row">
+                <span className="sp-pill sp-pill--green">AI 建议</span>
+                <strong className="sp-break-anywhere" style={{ fontSize: 13 }}>
+                  建议归入：{sug.name}
+                </strong>
+              </div>
+              <div className="sp-row">
+                <button
+                  type="button"
+                  className="sp-btn sp-btn--sm sp-btn--primary"
+                  disabled={decideMutation.isPending}
+                  onClick={() =>
+                    decideMutation.mutate({
+                      collectionId: col.id,
+                      projectId: sug.project_id,
+                      action: 'include',
+                    })
+                  }
+                >
+                  <Check size={13} strokeWidth={2} aria-hidden="true" />
+                  <span>加入项目</span>
+                </button>
+                <button
+                  type="button"
+                  className="sp-btn sp-btn--sm"
+                  disabled={decideMutation.isPending}
+                  onClick={() =>
+                    decideMutation.mutate({
+                      collectionId: col.id,
+                      projectId: sug.project_id,
+                      action: 'exclude',
+                    })
+                  }
+                >
+                  <X size={13} strokeWidth={2} aria-hidden="true" />
+                  <span>忽略</span>
+                </button>
+              </div>
             </div>
-            <div className="sp-row">
-              <button
-                type="button"
-                className="sp-btn sp-btn--sm sp-btn--primary"
-                disabled={decideMutation.isPending}
-                onClick={() =>
-                  decideMutation.mutate({
-                    collectionId: col.id,
-                    projectId: sug.project_id,
-                    action: 'include',
-                  })
-                }
-              >
-                <Check size={13} strokeWidth={2} aria-hidden="true" />
-                <span>加入项目</span>
-              </button>
-              <button
-                type="button"
-                className="sp-btn sp-btn--sm"
-                disabled={decideMutation.isPending}
-                onClick={() =>
-                  decideMutation.mutate({
-                    collectionId: col.id,
-                    projectId: sug.project_id,
-                    action: 'exclude',
-                  })
-                }
-              >
-                <X size={13} strokeWidth={2} aria-hidden="true" />
-                <span>忽略</span>
-              </button>
-            </div>
+            <ProjectSuggestionEvidence association={sug} />
           </div>
         ))}
 

@@ -9,6 +9,7 @@ x-api-environment: &api-environment
   SPARK_SECRET: ${SPARK_SECRET:?Set SPARK_SECRET}
   SPARK_ENCRYPTION_KEY: ${SPARK_ENCRYPTION_KEY:?Set SPARK_ENCRYPTION_KEY}
   SPARK_MAIL_MODE: ${SPARK_MAIL_MODE:-disabled}
+  SPARK_AI_ENABLED: ${SPARK_AI_ENABLED:-false}
 
 services:
   postgres:
