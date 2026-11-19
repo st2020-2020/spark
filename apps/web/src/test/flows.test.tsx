@@ -24,22 +24,25 @@ function getSidebar() {
   return within(screen.getByRole('complementary', { name: '主导航' }));
 }
 
+async function loginAsAdmin(user: ReturnType<typeof userEvent.setup>, adapter = createTestAdapter()) {
+  const rendered = renderWithAdapter(['/login'], adapter);
+  await user.type(await screen.findByLabelText('邮箱'), 'admin@spark.local');
+  await user.type(screen.getByLabelText('密码'), 'SparkAdmin1234!');
+  await user.click(screen.getByRole('button', { name: '登录' }));
+  await screen.findByRole('heading', { name: '收件箱' });
+  return rendered;
+}
+
 describe('Spark Web key flows', () => {
-  it('completes admin invite import -> register -> create project -> save URL/intent -> 409 conflict -> search', async () => {
+  it('completes admin invite CSV preview/commit and registers a new user with 0-project empty state', async () => {
     const user = userEvent.setup();
-    const { adapter } = renderWithAdapter(['/login']);
+    const { adapter } = await loginAsAdmin(user);
 
-    // 1. Admin logs in
-    await user.type(await screen.findByLabelText('邮箱'), 'admin@spark.local');
-    await user.type(screen.getByLabelText('密码'), 'SparkAdmin1234!');
-    await user.click(screen.getByRole('button', { name: '登录' }));
-
-    await screen.findByRole('heading', { name: '收件箱' });
     await user.click(getSidebar().getByRole('button', { name: '账号菜单' }));
     await user.click(screen.getByRole('menuitem', { name: '管理后台' }));
     await screen.findByRole('heading', { name: '管理后台' });
 
-    // 2. Import invite batch CSV (error preview first, then valid CSV)
+    // Import invite batch CSV (error preview first, then valid CSV)
     await user.type(screen.getByLabelText('批次名称'), '内测二期');
     await user.type(screen.getByLabelText('CSV 内容'), 'BAD\nSPARK-NEW-0001,,1');
     await user.click(screen.getByRole('button', { name: '预览校验' }));
@@ -53,7 +56,7 @@ describe('Spark Web key flows', () => {
     await user.click(screen.getByRole('button', { name: '确认导入' }));
     await screen.findByText('内测二期');
 
-    // 3. Logout via account menu and register with the newly imported invite code
+    // Logout via account menu and register with the newly imported invite code
     await user.click(getSidebar().getByRole('button', { name: '账号菜单' }));
     await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
     await user.click(await screen.findByRole('link', { name: '使用邀请码注册' }));
@@ -70,19 +73,22 @@ describe('Spark Web key flows', () => {
     await user.click(screen.getByRole('button', { name: '验证并注册' }));
 
     await screen.findByRole('heading', { name: '收件箱' });
-
-    // 4. With 0 projects, sidebar shows "创建项目" and hides "查看全部"; inbox empty state is quiet text
     await screen.findByText('保存的内容会出现在这里。');
     expect(getSidebar().queryByRole('link', { name: '查看全部' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '保存收藏' })).toBeDisabled();
+  });
 
-    await user.click(getSidebar().getByRole('link', { name: '创建项目' }));
+  it('creates a project and saves a URL + intent collection from calm composer', async () => {
+    const user = userEvent.setup();
+    await loginAsAdmin(user);
+
+    await user.click(getSidebar().getByRole('link', { name: '查看或新建项目' }));
+    await user.click((await screen.findAllByRole('button', { name: '新建项目' }))[0]);
     await user.type(await screen.findByLabelText('项目名称（必填）'), 'Spark 产品开发');
     await user.type(screen.getByLabelText('项目描述（可选，补充说明有助于自动关联）'), '多端同步与搜索设计');
     await user.click(screen.getByRole('button', { name: '创建项目' }));
     await screen.findByRole('heading', { name: 'Spark 产品开发' });
 
-    // 5. Save a collection with URL + intent + manual project association via calm composer
     await user.click(getSidebar().getByRole('link', { name: '收件箱' }));
     await user.click(screen.getByRole('button', { name: '更多' }));
     await user.click(screen.getByRole('menuitem', { name: '附加网址' }));
@@ -94,21 +100,42 @@ describe('Spark Web key flows', () => {
 
     await user.click(screen.getByRole('button', { name: '添加项目' }));
     await user.click(screen.getByRole('button', { name: 'Spark 产品开发' }));
-    // Close popover via Save click
     await user.click(screen.getByRole('button', { name: '保存收藏' }));
 
     await screen.findByText('example.com');
+    await waitFor(() => {
+      expect(screen.getByRole('region', { name: '快速收集' })).not.toHaveClass('sp-composer--active');
+    });
+  });
 
-    // 6. Open detail and verify 409 content conflict handling preserves local edits
+  it('preserves local draft on 409 content conflict and finds updated collection via search', async () => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const created = await adapter.createCollection(
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        original_url: 'https://example.com/sync',
+        intent: '离线冲突处理可以参考',
+        document: EMPTY_DOCUMENT,
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'flow-seed-collection-1',
+    );
+    await adapter.logout();
+
+    const user = userEvent.setup();
+    await loginAsAdmin(user, adapter);
+
+    await screen.findByText('example.com');
     await user.click(screen.getByRole('link', { name: '查看全文' }));
     await screen.findByRole('button', { name: '编辑' });
-    const listRes = await adapter.listCollections({ scope: 'active' });
-    const savedColId = listRes.items[0].id;
 
     await user.click(screen.getByRole('button', { name: '编辑' }));
     await user.type(screen.getByLabelText('用途说明'), '补充本地草稿');
 
-    adapter.simulateExternalCollectionEdit(savedColId, '来自另一设备的更新段落');
+    adapter.simulateExternalCollectionEdit(created.id, '来自另一设备的更新段落');
 
     await user.click(screen.getByRole('button', { name: '保存修改' }));
     await screen.findByText(/检测到内容版本冲突/);
@@ -117,7 +144,6 @@ describe('Spark Web key flows', () => {
     await user.click(screen.getByRole('button', { name: /基于服务器 v2 覆盖提交/ }));
     await screen.findByText(/补充本地草稿/);
 
-    // 7. Search and find highlighted result
     await user.click(getSidebar().getByRole('link', { name: '全部收藏' }));
     await user.type(screen.getByLabelText('搜索收藏'), '冲突处理');
     await waitFor(
@@ -237,25 +263,26 @@ describe('Spark Web key flows', () => {
     fireEvent.compositionEnd(textbox);
   });
 
-  it('supports unclassified list, trash undo, and quick header search with Cmd+K, Escape & IME guard', async () => {
+  it('supports quick header search with Cmd+K, Escape & IME guard', async () => {
     const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.createCollection(
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        original_url: 'https://note.example.com/1',
+        intent: '',
+        document: EMPTY_DOCUMENT,
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'flow-seed-search-1',
+    );
+    await adapter.logout();
+
     const user = userEvent.setup();
-    renderWithAdapter(['/login'], adapter);
-
-    await user.type(await screen.findByLabelText('邮箱'), 'admin@spark.local');
-    await user.type(screen.getByLabelText('密码'), 'SparkAdmin1234!');
-    await user.click(screen.getByRole('button', { name: '登录' }));
-    await screen.findByRole('heading', { name: '收件箱' });
-
-    // Save note via composer & verify it returns to resting after save click
-    await user.click(screen.getByRole('button', { name: '更多' }));
-    await user.click(screen.getByRole('menuitem', { name: '附加网址' }));
-    await user.type(screen.getByLabelText('附加网址'), 'https://note.example.com/1');
-    await user.click(screen.getByRole('button', { name: '保存收藏' }));
+    await loginAsAdmin(user, adapter);
     await screen.findByText('note.example.com');
-    await waitFor(() => {
-      expect(screen.getByRole('region', { name: '快速收集' })).not.toHaveClass('sp-composer--active');
-    });
 
     // Global Cmd/Ctrl+K focuses header search and Escape restores previous focus
     const unreadTab = screen.getByRole('button', { name: '未读' });
@@ -276,8 +303,28 @@ describe('Spark Web key flows', () => {
     await user.type(searchInput, 'note.example.com{Enter}');
     await screen.findByRole('heading', { name: '全部收藏' });
     await screen.findByText(/搜索「note\.example\.com」结果/);
+  });
 
-    // Unclassified + Trash undo
+  it('lists unclassified notes and restores from trash undo', async () => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.createCollection(
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        original_url: 'https://note.example.com/1',
+        intent: '',
+        document: EMPTY_DOCUMENT,
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'flow-seed-trash-1',
+    );
+    await adapter.logout();
+
+    const user = userEvent.setup();
+    await loginAsAdmin(user, adapter);
+
     await user.click(getSidebar().getByRole('link', { name: '待归类' }));
     await screen.findByText('note.example.com');
 
