@@ -20,7 +20,7 @@
 
 ### 1. 首次准备生产目录与环境文件
 
-升级入口面向已有 v3 数据库、API 和静态站点的部署。操作员先在干净的已评审主干检出中执行 `git fetch origin main`，再运行本目录的脚本。
+升级入口面向已有 v3 数据库、API 和静态站点的部署。整版完成开发、自测、联调和人工审查，功能与发布 PR 均合入主干后，由维护者推送指向发布提交的附注标签。生产入口会向 origin 查询标签所指提交，并在连接目标服务器前与指定 SHA 核对。操作员先在干净的已评审主干检出中执行 `git fetch origin main`，再运行本目录的脚本。
 
 在目标服务器准备 `/opt/spark/.env`（权限 `0600`，保留在仓库之外），至少设置：
 
@@ -49,7 +49,8 @@
 
 ```sh
 ./deploy/release-prod.sh deploy \
-  --commit <40位已审核commit-SHA> \
+  --tag v0.2.0 \
+  --commit <40位发布提交SHA> \
   --host ubuntu@<server-ip> \
   --ssh-key ~/.ssh/id_ed25519 \
   --deploy-dir /opt/spark \

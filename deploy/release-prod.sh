@@ -18,6 +18,7 @@ Commands:
 
 Options:
   --commit <sha40>         Immutable 40-char Git commit SHA on trusted trunk (deploy)
+  --tag <vX.Y.Z>           Published annotated release tag for --commit (production deploy)
   --trusted-ref <ref>      Trusted trunk ref for ancestry check (default: origin/main)
   --mode <ssh|local>       Target execution mode (default: ssh)
   --host <user@host>       SSH target host (required for --mode ssh)
@@ -62,6 +63,7 @@ case "$CMD" in
 esac
 
 COMMIT=""
+RELEASE_TAG=""
 TRUSTED_REF="origin/main"
 MODE="ssh"
 HOST=""
@@ -84,6 +86,7 @@ DRY_RUN="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --commit) COMMIT="${2:-}"; shift 2 ;;
+    --tag) RELEASE_TAG="${2:-}"; shift 2 ;;
     --trusted-ref) TRUSTED_REF="${2:-}"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
@@ -272,6 +275,12 @@ if [[ "$CMD" == "deploy" ]]; then
   git -C "$REPO_ROOT" cat-file -e "${COMMIT}^{commit}" 2>/dev/null || die "commit not found locally: $COMMIT (run git fetch first)"
   git -C "$REPO_ROOT" rev-parse --verify "${TRUSTED_REF}^{commit}" >/dev/null 2>&1 || die "trusted trunk ref not found: $TRUSTED_REF"
   git -C "$REPO_ROOT" merge-base --is-ancestor "$COMMIT" "$TRUSTED_REF" || die "commit $COMMIT is not an ancestor of trusted trunk $TRUSTED_REF"
+  if [[ "$MODE" == "ssh" || "$PROJECT" == "spark-prod" || -n "$RELEASE_TAG" ]]; then
+    [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "production deploy requires a published --tag vX.Y.Z"
+    # The peeled ref exists only for annotated tags. Compare its target before contacting the host.
+    tag_target="$(git -C "$REPO_ROOT" ls-remote --exit-code origin "refs/tags/${RELEASE_TAG}^{}")" || die "published annotated release tag missing or origin unavailable"
+    [[ "${tag_target%%$'\t'*}" == "$COMMIT" ]] || die "published tag $RELEASE_TAG does not identify --commit"
+  fi
   if [[ "$SKIP_WEB" != "true" ]]; then
     require_cmd npm
     require_cmd node
