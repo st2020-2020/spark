@@ -157,6 +157,24 @@ export interface paths {
         patch: operations["updatePreferences"];
         trace?: never;
     };
+    "/me/image-analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取图片理解授权 */
+        get: operations["getImageAnalysisPreferences"];
+        /** 设置图片理解授权 */
+        put: operations["setImageAnalysisPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/usage": {
         parameters: {
             query?: never;
@@ -428,7 +446,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** 读取本人收藏的永久删除状态 */
+        get: operations["getCollectionPurgeStatus"];
         put?: never;
         /** 安排永久删除 */
         post: operations["purgeCollection"];
@@ -574,7 +593,8 @@ export interface paths {
         /** 读取当前版本提取材料 */
         get: operations["getExtractions"];
         put?: never;
-        post?: never;
+        /** 重新获取当前主要网址的网页信息 */
+        post: operations["refreshUrlExtraction"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1190,14 +1210,45 @@ export interface components {
             resource_version: number;
             /** @description 当前有效且待确认的项目建议。 */
             has_suggestion?: boolean;
+            /**
+             * Format: uri
+             * @description 收藏的主要网址。
+             */
+            original_url?: string;
+            /**
+             * Format: uuid
+             * @description 按 position 升序的首张有效图片附件 ID。
+             */
+            cover_attachment_id?: string;
+            /** @description 当前有效图片附件数量。 */
+            attachment_count?: number;
+            /** @description 当前内容版本与主要网址对应的网页信息提取预览。 */
+            link_preview?: components["schemas"]["LinkPreview"];
+        };
+        LinkPreview: {
+            /** @enum {string} */
+            status: "queued" | "running" | "succeeded" | "partial" | "failed" | "skipped" | "blocked";
+            source_title?: string;
+            site_name?: string;
+            summary?: string;
         };
         SearchHit: {
             collection: components["schemas"]["CollectionSummary"];
             snippets: {
                 /** @enum {string} */
-                field: "title" | "text" | "intent" | "url" | "extraction" | "tag";
+                field: "title" | "text" | "intent" | "url" | "extraction" | "image_text" | "image_description" | "tag";
                 text: string;
             }[];
+        };
+        ImageAnalysisPreferences: {
+            enabled: boolean;
+            available: boolean;
+            required_consent_version: string;
+        };
+        ImageAnalysisPreferencesUpdate: {
+            /** @description 允许将此后确认并绑定的图片发送给第三方 DeepSeek，识别图中文字与 AI 画面描述。 */
+            enabled: boolean;
+            consent_version?: string;
         };
         Extraction: {
             /** Format: uuid */
@@ -1209,7 +1260,15 @@ export interface components {
             /** @enum {string} */
             status: "queued" | "running" | "succeeded" | "partial" | "failed" | "skipped" | "blocked";
             text?: string;
+            /** @description AI 画面描述，仅图片提取提供。 */
+            image_description?: string;
+            /** @description 图片理解输出达到上限，识别结果可能不完整。 */
+            truncated?: boolean;
             source_title?: string;
+            /** @description 网页来源的站点名，仅网页提取提供。 */
+            site_name?: string;
+            /** @description 用于链接预览的网页摘要，仅网页提取提供。 */
+            summary?: string;
             error_code?: string;
             /** Format: date-time */
             updated_at: string;
@@ -1701,6 +1760,70 @@ export interface operations {
             };
         };
     };
+    getImageAnalysisPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageAnalysisPreferences"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setImageAnalysisPreferences: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageAnalysisPreferencesUpdate"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageAnalysisPreferences"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getUsage: {
         parameters: {
             query?: never;
@@ -2113,6 +2236,17 @@ export interface operations {
                     "application/json": components["schemas"]["UploadGrant"];
                 };
             };
+            /** @description 账号的新上传数量、声明字节或签名次数已达上限（rate_limited） */
+            429: {
+                headers: {
+                    /** @description 当前限制窗口的剩余等待秒数 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
             default: {
                 headers: {
@@ -2206,6 +2340,17 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DownloadGrant"];
+                };
+            };
+            /** @description 账号的下载签名次数已达上限（rate_limited） */
+            429: {
+                headers: {
+                    /** @description 当前限制窗口的剩余等待秒数 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
@@ -2425,6 +2570,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Collection"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCollectionPurgeStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已登记的永久删除操作 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Accepted"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
@@ -2793,6 +2969,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ExtractionList"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    refreshUrlExtraction: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务已持久化或已在处理中 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Extraction"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

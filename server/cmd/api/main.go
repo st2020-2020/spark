@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"spark/server/db"
+	"spark/server/internal/asset"
 	"spark/server/internal/backend"
 	"syscall"
 	"time"
@@ -25,6 +26,10 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	storage, err := asset.Load(cfg.Env)
+	if err != nil {
+		return err
+	}
 	connect, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	pool, err := backend.OpenPool(connect, cfg.DatabaseURL)
@@ -38,6 +43,9 @@ func run() error {
 	app, err := backend.New(connect, cfg, pool)
 	if err != nil {
 		return err
+	}
+	if storage != nil {
+		app.Assets = storage
 	}
 	eventsDone := make(chan struct{})
 	go func() { defer close(eventsDone); app.RunOrganizationEvents(ctx) }()

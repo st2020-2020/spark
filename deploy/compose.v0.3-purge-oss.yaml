@@ -1,0 +1,19 @@
+# Add to the purge overlay when saved collections have OSS objects.
+services:
+  purge-worker:
+    environment:
+      SPARK_OSS_ENABLED: ${SPARK_OSS_ENABLED:-false}
+      SPARK_OSS_CONFIG_FILE: /run/spark-oss/config.json
+    volumes:
+      - type: bind
+        source: ${SPARK_OSS_CONFIG_HOST_PATH:-/etc/spark/oss/config.json}
+        target: /run/spark-oss/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPARK_OSS_CREDENTIALS_HOST_PATH:-/etc/spark/oss/credentials.json}
+        target: /run/secrets/spark-oss-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false

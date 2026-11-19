@@ -21,6 +21,8 @@ export type RegisterRequest = components['schemas']['RegisterRequest'];
 export type LoginRequest = components['schemas']['LoginRequest'];
 export type PasswordReset = components['schemas']['PasswordReset'];
 export type Preferences = components['schemas']['Preferences'];
+export type ImageAnalysisPreferences = components['schemas']['ImageAnalysisPreferences'];
+export type ImageAnalysisPreferencesUpdate = components['schemas']['ImageAnalysisPreferencesUpdate'];
 
 export type ProjectCreate = components['schemas']['ProjectCreate'];
 export type ProjectUpdate = components['schemas']['ProjectUpdate'];
@@ -57,6 +59,7 @@ export type SearchHit = components['schemas']['SearchHit'];
 export type SearchPage = components['schemas']['SearchPage'];
 export type Extraction = components['schemas']['Extraction'];
 export type ExtractionList = components['schemas']['ExtractionList'];
+export type LinkPreview = components['schemas']['LinkPreview'];
 export type Revision = components['schemas']['Revision'];
 export type RevisionPage = components['schemas']['RevisionPage'];
 export type Accepted = components['schemas']['Accepted'];

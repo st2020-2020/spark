@@ -1,0 +1,37 @@
+# Optional permanent deletion capability. The ledger must be outside the
+# database backup's failure domain and owned by the worker UID with mode 0700.
+services:
+  api:
+    environment:
+      SPARK_PURGE_ENABLED: ${SPARK_PURGE_ENABLED:-false}
+
+  purge-worker:
+    image: ${SPARK_API_IMAGE:-spark-api:prod}
+    build:
+      context: ../server
+      target: runtime
+    entrypoint: [/spark-worker, purge]
+    profiles: [purge]
+    restart: unless-stopped
+    environment:
+      SPARK_ENV: ${SPARK_ENV:-production}
+      DATABASE_URL: ${SPARK_PURGE_WORKER_DATABASE_URL:-postgres://spark:${SPARK_DB_PASSWORD:-${SPARK_DEV_DB_PASSWORD:-missing}}@postgres:5432/${SPARK_DB_NAME:-spark}?sslmode=disable}
+      SPARK_PURGE_ENABLED: ${SPARK_PURGE_ENABLED:-false}
+      SPARK_DELETION_LEDGER_DIR: /run/spark-deletion-ledger
+    volumes:
+      - type: bind
+        source: ${SPARK_DELETION_LEDGER_HOST_PATH:-/var/lib/spark-deletion-ledger}
+        target: /run/spark-deletion-ledger
+        bind:
+          create_host_path: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /spark-worker, healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    stop_grace_period: 30s
+    mem_limit: 256m

@@ -14,9 +14,12 @@ import type {
   DownloadGrant,
   ExportDownloadResult,
   ExportFormat,
+  Extraction,
   ExtractionList,
   FailureList,
   Health,
+  ImageAnalysisPreferences,
+  ImageAnalysisPreferencesUpdate,
   InviteBatch,
   InviteBatchPage,
   InviteCode,
@@ -83,6 +86,10 @@ export interface SparkApi {
   logout(): Promise<void>;
   currentSession(): Promise<SessionResult>;
   updatePreferences(body: Preferences): Promise<User>;
+  getImageAnalysisPreferences(): Promise<ImageAnalysisPreferences>;
+  setImageAnalysisPreferences(
+    body: ImageAnalysisPreferencesUpdate,
+  ): Promise<ImageAnalysisPreferences>;
   getUsage(): Promise<Usage>;
   exportMyData(format: ExportFormat, signal?: AbortSignal): Promise<ExportDownloadResult>;
   listSessions(): Promise<SessionList>;
@@ -103,6 +110,7 @@ export interface SparkApi {
     file: File,
     onProgress?: (percent: number) => void,
     signal?: AbortSignal,
+    timeoutMs?: number,
   ): Promise<void>;
   completeUpload(id: string): Promise<Upload>;
   getUpload(id: string): Promise<Upload>;
@@ -115,6 +123,7 @@ export interface SparkApi {
   trashCollection(id: string, body: ResourceCondition): Promise<Collection>;
   restoreCollection(id: string, body: ResourceCondition): Promise<Collection>;
   purgeCollection(id: string, body: ResourceCondition, idempotencyKey: string): Promise<Accepted>;
+  getCollectionPurgeStatus(id: string): Promise<Accepted>;
   setReadState(id: string, body: ReadUpdate): Promise<Collection>;
   setAIExclusion(id: string, body: AIExclusion): Promise<Collection>;
   updateProjectDecisions(
@@ -127,6 +136,7 @@ export interface SparkApi {
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
   getExtractions(id: string): Promise<ExtractionList>;
+  refreshUrlExtraction(id: string, idempotencyKey: string): Promise<Extraction>;
   listRevisions(id: string, query?: { cursor?: string; limit?: number }): Promise<RevisionPage>;
   searchCollections(query: SearchCollectionsQuery, signal?: AbortSignal): Promise<SearchPage>;
 
@@ -149,6 +159,7 @@ export interface SparkApi {
 }
 
 const API_BASE = '/api/v1';
+export const UPLOAD_TRANSFER_TIMEOUT_MS = 60_000;
 
 function buildQuery(params?: Record<string, string | number | boolean | undefined>): string {
   if (!params) return '';
@@ -362,6 +373,10 @@ export function createRealApiClient(): SparkApi {
 
     updatePreferences: (body) =>
       request<User>('PATCH', '/me/preferences', { body, requiresCsrf: true }),
+    getImageAnalysisPreferences: () =>
+      request<ImageAnalysisPreferences>('GET', '/me/image-analysis'),
+    setImageAnalysisPreferences: (body) =>
+      request<ImageAnalysisPreferences>('PUT', '/me/image-analysis', { body, requiresCsrf: true }),
     getUsage: () => request<Usage>('GET', '/me/usage'),
     exportMyData: async (format, signal) => {
       const response = await fetchResponse('GET', `/me/export${buildQuery({ format })}`, { signal, requiresCsrf: true });
@@ -403,19 +418,26 @@ export function createRealApiClient(): SparkApi {
         idempotencyKey,
       }),
 
-    uploadFileBytes: (grant, file, onProgress, signal) =>
+    uploadFileBytes: (grant, file, onProgress, signal, timeoutMs = UPLOAD_TRANSFER_TIMEOUT_MS) =>
       new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(new DOMException('Aborted', 'AbortError'));
+          return;
+        }
         const xhr = new XMLHttpRequest();
         xhr.open(grant.method, grant.url, true);
+        xhr.timeout = timeoutMs > 0 ? timeoutMs : UPLOAD_TRANSFER_TIMEOUT_MS;
         for (const [k, v] of Object.entries(grant.headers)) {
+          const lower = k.toLowerCase();
+          if (lower === 'content-length' || lower === 'host') continue;
           xhr.setRequestHeader(k, v);
         }
+        const onAbort = () => xhr.abort();
+        const cleanup = () => {
+          signal?.removeEventListener('abort', onAbort);
+        };
         if (signal) {
-          if (signal.aborted) {
-            reject(new DOMException('Aborted', 'AbortError'));
-            return;
-          }
-          signal.addEventListener('abort', () => xhr.abort(), { once: true });
+          signal.addEventListener('abort', onAbort, { once: true });
         }
         xhr.upload.onprogress = (event) => {
           if (event.lengthComputable && onProgress) {
@@ -423,6 +445,7 @@ export function createRealApiClient(): SparkApi {
           }
         };
         xhr.onload = () => {
+          cleanup();
           if (xhr.status >= 200 && xhr.status < 300) {
             onProgress?.(100);
             resolve();
@@ -437,6 +460,7 @@ export function createRealApiClient(): SparkApi {
           }
         };
         xhr.onerror = () => {
+          cleanup();
           reject(
             new ApiError({
               status: 0,
@@ -445,7 +469,18 @@ export function createRealApiClient(): SparkApi {
             }),
           );
         };
+        xhr.ontimeout = () => {
+          cleanup();
+          reject(
+            new ApiError({
+              status: 0,
+              code: 'upload_timeout',
+              message: '图片上传超时，请检查网络后重试。',
+            }),
+          );
+        };
         xhr.onabort = () => {
+          cleanup();
           reject(new DOMException('Aborted', 'AbortError'));
         };
         xhr.send(file);
@@ -489,6 +524,8 @@ export function createRealApiClient(): SparkApi {
         requiresCsrf: true,
         idempotencyKey,
       }),
+    getCollectionPurgeStatus: (id) =>
+      request<Accepted>('GET', `/collections/${encodeURIComponent(id)}/purge`),
     setReadState: (id, body) =>
       request<Collection>('PUT', `/collections/${encodeURIComponent(id)}/read`, {
         body,
@@ -524,6 +561,11 @@ export function createRealApiClient(): SparkApi {
       }),
     getExtractions: (id) =>
       request<ExtractionList>('GET', `/collections/${encodeURIComponent(id)}/extractions`),
+    refreshUrlExtraction: (id, idempotencyKey) =>
+      request<Extraction>('POST', `/collections/${encodeURIComponent(id)}/extractions`, {
+        requiresCsrf: true,
+        idempotencyKey,
+      }),
     listRevisions: (id, query) =>
       request<RevisionPage>(
         'GET',

@@ -1,10 +1,13 @@
 import { ApiError } from '../api/errors';
 import type { OrganizationEventsHandlers, SparkApi } from '../api/client';
 import type {
+  Accepted,
+  Attachment,
   Collection,
   CollectionCreate,
   CollectionSummary,
   Extraction,
+  ImageAnalysisPreferences,
   InviteBatch,
   InviteCode,
   Organization,
@@ -29,6 +32,8 @@ import { generateUuid } from '../lib/idempotency';
 
 interface StoredUser extends User {
   password: string;
+  image_analysis_enabled?: boolean;
+  image_consent_version?: string;
 }
 
 interface StoredSession extends Session {
@@ -47,6 +52,44 @@ export type MockOrganizationMode =
   | 'fail_then_succeed'
   | 'quota_exceeded'
   | 'integration_not_configured';
+
+export interface MockUploadBehavior {
+  unconfigured?: boolean;
+  failPutRemaining?: number;
+  completeStatus?:
+    | 'ready'
+    | 'rejected'
+    | 'expired'
+    | 'verifying_then_ready'
+    | 'verifying_then_rejected';
+  expireDownloadOnce?: boolean;
+}
+
+export interface MockUrlExtractionBehavior {
+  unconfigured?: boolean;
+  status?: Extraction['status'];
+  sourceTitle?: string;
+  siteName?: string;
+  summary?: string;
+  text?: string;
+}
+
+export interface MockPurgeBehavior {
+  unconfigured?: boolean;
+  initialStatus?: Accepted['status'];
+  conflictOnce?: boolean;
+  failOnce?: boolean;
+}
+
+export interface MockImageAnalysisBehavior {
+  available?: boolean;
+  status?: Extraction['status'];
+  text?: string;
+  imageDescription?: string;
+  truncated?: boolean;
+  errorCode?: string;
+  quotaExceeded?: boolean;
+}
 
 interface StoredCollection extends Collection {
   user_id: string;
@@ -77,6 +120,12 @@ export interface TestAdapter extends SparkApi {
   simulateExternalCollectionEdit(collectionId: string, textAppend: string): void;
   setMockOrganizationMode(mode: MockOrganizationMode): void;
   setMockTrialEligibility(opts: { ai_trial_eligible?: boolean; ai_platform_enabled?: boolean }): void;
+  setMockUploadBehavior(behavior: MockUploadBehavior): void;
+  setMockUrlExtractionBehavior(behavior: MockUrlExtractionBehavior): void;
+  setMockCollectionExtractions(collectionId: string, items: Extraction[]): void;
+  setMockPurgeBehavior(behavior: MockPurgeBehavior): void;
+  setMockPurgeStatus(collectionId: string, status: Accepted['status']): void;
+  setMockImageAnalysisBehavior(behavior: MockImageAnalysisBehavior): void;
   emitMockOrganizationReady(): void;
   emitMockOrganizationEvent(event: OrganizationEvent): void;
   emitMockOrganizationError(closed?: boolean): void;
@@ -111,6 +160,8 @@ export function createTestAdapter(): TestAdapter {
   let uploads: Map<string, StoredUpload> = new Map();
   let attachments: Map<string, StoredAttachmentMeta> = new Map();
   let collections: StoredCollection[] = [];
+  let purges: Map<string, { user_id: string; operation_id: string; status: Accepted['status'] }> =
+    new Map();
   let idempotencyStore: Map<string, { digest: string; result: unknown }> = new Map();
   let projectUndoStore: Map<
     string,
@@ -130,6 +181,10 @@ export function createTestAdapter(): TestAdapter {
   let mockOrganizationMode: MockOrganizationMode = 'succeed';
   let mockAiTrialEligible = true;
   let mockAiPlatformEnabled = true;
+  let mockUploadBehavior: MockUploadBehavior = {};
+  let mockUrlExtractionBehavior: MockUrlExtractionBehavior = {};
+  let mockPurgeBehavior: MockPurgeBehavior = {};
+  let mockImageAnalysisBehavior: MockImageAnalysisBehavior = {};
   const orgSubscribers = new Set<{ userId: string; handlers: OrganizationEventsHandlers }>();
   const pendingOrgTimers = new Map<string, number>();
 
@@ -208,11 +263,16 @@ export function createTestAdapter(): TestAdapter {
     uploads = new Map();
     attachments = new Map();
     collections = [];
+    purges = new Map();
     idempotencyStore = new Map();
     projectUndoStore = new Map();
     mockOrganizationMode = 'succeed';
     mockAiTrialEligible = true;
     mockAiPlatformEnabled = true;
+    mockUploadBehavior = {};
+    mockUrlExtractionBehavior = {};
+    mockPurgeBehavior = {};
+    mockImageAnalysisBehavior = {};
     clearPendingOrgTimers();
     orgSubscribers.clear();
   }
@@ -312,7 +372,67 @@ export function createTestAdapter(): TestAdapter {
     });
   }
 
+  function buildImageExtractions(
+    targetAttachments: Attachment[],
+    contentVersion: number,
+    user: StoredUser,
+    aiExcluded: boolean,
+  ): Extraction[] {
+    const available = mockImageAnalysisBehavior.available ?? true;
+    if (!available || !user.image_analysis_enabled || aiExcluded || targetAttachments.length === 0) {
+      return [];
+    }
+    const now = new Date().toISOString();
+    const isQuotaPaused = Boolean(
+      mockImageAnalysisBehavior.quotaExceeded || budgetConfig.user_daily_units <= 0,
+    );
+    return targetAttachments.map((att) => {
+      if (isQuotaPaused) {
+        return {
+          id: generateUuid(),
+          source_kind: 'image',
+          source_id: att.id,
+          content_version: contentVersion,
+          status: 'blocked',
+          error_code: 'quota_exceeded',
+          updated_at: now,
+        };
+      }
+      const status = mockImageAnalysisBehavior.status ?? 'succeeded';
+      const includeOutput = status === 'succeeded' || status === 'partial';
+      return {
+        id: generateUuid(),
+        source_kind: 'image',
+        source_id: att.id,
+        content_version: contentVersion,
+        status,
+        text: includeOutput
+          ? (mockImageAnalysisBehavior.text ?? 'Mock 图中文字：Spark Receipt 2026')
+          : undefined,
+        image_description: includeOutput
+          ? (mockImageAnalysisBehavior.imageDescription ?? 'Mock AI 画面描述：包含笔记摘要的浅色卡片截图')
+          : undefined,
+        truncated:
+          mockImageAnalysisBehavior.truncated ?? (status === 'partial' ? true : undefined),
+        error_code: mockImageAnalysisBehavior.errorCode,
+        updated_at: now,
+      };
+    });
+  }
+
+  function matchCurrentUrlExtraction(c: StoredCollection): Extraction | undefined {
+    if (c.deleted_at || !c.original_url) return undefined;
+    return c.extractions.find(
+      (ext) =>
+        ext.source_kind === 'url' &&
+        ext.source_id === c.original_url &&
+        ext.content_version === c.content_version,
+    );
+  }
+
   function toSummary(c: StoredCollection): CollectionSummary {
+    const sortedAttachments = [...c.attachments].sort((a, b) => a.position - b.position);
+    const matchedUrl = matchCurrentUrlExtraction(c);
     return {
       id: c.id,
       display_title: c.display_title,
@@ -322,6 +442,17 @@ export function createTestAdapter(): TestAdapter {
       tags: structuredClone(c.tags),
       organization_status: c.organization.status,
       has_suggestion: collectionHasActiveSuggestion(c),
+      original_url: c.original_url || undefined,
+      cover_attachment_id: sortedAttachments[0]?.id,
+      attachment_count: sortedAttachments.length,
+      link_preview: matchedUrl
+        ? {
+            status: matchedUrl.status,
+            source_title: matchedUrl.source_title,
+            site_name: matchedUrl.site_name,
+            summary: matchedUrl.summary,
+          }
+        : undefined,
       read_at: c.read_at,
       created_at: c.created_at,
       updated_at: c.updated_at,
@@ -666,6 +797,34 @@ export function createTestAdapter(): TestAdapter {
       if (opts.ai_platform_enabled !== undefined) mockAiPlatformEnabled = opts.ai_platform_enabled;
     },
 
+    setMockUploadBehavior(behavior: MockUploadBehavior) {
+      mockUploadBehavior = { ...behavior };
+    },
+
+    setMockUrlExtractionBehavior(behavior: MockUrlExtractionBehavior) {
+      mockUrlExtractionBehavior = { ...behavior };
+    },
+
+    setMockCollectionExtractions(collectionId: string, items: Extraction[]) {
+      const col = collections.find((c) => c.id === collectionId);
+      if (!col) return;
+      col.extractions = structuredClone(items);
+    },
+
+    setMockPurgeBehavior(behavior: MockPurgeBehavior) {
+      mockPurgeBehavior = { ...behavior };
+    },
+
+    setMockPurgeStatus(collectionId: string, status: Accepted['status']) {
+      const existing = purges.get(collectionId);
+      if (!existing) return;
+      existing.status = status;
+    },
+
+    setMockImageAnalysisBehavior(behavior: MockImageAnalysisBehavior) {
+      mockImageAnalysisBehavior = { ...behavior };
+    },
+
 
     emitMockOrganizationReady() {
       const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
@@ -895,6 +1054,45 @@ export function createTestAdapter(): TestAdapter {
       return toPublicUser(user);
     },
 
+    async getImageAnalysisPreferences(): Promise<ImageAnalysisPreferences> {
+      const user = requireUser(false);
+      return {
+        enabled: Boolean(user.image_analysis_enabled),
+        available: mockImageAnalysisBehavior.available ?? true,
+        required_consent_version: 'deepseek-images-v1',
+      };
+    },
+
+    async setImageAnalysisPreferences(body): Promise<ImageAnalysisPreferences> {
+      const user = requireUser(true);
+      const available = mockImageAnalysisBehavior.available ?? true;
+      if (body.enabled) {
+        if (!available) {
+          throw new ApiError({
+            status: 503,
+            code: 'integration_not_configured',
+            message: '当前平台尚未启用图片理解服务。',
+          });
+        }
+        if (body.consent_version !== 'deepseek-images-v1') {
+          throw new ApiError({
+            status: 422,
+            code: 'validation_failed',
+            message: '需要确认最新的 deepseek-images-v1 图片授权版本。',
+          });
+        }
+        user.image_analysis_enabled = true;
+        user.image_consent_version = body.consent_version;
+      } else {
+        user.image_analysis_enabled = false;
+      }
+      return {
+        enabled: Boolean(user.image_analysis_enabled),
+        available,
+        required_consent_version: 'deepseek-images-v1',
+      };
+    },
+
     async getUsage() {
       requireUser(false);
       return {
@@ -903,7 +1101,7 @@ export function createTestAdapter(): TestAdapter {
         limit_units: budgetConfig.user_daily_units,
         reserved_units: 0,
         settled_units: 0,
-        blocked: false,
+        blocked: Boolean(mockImageAnalysisBehavior.quotaExceeded || budgetConfig.user_daily_units <= 0),
       };
     },
 
@@ -1062,18 +1260,48 @@ export function createTestAdapter(): TestAdapter {
 
     async createUpload(body, idempotencyKey) {
       const user = requireUser(true);
-      const id = generateUuid();
+      if (mockUploadBehavior.unconfigured) {
+        throw new ApiError({
+          status: 503,
+          code: 'integration_not_configured',
+          message: '当前环境尚未配置对象存储服务凭证',
+        });
+      }
+      const allowedMimes = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+      if (
+        !body.filename ||
+        !body.filename.trim() ||
+        body.filename.length > 200 ||
+        /[/\\\u0000-\u001F\u007F]/.test(body.filename) ||
+        body.size_bytes <= 0 ||
+        body.size_bytes > 5 * 1024 * 1024 ||
+        !allowedMimes.has(body.mime_type)
+      ) {
+        throw new ApiError({
+          status: 422,
+          code: 'validation_failed',
+          message: '图片文件名、格式或大小不符合要求',
+        });
+      }
+      const replay = checkIdempotency<string>(user.id, 'upload', idempotencyKey, body);
+      const id = replay ?? generateUuid();
       const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
       const key = `mock-upload:${user.id}:${id}:${idempotencyKey}`;
-      uploads.set(id, {
-        id,
-        user_id: user.id,
-        filename: body.filename,
-        status: 'pending',
-        size_bytes: body.size_bytes,
-        mime_type: body.mime_type,
-        expires_at: expiresAt,
-      });
+      if (replay && uploads.get(id)?.status !== 'pending') {
+        throw new ApiError({ status: 409, code: 'upload_not_pending', message: '上传已结束，请重新选择图片。' });
+      }
+      if (!replay) {
+        uploads.set(id, {
+          id,
+          user_id: user.id,
+          filename: body.filename,
+          status: 'pending',
+          size_bytes: body.size_bytes,
+          mime_type: body.mime_type,
+          expires_at: expiresAt,
+        });
+        saveIdempotency(user.id, 'upload', idempotencyKey, body, id);
+      }
       return {
         id,
         method: 'PUT',
@@ -1083,18 +1311,49 @@ export function createTestAdapter(): TestAdapter {
       };
     },
 
-    async uploadFileBytes(grant, file, onProgress) {
+    async uploadFileBytes(grant, file, onProgress, signal) {
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       const item = uploads.get(grant.id);
       if (!item) {
         throw new ApiError({ status: 404, code: 'not_found', message: '上传会话不存在' });
       }
+      if (mockUploadBehavior.failPutRemaining && mockUploadBehavior.failPutRemaining > 0) {
+        mockUploadBehavior.failPutRemaining -= 1;
+        throw new ApiError({
+          status: 502,
+          code: 'upload_failed',
+          message: '图片上传到对象存储失败，请重试',
+        });
+      }
       onProgress?.(40);
-      const dataUrl = await new Promise<string>((resolve) => {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result ?? ''));
-        reader.onerror = () => resolve('');
+        const onAbort = () => {
+          reader.abort();
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
+        if (signal) {
+          signal.addEventListener('abort', onAbort, { once: true });
+        }
+        reader.onload = () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve(String(reader.result ?? ''));
+        };
+        reader.onerror = () => {
+          signal?.removeEventListener('abort', onAbort);
+          resolve('');
+        };
+        reader.onabort = () => {
+          signal?.removeEventListener('abort', onAbort);
+          reject(new DOMException('Aborted', 'AbortError'));
+        };
         reader.readAsDataURL(file);
       });
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
       item.dataUrl = dataUrl;
       onProgress?.(100);
     },
@@ -1105,7 +1364,20 @@ export function createTestAdapter(): TestAdapter {
       if (!item || item.user_id !== user.id) {
         throw new ApiError({ status: 404, code: 'not_found', message: '上传会话不存在' });
       }
-      item.status = 'ready';
+      if (mockUploadBehavior.completeStatus === 'rejected') {
+        item.status = 'rejected';
+        item.error_code = 'invalid_image';
+      } else if (mockUploadBehavior.completeStatus === 'expired') {
+        item.status = 'expired';
+        item.error_code = 'upload_expired';
+      } else if (
+        mockUploadBehavior.completeStatus === 'verifying_then_ready' ||
+        mockUploadBehavior.completeStatus === 'verifying_then_rejected'
+      ) {
+        item.status = 'verifying';
+      } else {
+        item.status = 'ready';
+      }
       const { user_id: _u, filename: _f, dataUrl: _d, ...pub } = item;
       return pub;
     },
@@ -1116,6 +1388,14 @@ export function createTestAdapter(): TestAdapter {
       if (!item || item.user_id !== user.id) {
         throw new ApiError({ status: 404, code: 'not_found', message: '上传会话不存在' });
       }
+      if (item.status === 'verifying') {
+        if (mockUploadBehavior.completeStatus === 'verifying_then_ready') {
+          item.status = 'ready';
+        } else if (mockUploadBehavior.completeStatus === 'verifying_then_rejected') {
+          item.status = 'rejected';
+          item.error_code = 'invalid_image';
+        }
+      }
       const { user_id: _u, filename: _f, dataUrl: _d, ...pub } = item;
       return pub;
     },
@@ -1125,6 +1405,13 @@ export function createTestAdapter(): TestAdapter {
       const att = attachments.get(attachmentId);
       if (!att || att.user_id !== user.id) {
         throw new ApiError({ status: 404, code: 'not_found', message: '附件不存在' });
+      }
+      if (mockUploadBehavior.expireDownloadOnce) {
+        mockUploadBehavior.expireDownloadOnce = false;
+        return {
+          url: 'mock-expired://stale-download',
+          expires_at: new Date(Date.now() - 1000).toISOString(),
+        };
       }
       return {
         url: att.dataUrl,
@@ -1160,6 +1447,13 @@ export function createTestAdapter(): TestAdapter {
           status: 422,
           code: 'validation_failed',
           message: '正文、有效网址或图片附件至少保留一项',
+        });
+      }
+      if (body.upload_ids.length > 9 || new Set(body.upload_ids).size !== body.upload_ids.length) {
+        throw new ApiError({
+          status: 422,
+          code: 'validation_failed',
+          message: '每条收藏最多只能关联 9 张不重复的图片附件',
         });
       }
 
@@ -1252,7 +1546,7 @@ export function createTestAdapter(): TestAdapter {
         ai_excluded: Boolean(body.ai_excluded),
         created_at: now,
         updated_at: now,
-        extractions: [],
+        extractions: buildImageExtractions(boundAttachments, 1, user, Boolean(body.ai_excluded)),
         revisions: [
           {
             content_version: 1,
@@ -1365,11 +1659,50 @@ export function createTestAdapter(): TestAdapter {
       if (body.manual_title !== undefined) {
         col.manual_title = body.manual_title === '' ? undefined : body.manual_title.trim();
       }
+      let nextAttachments = [...col.attachments];
       if (body.attachment_ids !== undefined) {
-        col.attachments = col.attachments.filter((a) => body.attachment_ids?.includes(a.id));
+        const seen = new Set<string>();
+        const reordered: typeof nextAttachments = [];
+        const existingMap = new Map(col.attachments.map((a) => [a.id, a]));
+        for (const aid of body.attachment_ids) {
+          if (seen.has(aid)) {
+            throw new ApiError({
+              status: 422,
+              code: 'validation_failed',
+              message: '附件列表包含重复项',
+            });
+          }
+          const matched = existingMap.get(aid);
+          if (!matched) {
+            throw new ApiError({
+              status: 422,
+              code: 'invalid_attachment',
+              message: '所选已有附件不存在或不属于当前收藏',
+            });
+          }
+          seen.add(aid);
+          reordered.push({ ...matched });
+        }
+        nextAttachments = reordered;
       }
-      if (body.upload_ids && body.upload_ids.length > 0) {
-        for (const uid of body.upload_ids) {
+      const uploadIds = body.upload_ids ?? [];
+      if (new Set(uploadIds).size !== uploadIds.length) {
+        throw new ApiError({
+          status: 422,
+          code: 'validation_failed',
+          message: '新增上传列表中包含重复项',
+        });
+      }
+      if (nextAttachments.length + uploadIds.length > 9) {
+        throw new ApiError({
+          status: 422,
+          code: 'validation_failed',
+          message: '每条收藏最多只能包含 9 张图片附件',
+        });
+      }
+      const newlyBoundAttachments: Attachment[] = [];
+      if (uploadIds.length > 0) {
+        for (const uid of uploadIds) {
           const up = uploads.get(uid);
           if (!up || up.user_id !== user.id || up.status !== 'ready') {
             throw new ApiError({
@@ -1388,15 +1721,30 @@ export function createTestAdapter(): TestAdapter {
             size_bytes: up.size_bytes ?? 1,
             dataUrl: up.dataUrl ?? '',
           });
-          col.attachments.push({
+          const bound: Attachment = {
             id: attId,
             filename: up.filename,
             mime_type: up.mime_type ?? 'image/png',
             size_bytes: up.size_bytes ?? 1,
-            position: col.attachments.length,
-          });
+            position: nextAttachments.length,
+          };
+          nextAttachments.push(bound);
+          newlyBoundAttachments.push(bound);
         }
       }
+      col.attachments = nextAttachments.map((att, idx) => ({ ...att, position: idx }));
+      const activeAttachmentIds = new Set(col.attachments.map((att) => att.id));
+      col.extractions = [
+        ...col.extractions.filter(
+          (ext) => ext.source_kind !== 'image' || activeAttachmentIds.has(ext.source_id),
+        ),
+        ...buildImageExtractions(
+          newlyBoundAttachments,
+          col.content_version + 1,
+          user,
+          col.ai_excluded,
+        ),
+      ];
 
       const plain = derivePlainText(col.document).trim();
       const nextTypes: Array<'text' | 'url' | 'image'> = [];
@@ -1466,23 +1814,73 @@ export function createTestAdapter(): TestAdapter {
 
     async purgeCollection(id, body, idempotencyKey) {
       const user = requireUser(true);
-      const replay = checkIdempotency<{ operation_id: string; status: 'completed' }>(
+      const existingPurge = purges.get(id);
+      if (existingPurge && existingPurge.user_id === user.id) {
+        return { operation_id: existingPurge.operation_id, status: existingPurge.status };
+      }
+      const replay = checkIdempotency<Accepted>(
         user.id,
         'purgeCollection',
         idempotencyKey,
         { id, body },
       );
       if (replay) return replay;
+
+      if (mockPurgeBehavior.unconfigured) {
+        throw new ApiError({
+          status: 503,
+          code: 'integration_not_configured',
+          message: '永久删除暂未开启。',
+        });
+      }
+      if (mockPurgeBehavior.failOnce) {
+        mockPurgeBehavior.failOnce = false;
+        throw new ApiError({
+          status: 503,
+          code: 'service_unavailable',
+          message: '服务暂时不可用，请稍后重试',
+        });
+      }
+
       const idx = collections.findIndex((c) => c.id === id && c.user_id === user.id);
       if (idx === -1) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
-      if (collections[idx].resource_version !== body.base_resource_version) {
+      const col = collections[idx];
+      if (!col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_not_in_trash',
+          message: '请先将收藏移入回收站。',
+        });
+      }
+      if (mockPurgeBehavior.conflictOnce) {
+        mockPurgeBehavior.conflictOnce = false;
+        col.resource_version += 1;
+        throw new ApiError({
+          status: 409,
+          code: 'resource_conflict',
+          message: '资源版本已变更，请刷新后重试',
+        });
+      }
+      if (col.resource_version !== body.base_resource_version) {
         throw new ApiError({ status: 409, code: 'resource_conflict', message: '版本已变更' });
       }
       collections.splice(idx, 1);
       refreshProjectCounts(user.id);
-      const res = { operation_id: generateUuid(), status: 'completed' as const };
+      const status = mockPurgeBehavior.initialStatus ?? 'completed';
+      const operationId = generateUuid();
+      purges.set(id, { user_id: user.id, operation_id: operationId, status });
+      const res: Accepted = { operation_id: operationId, status };
       saveIdempotency(user.id, 'purgeCollection', idempotencyKey, { id, body }, res);
       return res;
+    },
+
+    async getCollectionPurgeStatus(id) {
+      const user = requireUser(false);
+      const existing = purges.get(id);
+      if (!existing || existing.user_id !== user.id) {
+        throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      }
+      return { operation_id: existing.operation_id, status: existing.status };
     },
 
     async setReadState(id, body) {
@@ -1848,7 +2246,81 @@ export function createTestAdapter(): TestAdapter {
       const user = requireUser(false);
       const col = collections.find((c) => c.id === id && c.user_id === user.id);
       if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
-      return { items: col.extractions };
+      if (col.deleted_at) return { items: [] };
+      const activeAttachmentIds = new Set(col.attachments.map((a) => a.id));
+      return {
+        items: structuredClone(
+          col.extractions.filter(
+            (ext) => ext.source_kind !== 'image' || activeAttachmentIds.has(ext.source_id),
+          ),
+        ),
+      };
+    },
+
+    async refreshUrlExtraction(id, idempotencyKey) {
+      const user = requireUser(true);
+      const col = collections.find((c) => c.id === id && c.user_id === user.id);
+      const replay = checkIdempotency<Extraction>(user.id, 'refreshUrlExtraction', idempotencyKey, {
+        id,
+      });
+      if (replay) {
+        return (col && matchCurrentUrlExtraction(col)) ?? replay;
+      }
+
+      if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，请先恢复后再操作',
+        });
+      }
+      if (mockUrlExtractionBehavior.unconfigured) {
+        throw new ApiError({
+          status: 503,
+          code: 'integration_not_configured',
+          message: '当前平台尚未开启网页抓取功能',
+        });
+      }
+      if (!col.original_url) {
+        throw new ApiError({
+          status: 422,
+          code: 'missing_url',
+          message: '当前收藏没有可重新获取的主要网址',
+        });
+      }
+      const existing = matchCurrentUrlExtraction(col);
+      if (existing && (existing.status === 'queued' || existing.status === 'running')) {
+        saveIdempotency(user.id, 'refreshUrlExtraction', idempotencyKey, { id }, existing);
+        return existing;
+      }
+
+      const status = mockUrlExtractionBehavior.status ?? 'queued';
+      const next: Extraction = {
+        id: generateUuid(),
+        content_version: col.content_version,
+        source_kind: 'url',
+        source_id: col.original_url,
+        status,
+        source_title:
+          status === 'succeeded'
+            ? mockUrlExtractionBehavior.sourceTitle ?? '已获取网页标题'
+            : undefined,
+        site_name:
+          status === 'succeeded' ? mockUrlExtractionBehavior.siteName ?? 'Example Site' : undefined,
+        summary:
+          status === 'succeeded'
+            ? mockUrlExtractionBehavior.summary ?? '这是网页正文的简洁摘要内容。'
+            : undefined,
+        text:
+          status === 'succeeded'
+            ? mockUrlExtractionBehavior.text ?? '这是用于搜索的网页正文片段。'
+            : undefined,
+        updated_at: new Date().toISOString(),
+      };
+      col.extractions.unshift(next);
+      saveIdempotency(user.id, 'refreshUrlExtraction', idempotencyKey, { id }, next);
+      return next;
     },
 
     async listRevisions(id) {
@@ -1902,13 +2374,41 @@ export function createTestAdapter(): TestAdapter {
       for (const c of sorted) {
         const plain = derivePlainText(c.document);
         const tagText = c.tags.map((t) => t.path).join(' ');
-        const extText = c.extractions.map((e) => e.text ?? '').join('\n');
-        const fields: Array<{ field: 'title' | 'text' | 'intent' | 'url' | 'extraction' | 'tag'; value: string }> = [
+        const activeAttachmentIds = new Set(c.attachments.map((a) => a.id));
+        const urlExtText = c.extractions
+          .filter((e) => e.source_kind === 'url')
+          .map((e) => e.text ?? '')
+          .join('\n');
+        const activeImageExts = c.extractions.filter(
+          (e) =>
+            e.source_kind === 'image' &&
+            activeAttachmentIds.has(e.source_id) &&
+            (e.status === 'succeeded' || e.status === 'partial'),
+        );
+        const imageText = activeImageExts.map((e) => e.text ?? '').filter(Boolean).join('\n');
+        const imageDesc = activeImageExts
+          .map((e) => e.image_description ?? '')
+          .filter(Boolean)
+          .join('\n');
+        const fields: Array<{
+          field:
+            | 'title'
+            | 'text'
+            | 'intent'
+            | 'url'
+            | 'extraction'
+            | 'image_text'
+            | 'image_description'
+            | 'tag';
+          value: string;
+        }> = [
           { field: 'title', value: c.display_title ?? '' },
           { field: 'text', value: plain },
           { field: 'intent', value: c.intent ?? '' },
           { field: 'url', value: c.original_url ?? '' },
-          { field: 'extraction', value: extText },
+          { field: 'extraction', value: urlExtText },
+          { field: 'image_text', value: imageText },
+          { field: 'image_description', value: imageDesc },
           { field: 'tag', value: tagText },
         ];
         const haystack = fields.map((f) => f.value.toLowerCase()).join('\n');

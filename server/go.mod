@@ -4,6 +4,7 @@ go 1.27.3
 
 require (
 	github.com/alexedwards/argon2id v1.0.0
+	github.com/aliyun/alibabacloud-oss-go-sdk-v2 v1.6.1
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/google/uuid v1.6.0
@@ -11,7 +12,11 @@ require (
 	github.com/oapi-codegen/runtime v1.1.1
 	github.com/riverqueue/river v0.26.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.26.0
+	github.com/riverqueue/river/rivertype v0.26.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	golang.org/x/image v0.48.0
+	golang.org/x/net v0.61.0
+	golang.org/x/text v0.44.0
 )
 
 require (
@@ -50,7 +55,6 @@ require (
 	github.com/quic-go/quic-go v0.54.0 // indirect
 	github.com/riverqueue/river/riverdriver v0.26.0 // indirect
 	github.com/riverqueue/river/rivershared v0.26.0 // indirect
-	github.com/riverqueue/river/rivertype v0.26.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
@@ -62,13 +66,12 @@ require (
 	go.uber.org/goleak v1.3.0 // indirect
 	go.uber.org/mock v0.5.0 // indirect
 	golang.org/x/arch v0.20.0 // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/mod v0.28.0 // indirect
-	golang.org/x/net v0.45.0 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/sys v0.37.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
-	golang.org/x/tools v0.37.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/mod v0.42.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
+	golang.org/x/time v0.5.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
 	google.golang.org/protobuf v1.36.9 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

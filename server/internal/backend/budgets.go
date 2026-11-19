@@ -104,26 +104,15 @@ func reserveBudget(ctx context.Context, tx pgx.Tx, uid, run string, route AIRout
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", "", err
 	}
-	var pLimit, uLimit int64
-	if err = tx.QueryRow(ctx, `SELECT platform_daily_units,user_daily_units FROM ai_budget_config WHERE singleton FOR SHARE`).Scan(&pLimit, &uLimit); err != nil {
-		return "", "", err
-	}
-	day := budgetDay()
-	if err = lockBudgetRows(ctx, tx, uid, day); err != nil {
-		return "", "", err
-	}
 	upper, err := tokenCost(route, inputUpper, int64(route.MaxOutputTokens))
 	if err != nil {
 		return "", "", err
 	}
-	var pUsed, uUsed int64
-	if err = tx.QueryRow(ctx, `SELECT reserved_units+settled_units FROM daily_budgets WHERE scope='platform' AND owner_key='platform' AND budget_day=$1::date`, day).Scan(&pUsed); err != nil {
+	day, err := budgetDayWithCapacity(ctx, tx, uid, upper)
+	if err != nil {
 		return "", "", err
 	}
-	if err = tx.QueryRow(ctx, `SELECT reserved_units+settled_units FROM daily_budgets WHERE scope='user' AND owner_key=$1 AND budget_day=$2::date`, uid, day).Scan(&uUsed); err != nil {
-		return "", "", err
-	}
-	if pLimit == 0 || uLimit == 0 || upper > pLimit-pUsed || upper > uLimit-uUsed {
+	if day == "" {
 		return "", "quota_exceeded", nil
 	}
 	var attempt int
@@ -134,18 +123,48 @@ func reserveBudget(ctx context.Context, tx pgx.Tx, uid, run string, route AIRout
 	if _, err = tx.Exec(ctx, `INSERT INTO usage_reservations(id,user_id,run_id,attempt_no,budget_day,route,config_version,model,reserved_units,state) VALUES($1,$2,$3,$4,$5::date,$6,$7,$8,$9,'reserved')`, id, uid, run, attempt, day, route.Name, cfg.Version, route.Model, upper); err != nil {
 		return "", "", err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE daily_budgets SET reserved_units=reserved_units+$3 WHERE budget_day=$2::date AND ((scope='platform' AND owner_key='platform') OR (scope='user' AND owner_key=$1))`, uid, day, upper); err != nil {
-		return "", "", err
-	}
-	return id, "", nil
+	return id, "", addBudgetReservation(ctx, tx, uid, day, upper)
 }
-func settleBudget(ctx context.Context, tx pgx.Tx, uid, id string, route AIRoute, out ModelOutput) error {
+
+// Both types of jobs lock platform before account and use the same daily
+// counters and limits. Empty day means a reservation would exceed a limit.
+func budgetDayWithCapacity(ctx context.Context, tx pgx.Tx, uid string, upper int64) (string, error) {
+	var platformLimit, userLimit int64
+	if err := tx.QueryRow(ctx, `SELECT platform_daily_units,user_daily_units FROM ai_budget_config WHERE singleton FOR SHARE`).Scan(&platformLimit, &userLimit); err != nil {
+		return "", err
+	}
+	if platformLimit == 0 || userLimit == 0 || upper > platformLimit || upper > userLimit {
+		return "", nil
+	}
+	day := budgetDay()
+	if err := lockBudgetRows(ctx, tx, uid, day); err != nil {
+		return "", err
+	}
+	var platformUsed, userUsed int64
+	if err := tx.QueryRow(ctx, `SELECT reserved_units+settled_units FROM daily_budgets WHERE scope='platform' AND owner_key='platform' AND budget_day=$1::date`, day).Scan(&platformUsed); err != nil {
+		return "", err
+	}
+	if err := tx.QueryRow(ctx, `SELECT reserved_units+settled_units FROM daily_budgets WHERE scope='user' AND owner_key=$1 AND budget_day=$2::date`, uid, day).Scan(&userUsed); err != nil {
+		return "", err
+	}
+	if upper > platformLimit-platformUsed || upper > userLimit-userUsed {
+		return "", nil
+	}
+	return day, nil
+}
+
+func addBudgetReservation(ctx context.Context, tx pgx.Tx, uid, day string, upper int64) error {
+	_, err := tx.Exec(ctx, `UPDATE daily_budgets SET reserved_units=reserved_units+$3
+		WHERE budget_day=$2::date AND ((scope='platform' AND owner_key='platform') OR (scope='user' AND owner_key=$1))`, uid, day, upper)
+	return err
+}
+func settleBudget(ctx context.Context, tx pgx.Tx, uid, id string, route AIRoute, out ModelOutput, expectedState string) error {
 	var day, state string
 	var reserved int64
 	if err := tx.QueryRow(ctx, `SELECT budget_day::text,reserved_units,state FROM usage_reservations WHERE user_id=$1 AND id=$2`, uid, id).Scan(&day, &reserved, &state); err != nil {
 		return err
 	}
-	if state != "reserved" {
+	if state != expectedState {
 		return nil
 	}
 	if err := lockBudgetRows(ctx, tx, uid, day); err != nil {
@@ -177,6 +196,6 @@ func settleBudget(ctx context.Context, tx pgx.Tx, uid, id string, route AIRoute,
 	if next == "settled" {
 		amount = actual
 	}
-	_, err := tx.Exec(ctx, `UPDATE usage_reservations SET state=$3,actual_units=$4,input_tokens=$5,output_tokens=$6,error_code=NULLIF($7,''),model=COALESCE(NULLIF($8,''),model),updated_at=now() WHERE user_id=$1 AND id=$2 AND state='reserved'`, uid, id, next, amount, input, output, out.ErrorCode, out.Model)
+	_, err := tx.Exec(ctx, `UPDATE usage_reservations SET state=$3,actual_units=$4,input_tokens=$5,output_tokens=$6,error_code=NULLIF($7,''),model=COALESCE(NULLIF($8,''),model),updated_at=now() WHERE user_id=$1 AND id=$2 AND state=$9`, uid, id, next, amount, input, output, out.ErrorCode, out.Model, expectedState)
 	return err
 }

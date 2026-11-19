@@ -367,6 +367,96 @@
         }
       }
     },
+    "/me/image-analysis": {
+      "get": {
+        "operationId": "getImageAnalysisPreferences",
+        "summary": "读取图片理解授权",
+        "tags": [
+          "me"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageAnalysisPreferences"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "setImageAnalysisPreferences",
+        "summary": "设置图片理解授权",
+        "tags": [
+          "me"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageAnalysisPreferences"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageAnalysisPreferencesUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
     "/me/usage": {
       "get": {
         "operationId": "getUsage",
@@ -1046,6 +1136,25 @@
               }
             }
           },
+          "429": {
+            "description": "账号的新上传数量、声明字节或签名次数已达上限（rate_limited）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "当前限制窗口的剩余等待秒数",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
           "default": {
             "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
             "content": {
@@ -1210,6 +1319,25 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DownloadGrant"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "账号的下载签名次数已达上限（rate_limited）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "当前限制窗口的剩余等待秒数",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
                 }
               }
             }
@@ -1748,6 +1876,51 @@
             }
           }
         }
+      },
+      "get": {
+        "operationId": "getCollectionPurgeStatus",
+        "summary": "读取本人收藏的永久删除状态",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "已登记的永久删除操作",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Accepted"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
       }
     },
     "/collections/{id}/read": {
@@ -2293,6 +2466,69 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          }
+        ]
+      },
+      "post": {
+        "operationId": "refreshUrlExtraction",
+        "summary": "重新获取当前主要网址的网页信息",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "任务已持久化或已在处理中",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Extraction"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
             }
           }
         ]
@@ -4631,6 +4867,25 @@
           "has_suggestion": {
             "type": "boolean",
             "description": "当前有效且待确认的项目建议。"
+          },
+          "original_url": {
+            "type": "string",
+            "format": "uri",
+            "description": "收藏的主要网址。"
+          },
+          "cover_attachment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "按 position 升序的首张有效图片附件 ID。"
+          },
+          "attachment_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "当前有效图片附件数量。"
+          },
+          "link_preview": {
+            "$ref": "#/components/schemas/LinkPreview",
+            "description": "当前内容版本与主要网址对应的网页信息提取预览。"
           }
         },
         "required": [
@@ -4644,6 +4899,38 @@
           "created_at",
           "updated_at",
           "resource_version"
+        ]
+      },
+      "LinkPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "partial",
+              "failed",
+              "skipped",
+              "blocked"
+            ]
+          },
+          "source_title": {
+            "type": "string"
+          },
+          "site_name": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 280
+          }
+        },
+        "required": [
+          "status"
         ]
       },
       "SearchHit": {
@@ -4667,6 +4954,8 @@
                     "intent",
                     "url",
                     "extraction",
+                    "image_text",
+                    "image_description",
                     "tag"
                   ]
                 },
@@ -4684,6 +4973,43 @@
         "required": [
           "collection",
           "snippets"
+        ]
+      },
+      "ImageAnalysisPreferences": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "required_consent_version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "enabled",
+          "available",
+          "required_consent_version"
+        ]
+      },
+      "ImageAnalysisPreferencesUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "允许将此后确认并绑定的图片发送给第三方 DeepSeek，识别图中文字与 AI 画面描述。"
+          },
+          "consent_version": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "enabled"
         ]
       },
       "Extraction": {
@@ -4723,8 +5049,26 @@
           "text": {
             "type": "string"
           },
+          "image_description": {
+            "type": "string",
+            "description": "AI 画面描述，仅图片提取提供。"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "图片理解输出达到上限，识别结果可能不完整。"
+          },
           "source_title": {
             "type": "string"
+          },
+          "site_name": {
+            "type": "string",
+            "description": "网页来源的站点名，仅网页提取提供。",
+            "maxLength": 120
+          },
+          "summary": {
+            "type": "string",
+            "description": "用于链接预览的网页摘要，仅网页提取提供。",
+            "maxLength": 280
           },
           "error_code": {
             "type": "string"

@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
 	"spark/server/db"
 	"spark/server/internal/backend"
 )
@@ -34,8 +36,20 @@ func run() error {
 		}
 		return nil
 	}
+	if len(os.Args) == 2 && os.Args[1] == "assets" {
+		return runAssets()
+	}
+	if len(os.Args) == 2 && os.Args[1] == "urls" {
+		return runURLs()
+	}
+	if len(os.Args) == 2 && os.Args[1] == "images" {
+		return runImages()
+	}
+	if len(os.Args) == 2 && os.Args[1] == "purge" {
+		return runPurge()
+	}
 	if len(os.Args) != 1 {
-		return errors.New("usage: spark-worker [healthcheck]")
+		return errors.New("usage: spark-worker [assets|urls|images|purge|healthcheck]")
 	}
 	env := os.Getenv("SPARK_ENV")
 	if env == "" {
@@ -87,6 +101,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	slog.Info("text worker started", "config_version", cfg.Version, "route_count", len(cfg.Routes))
+	return serveWorker(ctx, stop, cancelWorking, pool, worker)
+}
+
+func serveWorker(ctx context.Context, stop, cancelWorking context.CancelFunc, pool *pgxpool.Pool, worker *river.Client[pgx.Tx]) error {
 	health := &http.Server{Addr: "127.0.0.1:9091", ReadHeaderTimeout: 2 * time.Second, WriteTimeout: 3 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		check, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -102,7 +121,6 @@ func run() error {
 	})}
 	done := make(chan error, 1)
 	go func() { done <- health.ListenAndServe() }()
-	slog.Info("text worker started", "config_version", cfg.Version, "route_count", len(cfg.Routes))
 	var serveErr error
 	select {
 	case <-ctx.Done():
@@ -112,11 +130,11 @@ func run() error {
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancelShutdown()
 	_ = health.Shutdown(shutdown)
-	if err = worker.Stop(shutdown); err != nil {
+	if err := worker.Stop(shutdown); err != nil {
 		cancelWorking()
 		forced, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 		defer cancel()
-		if err = worker.StopAndCancel(forced); err != nil {
+		if err := worker.StopAndCancel(forced); err != nil {
 			return errors.New("worker stop exceeded settlement deadline")
 		}
 	}

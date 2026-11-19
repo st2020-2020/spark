@@ -48,7 +48,7 @@ func (s *Server) search(c *gin.Context) (any, error) {
 	items := []any{}
 	for _, row := range rows {
 		snippets := []any{}
-		for _, field := range []struct{ name, text string }{{"title", row.DisplayTitle}, {"text", row.PlainText}, {"intent", row.Intent}, {"url", value(row.OriginalUrl)}} {
+		for _, field := range []struct{ name, text string }{{"title", row.DisplayTitle}, {"text", row.PlainText}, {"intent", row.Intent}, {"url", value(row.OriginalUrl)}, {"extraction", row.URLSearchText}, {"image_text", row.ImageSearchText}, {"image_description", row.ImageDescription}} {
 			if snip, ok := matchingSnippet(field.text, terms); ok {
 				snippets = append(snippets, gin.H{"field": field.name, "text": snip})
 			}
@@ -92,7 +92,7 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 	}
 	switch c.Query("scope") {
 	case "trash":
-		where = append(where, "c.deleted_at IS NOT NULL")
+		where = append(where, "c.deleted_at IS NOT NULL", "c.purge_requested_at IS NULL")
 	case "unclassified":
 		where = append(where, "c.deleted_at IS NULL", "NOT EXISTS (SELECT 1 FROM collection_projects cp WHERE cp.user_id=c.user_id AND cp.collection_id=c.id AND cp.decision IN ('manual','confirmed','auto'))")
 	default:
@@ -101,8 +101,11 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 	if project := c.Query("project_id"); project != "" {
 		add(`EXISTS(SELECT 1 FROM collection_projects cp WHERE cp.user_id=c.user_id AND cp.collection_id=c.id AND cp.project_id=$%d::uuid AND cp.decision IN ('manual','confirmed','auto'))`, project)
 	}
-	if c.Query("tag_id") != "" || c.Query("type") == "image" {
+	if c.Query("tag_id") != "" {
 		where = append(where, "false")
+	}
+	if c.Query("type") == "image" {
+		where = append(where, "EXISTS (SELECT 1 FROM attachments a WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL)")
 	}
 	if c.Query("type") == "text" {
 		where = append(where, "btrim(c.plain_text)<>''")
@@ -125,10 +128,27 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 	}
 
 	title := `COALESCE(NULLIF(c.manual_title,''),(SELECT NULLIF(generated_title,'') FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),NULLIF(c.plain_text,''),c.original_url)`
-	for _, term := range terms {
-		args = append(args, term)
-		n := len(args)
-		where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0)`, title, n, n, n, n))
+	selectCollections := collectionSelect
+	if len(terms) > 0 {
+		selectCollections = `SELECT ` + collectionJSON + `||jsonb_build_object('url_search_text',page.source_text,'image_search_text',images.image_text,'image_search_description',images.description)
+			FROM collections c LEFT JOIN LATERAL (
+			 SELECT concat_ws(E'\n',e.source_title,e.evidence_meta->>'site_name',e.evidence_meta->>'summary',e.text) AS source_text
+			 FROM extractions e
+			 WHERE (e.user_id,e.collection_id,e.content_version,e.source_id)=(c.user_id,c.id,c.content_version,c.original_url)
+			   AND e.source_kind='url' AND e.extractor_version='` + urlExtractorVersion + `' AND e.status='succeeded'
+			   AND c.deleted_at IS NULL
+			) page ON true LEFT JOIN LATERAL (
+			 SELECT string_agg(e.text,E'\n' ORDER BY a.position) AS image_text,
+			        string_agg(e.evidence_meta->>'description',E'\n' ORDER BY a.position) AS description
+			 FROM attachments a JOIN extractions e ON (e.user_id,e.collection_id,e.attachment_id)=(a.user_id,a.collection_id,a.id)
+			 WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL AND c.deleted_at IS NULL
+			   AND e.source_kind='image' AND e.extractor_version='` + imageExtractorVersion + `' AND e.status IN ('succeeded','partial')
+			) images ON true `
+		for _, term := range terms {
+			args = append(args, term)
+			n := len(args)
+			where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0 OR strpos(lower(page.source_text),$%d)>0 OR strpos(lower(images.image_text),$%d)>0 OR strpos(lower(images.description),$%d)>0)`, title, n, n, n, n, n, n, n))
+		}
 	}
 	if filter := c.Query("has_suggestion"); filter != "" {
 		prefix := ""
@@ -147,7 +167,7 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 		where = append(where, fmt.Sprintf("(c.created_at,c.id)<($%d::timestamptz,$%d::uuid)", len(args)-1, len(args)))
 	}
 	args = append(args, limit+1)
-	query := collectionSelect + "WHERE " + strings.Join(where, " AND ") + fmt.Sprintf(" ORDER BY c.created_at DESC,c.id DESC LIMIT $%d", len(args))
+	query := selectCollections + "WHERE " + strings.Join(where, " AND ") + fmt.Sprintf(" ORDER BY c.created_at DESC,c.id DESC LIMIT $%d", len(args))
 	rows, err := q.Query(c.Request.Context(), query, args...)
 	if err != nil {
 		return nil, nil, err

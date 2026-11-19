@@ -39,7 +39,7 @@
 
 OpenAPI 中必填的 Idempotency-Key 使用 16 至 128 字符的随机键。项目决定 PATCH 的键为可选，整理模式会提供。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。
 
-存储的上传授权重放可能已过期，客户端应重新申请新上传会话和新的幂等键。旧临时对象通过清理任务回收。收藏创建携带客户端 UUID，响应丢失可先按 ID 查询。
+存储的上传授权重放可能已过期，客户端应重新申请新上传会话和新的幂等键。旧临时对象通过清理任务回收。收藏创建携带客户端 UUID，响应丢失可先按 ID 查询。 在幂等记录有效期内，已创建且未永久删除的含图收藏可用原键、原请求重放，即使此时图片存储已关闭。关闭图片存储时，新建含图收藏返回 503。
 
 内容修改的 base_content_version 只校验正文编辑版本，后台整理和已读变化不会导致正文编辑冲突。关联修改使用 base_decision_version，项目修改使用 base_version，删除与恢复使用 base_resource_version。版本信息来自最近一次读取，不接受直接覆盖服务端版本。
 
@@ -85,9 +85,29 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 4. 创建或编辑收藏时提交 ready 上传 ID，事务内校验所属用户、单图大小和总图数，再关联为 attached。
 5. GET /attachments/{id}/download 校验所属用户和收藏状态，返回短期 GET URL，建议 5 分钟。过期重新请求。
 
-同一上传最多绑定一次。图片确认任务重试复用最终键，清理和附件绑定竞争时锁定 uploads 行。授权在到期前可以重放，因此最终对象复制完成后再校验，客户端仍持有的临时写授权无法修改最终对象。文件解码还要限制像素与解压资源，阈值在真实图片测试中锁定。
+同一上传最多绑定一次。重复创建请求在上传仍可直传时复用上传 ID，并签发有效期受限的新 PUT URL。确认任务重复提交返回当前状态，同一上传的验证任务只入队一次。图片确认重试复用最终键，清理和附件绑定竞争时锁定 uploads 行。授权在到期前可以重放，因此最终对象复制完成后再校验，客户端仍持有的临时写授权无法修改最终对象。确认读取和解码完整最终对象，图片长边最多 8,192 像素、总像素最多 16,777,216。GIF 额外限制帧数和累计解码像素。
 
 软删除收藏的本人仍可在回收站预览附件。永久删除受限于已签发访问地址的剩余时效和客户端副本，服务器立即停止签发新授权。
+
+每个账号每个 UTC 自然日最多新建 40 次上传，声明大小合计最多 100 MiB。每个 10 分钟 UTC 窗口最多尝试签名 60 次上传授权和 120 次下载授权，两类签名分别计数。校验通过且尚待直传的同键重试补签同一暂存键，只计入签名次数。签名失败保留本次签名计数和已建立的上传记录，客户端可用原键继续。新上传被拒绝时，上传记录和额度扣取一并回滚。超限返回 `429 rate_limited`，`Retry-After` 为当前限制窗口的剩余秒数。已签发下载授权仍按最长 5 分钟到期。
+
+## 永久删除与状态
+
+`POST /collections/{id}/purge` 接受回收站内本人收藏的 `base_resource_version`，需要 CSRF 和幂等键。返回 `202 Accepted` 及稳定的 `operation_id`。登记后收藏立即从回收站、详情和搜索排除，恢复和新附件授权也停止。重放返回原操作当前状态。
+
+`GET /collections/{id}/purge` 仅向所属账号返回已登记操作，响应包括 `operation_id` 和 `status`。 `queued` 表示独立账本待持久化，`running` 表示仍有数据库或对象待清理，`completed` 表示两者清理完成。清理按后台任务重试。开关关闭时新的永久删除请求返回 `503 integration_not_configured`。
+
+## 图片理解
+
+`GET /me/image-analysis` 返回账户的 `enabled`、部署的 `available` 与当前 `required_consent_version`。`PUT /me/image-analysis` 开启时须携带该版本，关闭时发送 `{"enabled":false}`。授权文案须明确说明会将此后新保存的确认图片的视觉副本发送给第三方 DeepSeek，用于识别图中文字并生成 AI 画面描述。副本应用方向并去除 EXIF、GPS 与注释，用户仍可下载原件。图片使用独立授权，并复用收藏的 AI 排除设置。
+
+`GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID，`text` 与 `image_description` 分别是图中文字和 AI 画面描述。服务截断时返回 `partial` 和 `truncated: true`，客户端可提示结果可能不完整。缺少可靠用量时保留待核对额度。账户或平台额度不足时作业为 `blocked`，`error_code=quota_exceeded`，原收藏已保存。结果随有效附件保留，编辑备注和重排复用结果。图片项的 content_version 为首次绑定版本，读取时按附件 ID 对应。移除附件或进入回收站后，提取接口和搜索均省略该结果。搜索片段分别标为 `image_text`、`image_description`。
+
+## 网页信息提取
+
+`GET /collections/{id}/extractions` 返回当前版本的提取材料。网页项用 `source_kind=url`、原始主要网址 `source_id` 和收藏 `content_version` 标识。状态为 `queued` 或 `running` 时可继续查询。成功项的 `source_title`、`site_name`、`summary` 用于预览，`text` 保留用于检索的正文片段。失败、已阻止、已跳过或暂无提取项时可继续显示原网址。
+
+`POST /collections/{id}/extractions` 重新获取当前主要网址，使用 CSRF 和幂等键，返回 `202` 与当前网页提取项。同一操作重放读取当前结果。重新执行已结束的提取会生成新提取 ID，并保留同一收藏内容版本。功能关闭时返回 `503 integration_not_configured`，没有主要网址时返回 `422 missing_url`。
 
 ## 搜索与分页
 

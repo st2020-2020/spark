@@ -31,6 +31,7 @@ import {
   type RawEditorNode,
 } from '../lib/document';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
+import { extractFilesFromDataTransfer } from '../lib/uploads';
 
 interface RichTextEditorProps {
   value: SparkDocument;
@@ -38,6 +39,7 @@ interface RichTextEditorProps {
   onShortcutSubmit?: () => void;
   onFocusChange?: (focused: boolean) => void;
   onToolbarInteract?: () => void;
+  onFilesAdded?: (files: File[]) => void;
   autoFocus?: boolean;
   placeholder?: string;
   ariaLabel?: string;
@@ -57,6 +59,7 @@ export function RichTextEditor({
   onShortcutSubmit,
   onFocusChange,
   onToolbarInteract,
+  onFilesAdded,
   autoFocus = false,
   placeholder = '记下想法，或粘贴网址…',
   ariaLabel = '收藏正文编辑器',
@@ -75,10 +78,14 @@ export function RichTextEditor({
   const onShortcutSubmitRef = useRef(onShortcutSubmit);
   const onFocusChangeRef = useRef(onFocusChange);
   const onToolbarInteractRef = useRef(onToolbarInteract);
+  const onFilesAddedRef = useRef(onFilesAdded);
   onChangeRef.current = onChange;
   onShortcutSubmitRef.current = onShortcutSubmit;
   onFocusChangeRef.current = onFocusChange;
   onToolbarInteractRef.current = onToolbarInteract;
+  onFilesAddedRef.current = onFilesAdded;
+
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const [aaOpen, setAaOpen] = useState(false);
   const [linkPanelOpen, setLinkPanelOpen] = useState(false);
@@ -362,7 +369,45 @@ export function RichTextEditor({
         </div>
       )}
 
-      <EditorContent editor={editor} className="sp-composer-editor" />
+      <div
+        className={`sp-editor-dropzone ${isDragOver ? 'is-drag-over' : ''}`}
+        onPasteCapture={(e) => {
+          if (disabled || !onFilesAddedRef.current) return;
+          const files = extractFilesFromDataTransfer(e.clipboardData);
+          if (files.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            onFilesAddedRef.current(files);
+          }
+        }}
+        onDragOver={(e) => {
+          if (disabled || !onFilesAddedRef.current) return;
+          const hasFiles =
+            Boolean(e.dataTransfer?.types?.includes('Files')) ||
+            Boolean(e.dataTransfer?.files && e.dataTransfer.files.length > 0);
+          if (hasFiles) {
+            e.preventDefault();
+            setIsDragOver(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+            setIsDragOver(false);
+          }
+        }}
+        onDrop={(e) => {
+          setIsDragOver(false);
+          if (disabled || !onFilesAddedRef.current) return;
+          const files = extractFilesFromDataTransfer(e.dataTransfer);
+          if (files.length > 0) {
+            e.preventDefault();
+            e.stopPropagation();
+            onFilesAddedRef.current(files);
+          }
+        }}
+      >
+        <EditorContent editor={editor} className="sp-composer-editor" />
+      </div>
 
       {betweenEditorAndToolbar}
 

@@ -18,6 +18,38 @@ type AdminAudit struct {
 	CreatedAt    pgtype.Timestamptz
 }
 
+type AiBudgetConfig struct {
+	Singleton          bool
+	Version            int64
+	PlatformDailyUnits int64
+	UserDailyUnits     int64
+	WorkerConcurrency  int32
+}
+
+type AiRouteFailure struct {
+	ConfigVersion string
+	Route         string
+	ErrorCode     string
+	DisabledAt    pgtype.Timestamptz
+}
+
+type Attachment struct {
+	ID              pgtype.UUID
+	UserID          pgtype.UUID
+	CollectionID    pgtype.UUID
+	UploadID        pgtype.UUID
+	ObjectKey       string
+	ProviderVersion pgtype.Text
+	Filename        string
+	MimeType        string
+	SizeBytes       int64
+	Sha256          []byte
+	Position        int32
+	RemovedAt       pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	ActivePosition  pgtype.Int4
+}
+
 type AuthRateLimit struct {
 	Key         []byte
 	WindowStart pgtype.Timestamptz
@@ -35,34 +67,37 @@ type ChangeEvent struct {
 }
 
 type Collection struct {
-	ID              pgtype.UUID
-	UserID          pgtype.UUID
-	Document        []byte
-	PlainText       string
-	Intent          string
-	OriginalUrl     string
-	ManualTitle     string
-	ContentVersion  int64
-	ResourceVersion int64
-	DecisionVersion int64
-	ReadAt          pgtype.Timestamptz
-	AiExcluded      bool
-	AiPolicyVersion int64
-	DeletedAt       pgtype.Timestamptz
-	PurgeAfter      pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
+	ID               pgtype.UUID
+	UserID           pgtype.UUID
+	Document         []byte
+	PlainText        string
+	Intent           string
+	OriginalUrl      string
+	ManualTitle      string
+	ContentVersion   int64
+	ResourceVersion  int64
+	DecisionVersion  int64
+	ReadAt           pgtype.Timestamptz
+	AiExcluded       bool
+	AiPolicyVersion  int64
+	DeletedAt        pgtype.Timestamptz
+	PurgeAfter       pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	PurgeRequestedAt pgtype.Timestamptz
 }
 
 type CollectionProject struct {
-	UserID       pgtype.UUID
-	CollectionID pgtype.UUID
-	ProjectID    pgtype.UUID
-	Decision     string
-	Reason       pgtype.Text
-	Evidence     []byte
-	CreatedAt    pgtype.Timestamptz
-	UpdatedAt    pgtype.Timestamptz
+	UserID         pgtype.UUID
+	CollectionID   pgtype.UUID
+	ProjectID      pgtype.UUID
+	Decision       string
+	Reason         pgtype.Text
+	Evidence       []byte
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+	ProjectVersion pgtype.Int8
+	RunID          pgtype.UUID
 }
 
 type CollectionRevision struct {
@@ -77,6 +112,25 @@ type CollectionRevision struct {
 	CreatedAt      pgtype.Timestamptz
 }
 
+type DailyBudget struct {
+	Scope         string
+	OwnerKey      string
+	BudgetDay     pgtype.Date
+	ReservedUnits int64
+	SettledUnits  int64
+}
+
+type DeletionLedger struct {
+	ID           pgtype.UUID
+	UserID       pgtype.UUID
+	CollectionID pgtype.UUID
+	ObjectKeys   []byte
+	RequestedAt  pgtype.Timestamptz
+	ReplicatedAt pgtype.Timestamptz
+	CompletedAt  pgtype.Timestamptz
+	ObjectCursor int32
+}
+
 type EmailChallenge struct {
 	ID              pgtype.UUID
 	EmailNormalized string
@@ -86,6 +140,26 @@ type EmailChallenge struct {
 	Attempts        int32
 	ConsumedAt      pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
+}
+
+type Extraction struct {
+	ID                           pgtype.UUID
+	UserID                       pgtype.UUID
+	CollectionID                 pgtype.UUID
+	ContentVersion               int64
+	SourceKind                   string
+	SourceID                     string
+	AttachmentID                 pgtype.UUID
+	Status                       string
+	Text                         pgtype.Text
+	SourceTitle                  pgtype.Text
+	EvidenceMeta                 []byte
+	ErrorCode                    pgtype.Text
+	ExtractorVersion             string
+	CreatedAt                    pgtype.Timestamptz
+	UpdatedAt                    pgtype.Timestamptz
+	ImageUserPolicyVersion       pgtype.Int8
+	ImageCollectionPolicyVersion pgtype.Int8
 }
 
 type IdempotencyKey struct {
@@ -145,6 +219,44 @@ type MailOutbox struct {
 	DeliveredAt      pgtype.Timestamptz
 }
 
+type OrganizationCurrent struct {
+	UserID         pgtype.UUID
+	CollectionID   pgtype.UUID
+	RunID          pgtype.UUID
+	ContentVersion int64
+	GeneratedTitle string
+	Summary        string
+	UpdatedAt      pgtype.Timestamptz
+}
+
+type OrganizationPendingSuggestion struct {
+	UserID       pgtype.UUID
+	CollectionID pgtype.UUID
+	ProjectID    pgtype.UUID
+}
+
+type OrganizationRun struct {
+	ID                      pgtype.UUID
+	UserID                  pgtype.UUID
+	CollectionID            pgtype.UUID
+	ContentVersion          int64
+	UserPolicyVersion       int64
+	CollectionPolicyVersion int64
+	Status                  string
+	PromptVersion           string
+	MatchingPolicyVersion   string
+	Stages                  []byte
+	ProjectSnapshot         []byte
+	Result                  []byte
+	ErrorCode               pgtype.Text
+	Attempts                int32
+	AppliedAt               pgtype.Timestamptz
+	StartedAt               pgtype.Timestamptz
+	CompletedAt             pgtype.Timestamptz
+	CreatedAt               pgtype.Timestamptz
+	UpdatedAt               pgtype.Timestamptz
+}
+
 type Project struct {
 	ID          pgtype.UUID
 	UserID      pgtype.UUID
@@ -169,16 +281,60 @@ type Session struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type Upload struct {
+	ID               pgtype.UUID
+	UserID           pgtype.UUID
+	StagingKey       string
+	FinalKey         pgtype.Text
+	ProviderVersion  pgtype.Text
+	Filename         string
+	DeclaredSize     int64
+	ActualSize       pgtype.Int8
+	MimeType         string
+	Sha256           []byte
+	Status           string
+	ErrorCode        pgtype.Text
+	ExpiresAt        pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+	StagingCleanedAt pgtype.Timestamptz
+}
+
+type UsageReservation struct {
+	ID                pgtype.UUID
+	UserID            pgtype.UUID
+	RunID             pgtype.UUID
+	AttemptNo         int32
+	BudgetDay         pgtype.Date
+	Route             string
+	ConfigVersion     string
+	Model             string
+	ReservedUnits     int64
+	ActualUnits       pgtype.Int8
+	InputTokens       pgtype.Int8
+	OutputTokens      pgtype.Int8
+	State             string
+	ErrorCode         pgtype.Text
+	CreatedAt         pgtype.Timestamptz
+	UpdatedAt         pgtype.Timestamptz
+	ImageExtractionID pgtype.UUID
+}
+
 type User struct {
-	ID              pgtype.UUID
-	EmailNormalized string
-	PasswordHash    string
-	Status          string
-	Role            string
-	AiEnabled       bool
-	AiPolicyVersion int64
-	CreatedAt       pgtype.Timestamptz
-	UpdatedAt       pgtype.Timestamptz
+	ID                  pgtype.UUID
+	EmailNormalized     string
+	PasswordHash        string
+	Status              string
+	Role                string
+	AiEnabled           bool
+	AiPolicyVersion     int64
+	CreatedAt           pgtype.Timestamptz
+	UpdatedAt           pgtype.Timestamptz
+	AiConsentAt         pgtype.Timestamptz
+	AiConsentVersion    pgtype.Text
+	ImageConsentVersion pgtype.Text
+	ImageConsentedAt    pgtype.Timestamptz
+	ImagePolicyVersion  int64
 }
 
 type UserChangeCounter struct {

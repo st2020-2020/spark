@@ -1,0 +1,61 @@
+# Optional v0.3 capability overlay: Private OSS using a read-only platform credential (T03/T08).
+# Combine with compose.prod.yaml (or compose.dev.yaml with SPARK_API_IMAGE=spark-api:dev, SPARK_ENV=development, SPARK_ASSET_WORKER_DATABASE_URL):
+#   docker compose --env-file <env> -f deploy/compose.prod.yaml -f deploy/compose.v0.3-oss.yaml ...
+# Adds standalone `asset-worker` while keeping existing text AI `worker` and production constraints untouched.
+# Allows OSS-only verification completely without AI or OCR host files; OCR overlay attaches separately per T05.
+
+services:
+  api:
+    environment:
+      SPARK_OSS_ENABLED: ${SPARK_OSS_ENABLED:-false}
+      SPARK_OSS_CONFIG_FILE: /run/spark-oss/config.json
+    volumes:
+      - type: bind
+        source: ${SPARK_OSS_CONFIG_HOST_PATH:-/etc/spark/oss/config.json}
+        target: /run/spark-oss/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPARK_OSS_CREDENTIALS_HOST_PATH:-/etc/spark/oss/credentials.json}
+        target: /run/secrets/spark-oss-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false
+
+  asset-worker:
+    image: ${SPARK_API_IMAGE:-spark-api:prod}
+    restart: unless-stopped
+    build:
+      context: ../server
+      target: runtime
+    entrypoint: [/spark-worker, assets]
+    environment:
+      SPARK_ENV: ${SPARK_ENV:-production}
+      DATABASE_URL: ${SPARK_ASSET_WORKER_DATABASE_URL:-postgres://spark:${SPARK_DB_PASSWORD:-${SPARK_DEV_DB_PASSWORD:-missing}}@postgres:5432/${SPARK_DB_NAME:-spark}?sslmode=disable}
+      SPARK_OSS_ENABLED: ${SPARK_OSS_ENABLED:-false}
+      SPARK_OSS_CONFIG_FILE: /run/spark-oss/config.json
+    volumes:
+      - type: bind
+        source: ${SPARK_OSS_CONFIG_HOST_PATH:-/etc/spark/oss/config.json}
+        target: /run/spark-oss/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPARK_OSS_CREDENTIALS_HOST_PATH:-/etc/spark/oss/credentials.json}
+        target: /run/secrets/spark-oss-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, /spark-worker, healthcheck]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    stop_grace_period: 30s
+    mem_limit: 512m

@@ -19,7 +19,48 @@ dc up -d --build api web
 dc ps
 ```
 
-迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `003_organization_events.sql`（版本 3）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v3.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
+迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `007_extraction_keys_upload_cleanup.sql`（版本 7）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v7.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
+
+## 图片附件与独立资产 Worker（v0.3-T03）
+
+`SPARK_OSS_ENABLED` 默认关闭，API 在关闭时可直接启动，文字和网址收藏照常可用。开启时，API 签发上传和下载 URL。独立的 `/spark-worker assets` 只消费 River 的 `attachments` 队列，执行图片确认和上传到期清理。它使用 `DATABASE_URL`，独立在容器内提供 `127.0.0.1:9091/ready`。`/spark-worker healthcheck` 可用于两个 Worker 服务。文字 AI 的进程、开关、账号范围和同意规则沿用原配置。图片理解使用独立 Worker 与授权。
+
+按 T01 的 OSS 叠加配置给 API 和资产 Worker 只读挂载 `oss-v2` 配置与现有平台 AK/SK。服务端连接私有桶并为已认证用户签发短时 URL。运行时通过 `SPARK_OSS_CONFIG_FILE` 读取配置，路径默认为 `/run/spark-oss/config.json`。平台凭据默认从 `/run/secrets/spark-oss-credentials.json` 读取，包含 `access_key_id` 和 `access_key_secret`。预置文件的其他元数据可保留。Tools 和仅启用文字 AI 的 Worker 无需挂载。
+
+- 直传授权仅覆盖暂存键 `<prefix>users/{user_id}/uploads/{upload_id}`，签名包含 MIME 和浏览器随 Blob 发送的 Content-Length。幂等记录只存上传 ID。签名最长 PUT 600 秒、GET 300 秒。GET 授权仅覆盖该账号的已确认对象。
+- 确认接口事务化登记验证任务并返回 202。资产 Worker 将暂存对象复制到仅服务端可写的 `<prefix>users/{user_id}/attachments/{upload_id}`，对最终对象完整读回、校验 5 MiB 上限和声明 MIME 并计算 SHA-256。单图长边最多 8,192 像素、总像素最多 16 Mi，GIF 另限 512 帧及累计 32 Mi 像素。客户端可在授权到期前重放暂存键的 PUT。最终对象由服务端写入。
+- 上传记录从创建起保留 24 小时，清理任务与上传记录同时持久化。临时授权最晚在清理前 15 分钟失效。清理未绑定的最终对象以及所有到期的暂存对象，删除成功后移除未绑定记录。共用桶的接入前缀须能实删对象，首批由未开启版本控制的桶验证和上线。版本控制桶的旧版本清理另行验收。
+- 中国内地新开通 OSS 的 Bucket 需要使用绑定 HTTPS 的自定义访问域名执行公网数据操作。内联图片的预览也使用该域名。CORS 放行实际 Web Origin、PUT 和授权返回的头。 [阿里云自定义域名说明](https://www.alibabacloud.com/help/zh/oss/user-guide/access-buckets-via-custom-domain-names)
+
+对象存储故障导致清理任务耗尽重试后，恢复存储连接并在同一数据库运行 `dc run --rm tools retry-upload-cleanup`。每次最多登记 50 条已到期且无活动作业的上传，输出实际登记数。该命令只使用数据库。资产 Worker 对已绑定记录仅清理暂存对象，对未绑定记录也清理最终对象。已成功清理的暂存步骤跨重试保留。
+
+## 网页信息提取（v0.3-T06）
+
+`SPARK_URL_EXTRACT_ENABLED` 默认关闭。启用后，保存或编辑收藏只在 PostgreSQL 事务内记录主要网址和提取任务。独立的 `/spark-worker urls` 消费 `url_extraction` 队列并负责 HTTP 请求。该进程只需要数据库连接和抓取开关。同一镜像可分别运行文字整理、资产和网页提取，URL Worker 无需模型、OCR 或 OSS 文件。开启开关不会全量回填历史收藏，单条可通过提取接口重新获取。
+
+仅在运维批准抓取出口并确认出站规则后叠加 [网页提取 Compose](../deploy/compose.v0.3-url-extract.yaml)。出口规则应覆盖内部域名、服务网络、云实例元数据和部署自身不应从抓取进程访问的地址。应用只使用系统 DNS，逐跳校验所有解析结果并用校验过的 IP 直连。代理环境变量、应用会话和用户提交的凭据不参与请求。请求限 HTTP(S) 80/443 端口、最多 3 次重定向、每次任务尝试 8 秒、解压及字符解码后各最多 2 MiB。网络暂时失败最多尝试 3 次。日志保留任务标识和错误类别。特殊用途地址筛选参考 [IPv4 登记表](https://www.iana.org/assignments/iana-ipv4-special-registry/) 与 [IPv6 登记表](https://www.iana.org/assignments/iana-ipv6-special-registry/)。
+
+本地已获授权的 Compose 环境可在同一项目中启用 API 与 URL Worker。使用开发镜像时设置 `SPARK_API_IMAGE=spark-api:dev`，并让 `SPARK_DB_NAME=spark_dev` 或显式提供同库的 `SPARK_URL_WORKER_DATABASE_URL`。叠加后以 `SPARK_URL_EXTRACT_ENABLED=true` 启动 `api url-worker`。回退时将 API 开关恢复为 false，并停止 `url-worker`，已经保存的收藏和成功结果保留。隔离集成测试使用合成 HTTP 响应和测试专用 DNS、拨号入口。
+
+## 图片理解（v0.3-T05）
+
+图片理解默认关闭。在已有 OSS 配置的独立环境，可叠加 [compose.v0.3-image-analysis.yaml](../deploy/compose.v0.3-image-analysis.yaml)，使用 `--profile image-analysis` 启动 `image-worker`，同时给 API 和 Worker 设置 `SPARK_IMAGE_ANALYSIS_ENABLED=true`。Worker 运行 `/spark-worker images`，读取已确认版本的最终对象并重新校验大小和 SHA-256。供应商密钥只由该进程通过 `SPARK_IMAGE_ANALYSIS_KEY_FILE` 读入。生产端点固定为 DeepSeek Chat Completions。开发可用 `SPARK_IMAGE_ANALYSIS_ENDPOINT` 指向同容器的回环 HTTP 端点。
+
+模型收到重新编码的视觉副本。JPEG、PNG 和 WebP 应用 EXIF 方向后剥离元数据，GIF 在副本符合大小限制时保留帧与时间。副本超出 5 MiB 时使用有界的静态副本。原始 OSS 对象及收藏下载保持原样。
+
+图片理解按平台开关、账号的独立图片授权、单条排除与共享额度决定是否派发。`SPARK_AI_TRIAL_USER_IDS` 只限定文字整理。需要限定为测试账号的首次真实图片试用，应在隔离环境使用合成图片和小额预算。
+
+只有用户通过独立图片授权后新绑定的附件才派发。每图向 `deepseek-flash` 发送一次内联图片和固定提示，显式关闭思考，上限为输入 1536 token 和输出 512 token，按高峰未命中价预留 7168 微元。发送后无法确认用量的记录维持 `uncertain` 并占用预留。供应商报告超出批准上限时保留待核对额度并阻止该配置继续派发。合成端点用于验证协议和预算行为。厂商账单、识别质量及试用额度在真实试用前核定。[DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/) [DeepSeek 价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
+
+## 永久删除与备份重放（v0.3-T08）
+
+`SPARK_PURGE_ENABLED` 默认关闭。启用时，API 在同一事务登记删除、记录变更并写入 River，收藏立即离开回收站。独立的 `/spark-worker purge` 每日扫描已到 30 天的回收站记录，并重入队未完成的清理。手动及到期删除使用同一流程。已经接受的请求可通过 [清理状态接口](../docs/design/API.md#永久删除与状态) 查到。
+
+启用前为 `purge-worker` 挂载和 PostgreSQL 备份分属不同故障域的独立持久存储。创建专用目录，归运行 UID 65532 所有，权限 `0700`。使用 [删除 Compose 叠加](../deploy/compose.v0.3-purge.yaml)，设置 `SPARK_DELETION_LEDGER_HOST_PATH` 和同库的 `SPARK_PURGE_WORKER_DATABASE_URL`，并以 `SPARK_PURGE_ENABLED=true` 启动 `api purge-worker`。开发镜像用 `SPARK_API_IMAGE=spark-api:dev` 和 `SPARK_ENV=development`。保存过图片时追加 [清理 OSS 叠加](../deploy/compose.v0.3-purge-oss.yaml)，沿用图片存储的专属前缀与最小删除权限。文字收藏清理可独立运行。
+
+Worker 先把只含操作 ID、归属、时间和对象清理计划的回执写入独立目录。回执采用 `0600` 权限，文件和目录条目持久化后才删数据。清理顺序与重试见 [数据设计](../docs/design/DATA.md#删除与恢复)。独立回执留存覆盖最早可恢复备份及其校验期。
+
+恢复时先在隔离环境还原 PostgreSQL 备份与对应对象数据并执行迁移。在 API 和处理任务停止时，向 `tools` 只读挂载完整独立账本目录，设置 `SPARK_DELETION_LEDGER_DIR`，在恢复库上执行 `/spark replay-deletions`。该命令还原墓碑、删除恢复库中的旧数据并持久排队对象清理。然后只对恢复环境启动清理 Worker，核对所有已重放操作完成、撤销旧会话与授权并检查附件引用后再开放流量。重复重放可继续恢复流程。 如果回执含对象而恢复库缺少对应账号，命令会以非零退出并输出操作 ID。保持环境离线，核对 PostgreSQL 与对象备份是否配对，解决该回执涉及的对象后再开放流量。
 
 ## 文本自动整理 Worker 与 AI 路由（默认关闭）
 
@@ -196,7 +237,7 @@ test 镜像设置 `CGO_ENABLED=0`；默认运行 `go test ./... -count=1`，实�
 
 ## 范围与限制
 
-尚未实现真实邮件投递、OSS/附件、网页提取、OCR、标签、自动采纳项目、永久删除/到期清理、完整管理后台及后续同步。相应未实现路由返回结构化 404；带附件/标签的收藏请求明确拒绝。文字整理已经使用真实 River 队列和独立 Worker，模型调用由只读平台配置选择，首批仅生成建议；平台关闭时仍明确返回 `skipped` / `integration_not_configured`。保留 30 天的字段不表示已有自动清理任务。
+尚未实现真实邮件投递、OCR、标签、自动采纳项目、完整管理后台及后续同步。文字整理使用 River 和独立 Worker，平台关闭时返回 `skipped` / `integration_not_configured`。图片附件、图片理解、网页提取和永久删除按各自能力开关配置。
 
 正式邮件缺凭证只阻止相应集成；`disabled` 模式验证码接口返回 503，不假报已发送。首批没有以仿真实现代替真实 PostgreSQL。容器中的 pgx/sqlc 与真实数据库验证和前端浏览器闭环分别报告；容量压测、真实云服务和备份恢复 RPO/RTO 属于后续验收。
 
@@ -228,3 +269,51 @@ dc run --rm --no-deps -v "$PWD:/src" -v "$PWD/../contracts:/contracts:ro" test \
 ```
 
 新增隔离 PostgreSQL 测试覆盖 v1→v2 保留原文升级、事务入队/活动运行复用、真实 River+受控 HTTP 响应、虚假引文/未知来源/跨用户项目、并发人工排除、内容与授权竞争、平台预算竞争、零额度、同日额度调整、未知用量、主备安全切换及遗留预留恢复。这些测试中的模型响应明确为合成控制响应；真实 Magpie 调用与浏览器验收由部署、前端会话分别报告，不等同于双厂商计量/隐私或完整 M3 评测已完成。
+
+## 私有 OSS 的外部配置与联调
+
+测试与生产使用同一个私有桶，通过不同的 Spark 专属前缀隔离。前缀须非空、以 `/` 结尾，每段仅含字母、数字、下划线或连字符。测试使用 `spark/test-v03/<随机ID>/`，生产使用独立前缀。浏览器的 PUT 使用 `<prefix>users/{user_id}/uploads/{upload_id}`，资产 Worker 写入 `<prefix>users/{user_id}/attachments/{upload_id}`。
+
+### 连接配置
+
+宿主机默认配置文件为 `/etc/spark/oss/config.json`。配置需要以下字段：
+
+```json
+{
+  "version": "oss-v2",
+  "oss_region": "cn-shanghai",
+  "oss_endpoint": "https://oss-cn-shanghai.aliyuncs.com",
+  "bucket": "example-private-bucket",
+  "prefix": "spark/test-v03/example-run/",
+  "put_ttl_seconds": 600,
+  "get_ttl_seconds": 300
+}
+```
+
+`oss_region` 和 `oss_endpoint` 分别传给 OSS SDK。使用桶绑定的 HTTPS 自定义域名时，将该域名设为 `oss_endpoint`，并设置可选字段 `oss_use_cname: true`，默认值为 `false`。针对中国内地新开通 OSS 的公网访问要求，按[自定义域名说明](https://www.alibabacloud.com/help/zh/oss/user-guide/access-buckets-via-custom-domain-names)核对实际端点。可选字段 `credentials_file` 是容器内的文件路径。使用现有 Compose 叠加时省略该字段即可采用默认路径，也可显式填入 `/run/secrets/spark-oss-credentials.json`。宿主路径通过 `SPARK_OSS_CREDENTIALS_HOST_PATH` 覆盖。
+
+### 凭据和访问范围
+
+使用同一已有平台 AK/SK，宿主机默认凭据文件为 `/etc/spark/oss/credentials.json`。以私有权限保存，供容器 UID `65532` 读取，例如 `root:65532` 和 `0440`。原预置 JSON 文件需包含 `access_key_id` 和 `access_key_secret`，其他预置元数据可保留。服务端使用这两项直连 OSS。把凭据留在受控主机，环境文件仅记录宿主路径。
+
+核对该平台身份在获准桶与前缀上的 `oss:PutObject`、`oss:GetObject` 和 `oss:DeleteObject` 权限。应用按配置前缀生成对象键。浏览器只收到按对象、方法和时效签发的 URL。平台身份的权限范围由云端策略决定。核对桶的私有 ACL、阻止公共访问和版本控制状态。CORS 的 `AllowedOrigins` 填实际 Web 的精确 Origin，并放行 `PUT` 和签名所需的请求头。浏览器需要跨域读取下载响应时也放行 `GET`。
+
+### 服务挂载范围
+
+API 和资产 Worker 只读挂载 OSS 配置及平台凭据。图片 Worker 启用时使用同一 OSS 挂载读取已确认的对象，同时独占图片分析密钥。永久删除启用且使用 OSS 时，清理 Worker 同样只读挂载 OSS 文件。文字整理 Worker 继续使用自己的模型配置。[发布说明](../deploy/README.md)
+
+### 真实供应商联调
+
+按已获准的桶、测试前缀、OSS 地域、HTTPS 端点、私有访问和精确 Origin 配置隔离环境。凭据文件沿用受控主机的现有平台密钥。用合成图验证直传、校验、下载和已登记键的删除。图片理解单独使用获准的合成样本、试用预算及仅挂载到图片 Worker 的试用密钥。
+
+### 本地合成配置隔离校验
+
+在本地 OrbStack 仅使用合成占位配置（禁止真实凭证）叠加验证挂载、只读权限与服务健康：
+
+```sh
+docker --context orbstack compose \
+  --env-file server/.env \
+  -f deploy/compose.dev.yaml \
+  -f deploy/compose.v0.3-oss.yaml \
+  config --quiet
+```

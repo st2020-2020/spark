@@ -14,11 +14,17 @@ type Config struct {
 	Secret, EncryptionKey                    []byte
 	Container                                bool
 	AIEnabled                                bool
+	ImageAnalysisEnabled                     bool
+	URLExtractEnabled                        bool
+	PurgeEnabled                             bool
 	AITrial                                  AITrialScope
 }
 
 func LoadConfig() (Config, error) {
 	c := Config{AIEnabled: os.Getenv("SPARK_AI_ENABLED") == "true", Container: os.Getenv("SPARK_CONTAINER") == "true", Env: os.Getenv("SPARK_ENV"), Addr: os.Getenv("SPARK_ADDR"), Origin: os.Getenv("SPARK_ORIGIN"), DatabaseURL: os.Getenv("DATABASE_URL"), MailMode: os.Getenv("SPARK_MAIL_MODE")}
+	c.ImageAnalysisEnabled = os.Getenv("SPARK_IMAGE_ANALYSIS_ENABLED") == "true"
+	c.URLExtractEnabled = os.Getenv("SPARK_URL_EXTRACT_ENABLED") == "true"
+	c.PurgeEnabled = os.Getenv("SPARK_PURGE_ENABLED") == "true"
 	if c.Env == "" {
 		c.Env = "production"
 	}

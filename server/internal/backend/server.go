@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"spark/server/db"
+	"spark/server/internal/asset"
 	"spark/server/internal/contract"
 	"spark/server/internal/store"
 )
@@ -34,6 +35,7 @@ type Server struct {
 	hashes    chan struct{}
 	dummyHash string
 	Organizer *Organizer
+	Assets    asset.Storage
 	events    *organizationHub
 }
 type apiError struct {
@@ -113,6 +115,8 @@ func (s *Server) Router() *gin.Engine {
 	secured := api.Group("")
 	secured.Use(s.authenticate, s.origin, s.csrf)
 	secured.PATCH("/me/preferences", s.handle(s.updatePreferences))
+	secured.GET("/me/image-analysis", s.handle(s.getImagePreferences))
+	secured.PUT("/me/image-analysis", s.handle(s.setImagePreferences))
 	secured.GET("/me/usage", s.handle(s.getUsage))
 	secured.GET("/me/export", s.handle(s.exportMyData))
 	secured.GET("/auth/session", s.handle(s.currentSession))
@@ -123,6 +127,10 @@ func (s *Server) Router() *gin.Engine {
 	secured.GET("/projects", s.handle(s.listProjects))
 	secured.GET("/projects/:id", s.handle(s.getProject))
 	secured.PATCH("/projects/:id", s.handle(s.updateProject))
+	secured.POST("/uploads", s.handle(s.createUpload))
+	secured.GET("/uploads/:id", s.handle(s.getUpload))
+	secured.POST("/uploads/:id/complete", s.handle(s.completeUpload))
+	secured.GET("/attachments/:id/download", s.handle(s.getDownload))
 	secured.POST("/collections", s.handle(s.createCollection))
 	secured.GET("/collections", s.handle(s.listCollections))
 	secured.GET("/collections/:id", s.handle(s.getCollection))
@@ -132,6 +140,10 @@ func (s *Server) Router() *gin.Engine {
 	secured.PUT("/collections/:id/read", s.handle(s.readState))
 	secured.DELETE("/collections/:id", s.handle(s.trashCollection))
 	secured.POST("/collections/:id/restore", s.handle(s.restoreCollection))
+	secured.POST("/collections/:id/purge", s.handle(s.purgeCollection))
+	secured.GET("/collections/:id/purge", s.handle(s.getPurgeStatus))
+	secured.GET("/collections/:id/extractions", s.handle(s.getExtractions))
+	secured.POST("/collections/:id/extractions", s.handle(s.refreshURLExtraction))
 	secured.GET("/collections/:id/organization", s.handle(s.getOrganization))
 	secured.POST("/collections/:id/organization", s.handle(s.restartOrganization))
 	secured.PUT("/collections/:id/ai-exclusion", s.handle(s.setAIExclusion))
