@@ -20,6 +20,8 @@
 
 ### 1. 首次准备生产目录与环境文件
 
+升级入口面向已有 v3 数据库、API 和静态站点的部署。操作员先在干净的已评审主干检出中执行 `git fetch origin main`，再运行本目录的脚本。
+
 在目标服务器准备 `/opt/spark/.env`（权限 `0600`，保留在仓库之外），至少设置：
 
 | 变量 | 说明 |
@@ -41,7 +43,7 @@
   --env-file /opt/spark/.env
 ```
 
-如需同时校验 Worker 配置，追加 `--with-worker`。
+目标已启用 AI 时，预检、发布和回退命令均追加 `--with-worker`。
 
 ### 3. 执行不可变发布（兼容 `/opt/spark` 与 Worker）
 
@@ -61,7 +63,7 @@
 `deploy` 按以下顺序执行（兼容既有 `/opt/spark` 布局；先上线兼容旧 Web 的 API，再切换静态 Web）：
 
 1. **本地与远端预检**：校验 40 位 SHA 及其对 `--trusted-ref`（默认 `origin/main`，`--mode ssh` 禁止覆盖）的可信祖先关系、Web 生产包无 `test-adapter`（可用 `--skip-web` 跳过 Web）、目标 `.env` 权限与必填项、磁盘空间（≥ 1 GB，不创建目录）。
-2. **备份与按次不可变回退快照**：获取 `${DEPLOY_DIR}/.release.lock` 后，独占创建 `${DEPLOY_DIR}/backups/<release-id>`（防复用），备份现有 `/opt/spark/web`、`deploy/compose.prod.yaml`、`server/`，绑定运行中 `api` 容器镜像 ID 并打标 `spark-api:rollback-<release-id>`，同时记录 `worker` 先前是否运行；若库已存在，先 `pg_dump -Fc` 并校验归档目录（传 `--verify-restore` 时仅在 `createdb` 成功后注册清理并在唯一临时库 `spark_restore_verify_<release_id>` 实测 `pg_restore`）。
+2. **备份与按次不可变回退快照**：获取 `${DEPLOY_DIR}/.release.lock` 后，独占创建 `${DEPLOY_DIR}/backups/<release-id>`（防复用），备份现有 `/opt/spark/web`、`deploy/compose.prod.yaml`、`server/`，绑定运行中 `api` 容器镜像 ID 并打标 `spark-api:rollback-<release-id>`，同时记录 `worker` 先前是否运行；在已运行的 PostgreSQL 上执行 `pg_dump -Fc` 并校验归档目录（传 `--verify-restore` 时仅在 `createdb` 成功后注册清理并在唯一临时库 `spark_restore_verify_<release_id>` 实测 `pg_restore`）。
 3. **构建与已有 v3 库校验**：将构建物上传到当次独立的 `*.staging-<release-id>` 空目录；在目标构建 `spark-api:prod`（含 `/spark-api`、`/spark`、`/spark-worker`），若存在运行中的 Worker 先优雅停止；T11 假定目标库已处于既有 `v3` 结构，只校验 `schema_migrations` 版本匹配（不自动建库或升级）。
 4. **有界健康检查、旧静态资源保留与切换**：通过 `compose up --wait --wait-timeout` 与 `docker inspect` 状态校验重建 `api` 并带超时探测 `127.0.0.1:${API_PORT}/api/v1/health/{live,ready}`（默认上限 `--health-timeout 60` 秒）；传 `--with-worker` 时再重建并等待 `worker` 健康；切换静态 Web 目录前保留上一版 `index.html` 引用的 `assets/*` 以兼容在途浏览器页签，最后按 `--health-url` 带超时复核公网就绪。
 5. **全链路失败自动回退**：上传阶段、构建/校验、健康检查或 `--health-url` 公网校验任意一步失败时，自动还原静态 Web、仅按 `worker.was_running` 决定是否恢复 `worker`、恢复旧版 `compose.prod.yaml` / `server/` 与运行中 `api` 镜像快照并重建 `api`；数据库备份保留在 `${DEPLOY_DIR}/backups/<release-id>/spark.dump`。
@@ -95,7 +97,7 @@ docker compose --env-file /opt/spark/.env -f /opt/spark/deploy/compose.prod.yaml
 
 ## 本地 OrbStack 隔离演练
 
-可使用 `--mode local --docker-context orbstack` 在独立临时目录、独立端口与独立 Compose 项目名下演练全流程（不触碰 `spark-local` 与生产环境），演练结束后按 [AGENTS.md](../AGENTS.md) 清理临时项目容器、卷、镜像与临时目录：
+演练使用独立的 OrbStack Docker 上下文；上下文中的 `spark-api:prod` 是演练用镜像标签，须与其他发布环境分开。可使用 `--mode local --docker-context orbstack` 在独立临时目录、独立端口与独立 Compose 项目名下演练全流程（不触碰 `spark-local` 与生产环境），演练结束后按 [AGENTS.md](../AGENTS.md) 清理临时项目容器、卷、镜像与临时目录：
 
 ```sh
 ./deploy/release-prod.sh deploy \

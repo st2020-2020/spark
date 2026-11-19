@@ -522,7 +522,7 @@ if [[ "$("${dcmd[@]}" inspect --format '{{.State.Running}}' "${PROJECT}-worker-1
 fi
 
 {
-  dc up -d --wait --wait-timeout 60 postgres
+  dc exec -T postgres pg_isready -t 5 -U spark -d spark >/dev/null
   dc exec -T postgres pg_dump -U spark -Fc spark > "${BDIR}/spark.dump"
   chmod 600 "${BDIR}/spark.dump"
   [[ -s "${BDIR}/spark.dump" ]] || { echo "pg_dump produced empty backup" >&2; exit 1; }
@@ -589,7 +589,6 @@ mv "${DEPLOY_DIR}/server.staging-${RELEASE_ID}" "${DEPLOY_DIR}/server"
 rm -rf "${BDIR}/prev-server-live"
 mv "${DEPLOY_DIR}/deploy/compose.prod.yaml.staging-${RELEASE_ID}" "${DEPLOY_DIR}/deploy/compose.prod.yaml"
 
-dc up -d --wait --wait-timeout "$HEALTH_TIMEOUT" postgres
 
 if [[ -n "$GOPROXY_ARG" ]]; then
   dc build --build-arg "GOPROXY=${GOPROXY_ARG}" api
@@ -650,11 +649,16 @@ REMOTE
 
 if [[ -n "$HEALTH_URL" ]]; then
   log "Checking public health URL: $HEALTH_URL"
+  deadline=$((SECONDS + HEALTH_TIMEOUT))
+  public_ok() {
+    local remaining=$((deadline - SECONDS)) code
+    ((remaining > 0)) || return 1
+    code="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --connect-timeout 5 --max-time "$remaining" "$1")" && [[ "$code" == "200" ]]
+  }
   ok="false"
-  for i in $(seq 1 "$HEALTH_TIMEOUT"); do
-    if curl -fsS --connect-timeout 5 --max-time 10 "${HEALTH_URL%/}/api/v1/health/ready" >/dev/null 2>&1 && \
-       { [[ "$SKIP_WEB" == "true" ]] || curl -fsS --connect-timeout 5 --max-time 10 "${HEALTH_URL%/}/" >/dev/null 2>&1; }; then
-      log "Public endpoint check passed (${i}s)"
+  while ((SECONDS < deadline)); do
+    if public_ok "${HEALTH_URL%/}/api/v1/health/ready" && { [[ "$SKIP_WEB" == "true" ]] || public_ok "${HEALTH_URL%/}/"; }; then
+      log "Public endpoint check passed"
       ok="true"
       break
     fi
