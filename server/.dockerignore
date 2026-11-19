@@ -1,4 +1,15 @@
-.env
-.local
-bin
-.git
+# Only the Go module, source and migrations belong in build/test stages.
+**
+!go.mod
+!go.sum
+!cmd/
+!cmd/**
+!db/
+!db/**
+!internal/
+!internal/**
+**/.env*
+**/.local
+**/*.pem
+**/*.key
+**/*.dump

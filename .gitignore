@@ -8,3 +8,9 @@ mygo_windows_*.syso
 # Local agent and editor settings
 .claude/settings.local.json
 .claude/launch.json
+
+# Operator credentials and database exports
+**/.local/
+*.pem
+*.key
+*.dump

@@ -1,0 +1,92 @@
+name: Verify Spark
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan introduced commits (redacted)
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          range="$HEAD"
+          if [[ "$BASE" != 0000000000000000000000000000000000000000 ]]; then range="$BASE..$HEAD"; fi
+          docker run --rm --network none -v "$GITHUB_WORKSPACE:/repo:ro" -w /repo \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/repo \
+            ghcr.io/gitleaks/gitleaks@sha256:b5918eb91b8d2473cec722f066abb4352e4ffdc4ec9f4283ec143aba9ec9ebc4 \
+            git --no-banner --redact=100 --log-opts="$range" .
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run gen:types && git diff --exit-code -- src/api/schema.d.ts
+      - run: npm run typecheck
+      - run: npm test -- --testTimeout=30000
+      - run: npm run build
+
+  backend:
+    name: API and PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: '0'
+      SPARK_TEST_DATABASE_URL: postgres://spark:ci-only@127.0.0.1:5432/spark_test?sslmode=disable
+    services:
+      postgres:
+        image: postgres:17.6-alpine
+        env:
+          POSTGRES_USER: spark
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: spark_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U spark -d spark_test"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - name: Check operator release entrypoint
+        run: bash -n ../deploy/release-prod.sh && ../deploy/release-prod.sh --help >/dev/null
+      - run: go test ./... -count=1
+      - run: go build ./...
+      - run: go vet ./...

@@ -1841,9 +1841,16 @@ export function createTestAdapter(): TestAdapter {
       return pub;
     },
 
-    async listUsers() {
+    async listUsers(query) {
       requireAdmin(false);
-      return { items: users.map(toPublicUser) };
+      const limit = Math.max(1, Math.min(100, query?.limit ?? 50));
+      const offset = query?.cursor ? Math.max(0, Number(query.cursor) || 0) : 0;
+      const slice = users.slice(offset, offset + limit);
+      const nextCursor = offset + limit < users.length ? String(offset + limit) : undefined;
+      return {
+        items: slice.map(toPublicUser),
+        next_cursor: nextCursor,
+      };
     },
 
     async setUserStatus(id, body) {
