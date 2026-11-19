@@ -117,10 +117,22 @@ export async function parseApiErrorResponse(response: Response): Promise<ApiErro
     });
   }
 
+  if (response.status === 403) {
+    return new ApiError({
+      status: 403,
+      code: 'forbidden',
+      message: DEFAULT_CODE_MESSAGES.forbidden,
+      retryAfter,
+    });
+  }
+
   return new ApiError({
     status: response.status,
     code: response.status === 401 ? 'session_expired' : 'http_error',
-    message: `请求失败（HTTP ${response.status}）`,
+    message:
+      response.status === 401
+        ? DEFAULT_CODE_MESSAGES.session_expired
+        : `请求失败（HTTP ${response.status}）`,
     retryAfter,
   });
 }

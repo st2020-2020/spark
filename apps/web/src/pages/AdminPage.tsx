@@ -1,6 +1,6 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { InvitePreview } from '../api/types';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { InvitePreview, User } from '../api/types';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
@@ -11,6 +11,24 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 
 function isNotImplemented404(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
+}
+
+function isAuthError(err: unknown): boolean {
+  return err instanceof ApiError && (err.status === 401 || err.status === 403);
+}
+
+function dedupeUsersById(pages: Array<{ items: User[] }> | undefined): User[] {
+  if (!pages) return [];
+  const seen = new Set<string>();
+  const result: User[] = [];
+  for (const page of pages) {
+    for (const item of page.items) {
+      if (seen.has(item.id)) continue;
+      seen.add(item.id);
+      result.push(item);
+    }
+  }
+  return result;
 }
 
 export function AdminPage() {
@@ -45,23 +63,26 @@ export function AdminPage() {
     enabled: isAdmin && Boolean(expandedBatchId),
   });
 
-  const usersQuery = useQuery({
+  const usersQuery = useInfiniteQuery({
     queryKey: ['admin', 'users'],
-    queryFn: () => api.listUsers({ limit: 50 }),
+    queryFn: ({ pageParam }) => api.listUsers({ cursor: pageParam, limit: 50 }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor,
     enabled: isAdmin,
   });
 
   const budgetsQuery = useQuery({
     queryKey: ['admin', 'budgets'],
-    queryFn: async () => {
-      const cfg = await api.getBudgets();
-      setBudgetPlatform(String(cfg.platform_daily_units));
-      setBudgetUser(String(cfg.user_daily_units));
-      setWorkerConc(String(cfg.worker_concurrency));
-      return cfg;
-    },
+    queryFn: () => api.getBudgets(),
     enabled: isAdmin,
   });
+
+  useEffect(() => {
+    if (!budgetsQuery.data) return;
+    setBudgetPlatform(String(budgetsQuery.data.platform_daily_units));
+    setBudgetUser(String(budgetsQuery.data.user_daily_units));
+    setWorkerConc(String(budgetsQuery.data.worker_concurrency));
+  }, [budgetsQuery.data]);
 
   const modelConfigQuery = useQuery({
     queryKey: ['admin', 'model-config'],
@@ -119,16 +140,6 @@ export function AdminPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['admin', 'invite-codes', expandedBatchId] });
       pushToast({ message: '已更新邀请码状态' });
-    },
-    onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
-  });
-
-  const userStatusMutation = useMutation({
-    mutationFn: (params: { id: string; status: 'active' | 'disabled' }) =>
-      api.setUserStatus(params.id, { status: params.status }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
-      pushToast({ message: '已更新用户状态' });
     },
     onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
   });
@@ -198,11 +209,7 @@ export function AdminPage() {
     previewResult!.valid_rows > 0 &&
     !isPreviewExpired;
 
-  const extraAdminUnavailable =
-    isNotImplemented404(usersQuery.error) &&
-    isNotImplemented404(budgetsQuery.error) &&
-    isNotImplemented404(modelConfigQuery.error) &&
-    isNotImplemented404(failuresQuery.error);
+  const userItems = dedupeUsersById(usersQuery.data?.pages);
 
   return (
     <div>
@@ -323,8 +330,24 @@ export function AdminPage() {
         <section className="sp-card" aria-label="邀请码批次列表">
           <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>邀请码批次</h2>
           {batchesQuery.isLoading && <LoadingState message="加载批次…" />}
-          {batchesQuery.isError && <ErrorBanner error={batchesQuery.error} />}
-          {batchesQuery.data && (
+          {batchesQuery.isError &&
+            (isNotImplemented404(batchesQuery.error) ? (
+              <div className="sp-banner sp-banner--info" role="status">
+                <span>邀请码批次暂未开放</span>
+              </div>
+            ) : (
+              <ErrorBanner
+                error={batchesQuery.error}
+                onRetry={isAuthError(batchesQuery.error) ? undefined : () => void batchesQuery.refetch()}
+              />
+            ))}
+          {batchesQuery.data && batchesQuery.data.items.length === 0 && (
+            <EmptyState
+              title="暂无邀请码批次"
+              description="可在上方导入 CSV 创建首批邀请码。"
+            />
+          )}
+          {batchesQuery.data && batchesQuery.data.items.length > 0 && (
             <div className="sp-table-wrap">
               <table className="sp-table">
                 <thead>
@@ -389,7 +412,16 @@ export function AdminPage() {
             <div style={{ marginTop: 14 }}>
               <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>批次邀请码元数据（原始码不回显）</h3>
               {codesQuery.isLoading && <LoadingState message="加载邀请码…" />}
-              {codesQuery.data && (
+              {codesQuery.isError && (
+                <ErrorBanner
+                  error={codesQuery.error}
+                  onRetry={isAuthError(codesQuery.error) ? undefined : () => void codesQuery.refetch()}
+                />
+              )}
+              {codesQuery.data && codesQuery.data.items.length === 0 && (
+                <EmptyState title="该批次暂无邀请码" />
+              )}
+              {codesQuery.data && codesQuery.data.items.length > 0 && (
                 <div className="sp-table-wrap">
                   <table className="sp-table">
                     <thead>
@@ -434,155 +466,203 @@ export function AdminPage() {
           )}
         </section>
 
-        {extraAdminUnavailable ? (
-          <section className="sp-card" aria-label="高级管理功能">
-            <h2 style={{ margin: '0 0 6px', fontSize: 16 }}>用户管理、预算与模型配置</h2>
-            <p className="sp-help" style={{ margin: 0 }}>
-              暂未开放，将在对应里程碑接入。
-            </p>
-          </section>
-        ) : (
-          <>
-            <section className="sp-card" aria-label="用户管理">
-              <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>用户列表</h2>
-              {usersQuery.isLoading && <LoadingState message="加载用户列表…" />}
-              {usersQuery.isError && <ErrorBanner error={usersQuery.error} />}
-              {usersQuery.data && (
-                <div className="sp-table-wrap">
-                  <table className="sp-table">
-                    <thead>
-                      <tr>
-                        <th>邮箱</th>
-                        <th>角色</th>
-                        <th>状态</th>
-                        <th>操作</th>
+        {/* Users (Read-only with cursor pagination) */}
+        <section className="sp-card" aria-label="用户管理">
+          <div className="sp-row-between" style={{ marginBottom: 12 }}>
+            <h2 style={{ margin: 0, fontSize: 16 }}>用户列表</h2>
+            <span className="sp-help">只读账号运行元数据</span>
+          </div>
+          {usersQuery.isLoading && <LoadingState message="加载用户列表…" />}
+          {usersQuery.isError &&
+            !usersQuery.isFetchNextPageError &&
+            (isNotImplemented404(usersQuery.error) ? (
+              <div className="sp-banner sp-banner--info" role="status">
+                <span>用户列表暂未开放</span>
+              </div>
+            ) : (
+              <ErrorBanner
+                error={usersQuery.error}
+                onRetry={isAuthError(usersQuery.error) ? undefined : () => void usersQuery.refetch()}
+              />
+            ))}
+          {!usersQuery.isLoading && !usersQuery.isError && userItems.length === 0 && (
+            <EmptyState title="暂无用户" description="当前没有可展示的用户记录。" />
+          )}
+          {userItems.length > 0 && (
+            <div className="sp-stack" style={{ gap: 12 }}>
+              <div className="sp-table-wrap">
+                <table className="sp-table">
+                  <thead>
+                    <tr>
+                      <th>邮箱</th>
+                      <th>角色</th>
+                      <th>状态</th>
+                      <th>AI 整理</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {userItems.map((u) => (
+                      <tr key={u.id}>
+                        <td>{u.email}</td>
+                        <td>{u.role === 'admin' ? '管理员' : '个人用户'}</td>
+                        <td>
+                          <span
+                            className={`sp-pill ${
+                              u.status === 'active' ? 'sp-pill--green' : 'sp-pill--danger'
+                            }`}
+                          >
+                            {u.status === 'active' ? '正常' : '已禁用'}
+                          </span>
+                        </td>
+                        <td>{u.ai_enabled ? `已开启 (v${u.ai_policy_version})` : '未开启'}</td>
                       </tr>
-                    </thead>
-                    <tbody>
-                      {usersQuery.data.items.map((u) => (
-                        <tr key={u.id}>
-                          <td>{u.email}</td>
-                          <td>{u.role}</td>
-                          <td>
-                            <span
-                              className={`sp-pill ${
-                                u.status === 'active' ? 'sp-pill--green' : 'sp-pill--danger'
-                              }`}
-                            >
-                              {u.status === 'active' ? '正常' : '已禁用'}
-                            </span>
-                          </td>
-                          <td>
-                            {u.id !== user.id && (
-                              <button
-                                type="button"
-                                className="sp-btn sp-btn--sm"
-                                onClick={() =>
-                                  userStatusMutation.mutate({
-                                    id: u.id,
-                                    status: u.status === 'active' ? 'disabled' : 'active',
-                                  })
-                                }
-                              >
-                                {u.status === 'active' ? '禁用账号' : '恢复账号'}
-                              </button>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {usersQuery.isFetchNextPageError && (
+                <ErrorBanner
+                  error={usersQuery.error}
+                  onRetry={() => void usersQuery.fetchNextPage()}
+                />
+              )}
+              {usersQuery.hasNextPage && (
+                <div>
+                  <button
+                    type="button"
+                    className="sp-btn"
+                    disabled={usersQuery.isFetchingNextPage}
+                    onClick={() => void usersQuery.fetchNextPage()}
+                  >
+                    {usersQuery.isFetchingNextPage ? '加载中…' : '加载更多'}
+                  </button>
                 </div>
               )}
-            </section>
+            </div>
+          )}
+        </section>
 
-            <section className="sp-card" aria-label="预算与运行监控">
-              <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>额度与模型配置</h2>
-              <div className="sp-stack" style={{ gap: 12 }}>
-                {budgetsQuery.isError && (
-                  <div className="sp-help">额度配置暂未开放</div>
-                )}
-                {budgetsQuery.data && (
-                  <div className="sp-stack" style={{ gap: 8 }}>
-                    <div className="sp-row">
-                      <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
-                        <label htmlFor="budget-platform" className="sp-label">
-                          平台日预算 (units, {formatUnitsToYuan(Number(budgetPlatform) || 0)})
-                        </label>
-                        <input
-                          id="budget-platform"
-                          type="number"
-                          min={0}
-                          className="sp-input sp-mono"
-                          value={budgetPlatform}
-                          onChange={(e) => setBudgetPlatform(e.target.value)}
-                        />
-                      </div>
-                      <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
-                        <label htmlFor="budget-user" className="sp-label">
-                          单用户日额度 (units, {formatUnitsToYuan(Number(budgetUser) || 0)})
-                        </label>
-                        <input
-                          id="budget-user"
-                          type="number"
-                          min={0}
-                          className="sp-input sp-mono"
-                          value={budgetUser}
-                          onChange={(e) => setBudgetUser(e.target.value)}
-                        />
-                      </div>
-                      <div className="sp-field" style={{ width: 130 }}>
-                        <label htmlFor="worker-conc" className="sp-label">
-                          Worker 并发 (1-8)
-                        </label>
-                        <input
-                          id="worker-conc"
-                          type="number"
-                          min={1}
-                          max={8}
-                          className="sp-input sp-mono"
-                          value={workerConc}
-                          onChange={(e) => setWorkerConc(e.target.value)}
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        className="sp-btn sp-btn--primary"
-                        style={{ alignSelf: 'flex-end' }}
-                        disabled={saveBudgetMutation.isPending}
-                        onClick={() => saveBudgetMutation.mutate()}
-                      >
-                        保存预算
-                      </button>
-                    </div>
-                    <div className="sp-help">
-                      当前配置版本 v{budgetsQuery.data.version} · 日额度对后续预留即时生效；修改 Worker 并发数需重启 Worker 容器后生效。
-                    </div>
+        {/* Budgets, Model Config & Failures (Each handles its own loading/404/error independently) */}
+        <section className="sp-card" aria-label="预算与运行监控">
+          <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>额度与模型配置</h2>
+          <div className="sp-stack" style={{ gap: 12 }}>
+            {budgetsQuery.isLoading && <LoadingState message="加载预算配置…" />}
+            {budgetsQuery.isError &&
+              (isNotImplemented404(budgetsQuery.error) ? (
+                <div className="sp-banner sp-banner--info" role="status">
+                  <span>额度配置暂未开放</span>
+                </div>
+              ) : (
+                <ErrorBanner
+                  error={budgetsQuery.error}
+                  onRetry={
+                    isAuthError(budgetsQuery.error) ? undefined : () => void budgetsQuery.refetch()
+                  }
+                />
+              ))}
+            {budgetsQuery.data && (
+              <div className="sp-stack" style={{ gap: 8 }}>
+                <div className="sp-row">
+                  <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
+                    <label htmlFor="budget-platform" className="sp-label">
+                      平台日预算 (units, {formatUnitsToYuan(Number(budgetPlatform) || 0)})
+                    </label>
+                    <input
+                      id="budget-platform"
+                      type="number"
+                      min={0}
+                      className="sp-input sp-mono"
+                      value={budgetPlatform}
+                      onChange={(e) => setBudgetPlatform(e.target.value)}
+                    />
                   </div>
-                )}
-
-                {modelConfigQuery.data && (
-                  <div className="sp-help">
-                    模型配置：{modelConfigQuery.data.provider} / {modelConfigQuery.data.model_id} ·
-                    地域 {modelConfigQuery.data.region} ·{' '}
-                    {modelConfigQuery.data.enabled ? '已启用' : '未启用'}
+                  <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
+                    <label htmlFor="budget-user" className="sp-label">
+                      单用户日额度 (units, {formatUnitsToYuan(Number(budgetUser) || 0)})
+                    </label>
+                    <input
+                      id="budget-user"
+                      type="number"
+                      min={0}
+                      className="sp-input sp-mono"
+                      value={budgetUser}
+                      onChange={(e) => setBudgetUser(e.target.value)}
+                    />
                   </div>
-                )}
-
-                {failuresQuery.data && (
-                  <div className="sp-help">
-                    最近 24 小时阶段失败：
-                    {failuresQuery.data.items.length === 0
-                      ? '暂无'
-                      : failuresQuery.data.items
-                          .map((f) => `${f.stage}/${f.error_code}: ${f.count}`)
-                          .join('，')}
+                  <div className="sp-field" style={{ width: 130 }}>
+                    <label htmlFor="worker-conc" className="sp-label">
+                      Worker 并发 (1-8)
+                    </label>
+                    <input
+                      id="worker-conc"
+                      type="number"
+                      min={1}
+                      max={8}
+                      className="sp-input sp-mono"
+                      value={workerConc}
+                      onChange={(e) => setWorkerConc(e.target.value)}
+                    />
                   </div>
-                )}
+                  <button
+                    type="button"
+                    className="sp-btn sp-btn--primary"
+                    style={{ alignSelf: 'flex-end' }}
+                    disabled={saveBudgetMutation.isPending}
+                    onClick={() => saveBudgetMutation.mutate()}
+                  >
+                    保存预算
+                  </button>
+                </div>
+                <div className="sp-help">
+                  当前配置版本 v{budgetsQuery.data.version} · 日额度对后续预留即时生效；修改 Worker 并发数需重启 Worker 容器后生效。
+                </div>
               </div>
-            </section>
-          </>
-        )}
+            )}
+
+            {modelConfigQuery.isError &&
+              (isNotImplemented404(modelConfigQuery.error) ? (
+                <div className="sp-help">模型配置暂未开放</div>
+              ) : (
+                <ErrorBanner
+                  error={modelConfigQuery.error}
+                  onRetry={
+                    isAuthError(modelConfigQuery.error)
+                      ? undefined
+                      : () => void modelConfigQuery.refetch()
+                  }
+                />
+              ))}
+            {modelConfigQuery.data && (
+              <div className="sp-help">
+                模型配置：{modelConfigQuery.data.provider} / {modelConfigQuery.data.model_id} ·
+                地域 {modelConfigQuery.data.region} ·{' '}
+                {modelConfigQuery.data.enabled ? '已启用' : '未启用'}
+              </div>
+            )}
+
+            {failuresQuery.isError &&
+              (isNotImplemented404(failuresQuery.error) ? (
+                <div className="sp-help">失败统计暂未开放</div>
+              ) : (
+                <ErrorBanner
+                  error={failuresQuery.error}
+                  onRetry={
+                    isAuthError(failuresQuery.error) ? undefined : () => void failuresQuery.refetch()
+                  }
+                />
+              ))}
+            {failuresQuery.data && (
+              <div className="sp-help">
+                最近 24 小时阶段失败：
+                {failuresQuery.data.items.length === 0
+                  ? '暂无'
+                  : failuresQuery.data.items
+                      .map((f) => `${f.stage}/${f.error_code}: ${f.count}`)
+                      .join('，')}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );

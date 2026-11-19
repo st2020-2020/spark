@@ -137,6 +137,7 @@ func (s *Server) Router() *gin.Engine {
 	})
 	admin.GET("/budgets", s.handle(s.getBudgets))
 	admin.PUT("/budgets", s.handle(s.setBudgets))
+	admin.GET("/users", s.handle(s.listUsers))
 	admin.POST("/invite-imports", s.handle(s.previewInvites))
 	admin.POST("/invite-imports/:id/commit", s.handle(s.commitInvites))
 	admin.GET("/invite-batches", s.handle(s.listBatches))
