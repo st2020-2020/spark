@@ -2,12 +2,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
+  ChevronRight,
   Folder,
   Inbox,
   Layers,
   LogOut,
   Menu,
   MoreHorizontal,
+  PenLine,
   Plus,
   Search,
   Settings,
@@ -19,6 +21,20 @@ import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
+import { projectToneClass } from '../lib/projectTone';
+import { BrandLink, SparkGlyph } from './Brand';
+import { QuickCaptureSheet } from './QuickCaptureSheet';
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
+function formatBadgeCount(count: number): string {
+  return count > 99 ? '99+' : String(count);
+}
 
 export function AppShell({
   wide = false,
@@ -36,6 +52,7 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [inputFocusedMobile, setInputFocusedMobile] = useState(false);
+  const [captureOpen, setCaptureOpen] = useState(false);
 
   const drawerPanelRef = useRef<HTMLDivElement | null>(null);
   const accountWrapRef = useRef<HTMLDivElement | null>(null);
@@ -63,12 +80,15 @@ export function AppShell({
   useEffect(() => {
     setDrawerOpen(false);
     setAccountMenuOpen(false);
+    setCaptureOpen(false);
   }, [location.pathname, location.search]);
 
   useEffect(() => {
     if (!drawerOpen) return;
     const prevActive = document.activeElement as HTMLElement | null;
     drawerPanelRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
@@ -78,6 +98,7 @@ export function AppShell({
     window.addEventListener('keydown', onKeyDown);
     return () => {
       window.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
       prevActive?.focus?.();
     };
   }, [drawerOpen]);
@@ -102,6 +123,7 @@ export function AppShell({
     };
   }, [accountMenuOpen]);
 
+  // The mobile tab bar steps aside while typing so the soft keyboard never covers the save action.
   useEffect(() => {
     const isEditable = (el: EventTarget | null) => {
       if (!(el instanceof HTMLElement)) return false;
@@ -139,10 +161,49 @@ export function AppShell({
   const sidebarProjects = activeItems.slice(0, 5);
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
   const isInbox = location.pathname === '/inbox';
+  const badgeText = formatBadgeCount(pendingSuggestionsCount);
 
-  const handleQuickCaptureJump = () => {
-    navigate('/inbox?focus=composer');
+  // On the inbox the composer is already on screen: focus it in place so the draft and scroll
+  // position stay intact. Everywhere else, capture in a sheet without leaving the page.
+  const handleQuickCapture = () => {
+    if (isInbox) {
+      const editable = document.querySelector<HTMLElement>('.sp-composer [contenteditable="true"]');
+      if (editable) {
+        editable.focus();
+        editable.scrollIntoView({
+          block: 'center',
+          behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+        });
+        return;
+      }
+      navigate('/inbox?focus=composer');
+      return;
+    }
+    setDrawerOpen(false);
+    setCaptureOpen(true);
   };
+  const quickCaptureRef = useRef(handleQuickCapture);
+  quickCaptureRef.current = handleQuickCapture;
+
+  // "N" opens quick capture from anywhere, unless the person is typing or a dialog is open.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'n' || event.isComposing || event.keyCode === 229) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      ) {
+        return;
+      }
+      if (document.querySelector('[aria-modal="true"]')) return;
+      event.preventDefault();
+      quickCaptureRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const renderPrimaryAndProjectsNav = () => (
     <>
@@ -158,7 +219,7 @@ export function AppShell({
                   to={item.to}
                   className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
                 >
-                  <Icon size={16} strokeWidth={2} aria-hidden="true" />
+                  <Icon size={17} strokeWidth={2} aria-hidden="true" />
                   <span>{item.label}</span>
                 </NavLink>
                 {showSuggestionBadge && (
@@ -168,7 +229,7 @@ export function AppShell({
                     aria-label={`${pendingSuggestionsCount} 条待确认 AI 建议`}
                     title={`${pendingSuggestionsCount} 条待确认 AI 建议`}
                   >
-                    {pendingSuggestionsCount > 99 ? '99+' : pendingSuggestionsCount}
+                    {badgeText}
                   </Link>
                 )}
               </li>
@@ -182,10 +243,9 @@ export function AppShell({
         <Link
           to={hasTrulyZeroProjects ? '/projects?create=1' : '/projects'}
           aria-label="查看或新建项目"
-          className="sp-btn--quiet sp-btn--icon"
-          style={{ width: 26, height: 26, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+          className="sp-icon-btn sp-icon-btn--sm"
         >
-          <Plus size={16} strokeWidth={2} aria-hidden="true" />
+          <Plus size={15} strokeWidth={2} aria-hidden="true" />
         </Link>
       </div>
 
@@ -194,23 +254,16 @@ export function AppShell({
           <li key={proj.id}>
             <NavLink
               to={`/projects/${proj.id}`}
-              className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
-              style={{ fontSize: 13 }}
+              className={({ isActive }) => `sp-nav-link sp-nav-link--project ${isActive ? 'active' : ''}`}
             >
-              <Folder size={16} strokeWidth={2} aria-hidden="true" />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {proj.name}
-              </span>
+              <span className={`sp-project-dot ${projectToneClass(proj.id)}`} aria-hidden="true" />
+              <span className="sp-truncate">{proj.name}</span>
             </NavLink>
           </li>
         ))}
         {hasTrulyZeroProjects ? (
           <li>
-            <Link
-              to="/projects?create=1"
-              className="sp-nav-link sp-nav-link--muted"
-              style={{ fontSize: 13 }}
-            >
+            <Link to="/projects?create=1" className="sp-nav-link sp-nav-link--muted">
               <span>创建项目</span>
             </Link>
           </li>
@@ -222,7 +275,6 @@ export function AppShell({
               className={({ isActive }) =>
                 `sp-nav-link sp-nav-link--muted ${isActive ? 'active' : ''}`
               }
-              style={{ fontSize: 13 }}
             >
               <span>查看全部</span>
             </NavLink>
@@ -240,58 +292,56 @@ export function AppShell({
         </div>
       )}
 
-      {/* Tablet top bar (768px - 1023px) */}
-      <header className="sp-tablet-header">
-        <div className="sp-row">
-          <button
-            type="button"
-            className="sp-btn--quiet sp-btn--icon"
-            aria-label="打开导航菜单"
-            onClick={() => setDrawerOpen(true)}
-          >
-            <Menu size={18} strokeWidth={1.7} />
-          </button>
-          <Link to="/inbox" className="sp-brand" style={{ padding: 0 }}>
-            <span className="sp-brand-mark" aria-hidden="true">S</span>
-            <span>Spark</span>
-          </Link>
+      {/* Top bar for tablet (menu + drawer) and phone (brand + status), hidden on desktop. */}
+      <header className="sp-topbar">
+        <div className="sp-topbar-inner">
+          <div className="sp-topbar-start">
+            <button
+              type="button"
+              className="sp-icon-btn sp-topbar-menu"
+              aria-label="打开导航菜单"
+              onClick={() => setDrawerOpen(true)}
+            >
+              <Menu size={20} strokeWidth={2} />
+            </button>
+            <BrandLink />
+          </div>
+          <div className="sp-topbar-end">
+            {pendingSuggestionsCount > 0 && (
+              <Link
+                to="/unclassified?tab=suggested"
+                className="sp-topbar-chip"
+                aria-label={`待确认建议 ${pendingSuggestionsCount} 条`}
+              >
+                <SparkGlyph size={12} />
+                <span>{badgeText} 条待确认</span>
+              </Link>
+            )}
+            {!isInbox && (
+              <button
+                type="button"
+                className="sp-btn sp-btn--sm sp-topbar-capture"
+                onClick={handleQuickCapture}
+              >
+                <PenLine size={15} strokeWidth={2} aria-hidden="true" />
+                <span>记一条</span>
+              </button>
+            )}
+          </div>
         </div>
-        {!isInbox && (
-          <button type="button" className="sp-btn--quiet" onClick={handleQuickCaptureJump}>
-            记一条
-          </button>
-        )}
-      </header>
-
-      {/* Mobile top bar (< 768px) */}
-      <header className="sp-mobile-header">
-        <div className="sp-row">
-          <button
-            type="button"
-            className="sp-btn--quiet sp-btn--icon"
-            aria-label="打开导航菜单"
-            onClick={() => setDrawerOpen(true)}
-          >
-            <Menu size={18} strokeWidth={1.7} />
-          </button>
-          <Link to="/inbox" className="sp-brand" style={{ padding: 0, fontSize: 19 }}>
-            <span className="sp-brand-mark" aria-hidden="true">S</span>
-            <span>Spark</span>
-          </Link>
-        </div>
-        {!isInbox && (
-          <button type="button" className="sp-btn--quiet" onClick={handleQuickCaptureJump}>
-            记一条
-          </button>
-        )}
       </header>
 
       <div className={`sp-workspace ${wide ? 'sp-workspace--wide' : ''}`}>
         <aside className="sp-sidebar" aria-label="主导航">
-          <Link to="/inbox" className="sp-brand">
-            <span className="sp-brand-mark" aria-hidden="true">S</span>
-            <span>Spark</span>
-          </Link>
+          <BrandLink className="sp-brand--sidebar" />
+
+          <button type="button" className="sp-capture-btn" onClick={handleQuickCapture}>
+            <PenLine size={16} strokeWidth={2} aria-hidden="true" />
+            <span>记一条</span>
+            <kbd className="sp-kbd-hint" aria-hidden="true">
+              N
+            </kbd>
+          </button>
 
           {renderPrimaryAndProjectsNav()}
 
@@ -304,7 +354,7 @@ export function AppShell({
           >
             <NavLink
               to="/trash"
-              className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
+              className={({ isActive }) => `sp-nav-link sp-nav-link--muted ${isActive ? 'active' : ''}`}
             >
               <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
               <span>回收站</span>
@@ -321,19 +371,9 @@ export function AppShell({
               <span className="sp-avatar" aria-hidden="true">
                 {userInitial}
               </span>
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span
-                  style={{
-                    display: 'block',
-                    fontWeight: 500,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {user?.email}
-                </span>
-                <span className="sp-help" style={{ fontSize: 11 }}>
+              <span className="sp-account-text">
+                <span className="sp-account-email">{user?.email}</span>
+                <span className="sp-account-role">
                   {user?.role === 'admin' ? '管理员' : '个人空间'}
                 </span>
               </span>
@@ -341,28 +381,25 @@ export function AppShell({
             </button>
 
             {accountMenuOpen && (
-              <div
-                className="sp-account-menu"
-                role="menu"
-                aria-label="账号与系统菜单"
-              >
+              <div className="sp-account-menu" role="menu" aria-label="账号与系统菜单">
                 <Link to="/settings" role="menuitem" className="sp-menu-item">
-                  <Settings size={15} strokeWidth={2} aria-hidden="true" />
+                  <Settings size={16} strokeWidth={2} aria-hidden="true" />
                   <span>设置与会话</span>
                 </Link>
                 {user?.role === 'admin' && (
                   <Link to="/admin" role="menuitem" className="sp-menu-item">
-                    <ShieldCheck size={15} strokeWidth={2} aria-hidden="true" />
+                    <ShieldCheck size={16} strokeWidth={2} aria-hidden="true" />
                     <span>管理后台</span>
                   </Link>
                 )}
+                <div className="sp-menu-divider" role="separator" />
                 <button
                   type="button"
                   role="menuitem"
                   className="sp-menu-item sp-menu-item--danger"
                   onClick={() => void logout()}
                 >
-                  <LogOut size={15} strokeWidth={2} aria-hidden="true" />
+                  <LogOut size={16} strokeWidth={2} aria-hidden="true" />
                   <span>退出登录</span>
                 </button>
               </div>
@@ -373,49 +410,50 @@ export function AppShell({
         <main className="sp-main-column">{children}</main>
       </div>
 
-      {/* Mobile bottom bar (< 768px): 收件箱 / 项目 / 搜索 / 更多 */}
+      {/* Phone tab bar: 收件箱 / 项目 / 记一条 / 搜索 / 更多 */}
       <nav
-        className={`sp-mobile-bottom-nav ${inputFocusedMobile ? 'sp-mobile-bottom-nav--hidden' : ''}`}
+        className={`sp-tabbar ${inputFocusedMobile ? 'sp-tabbar--hidden' : ''}`}
         aria-label="手机底部导航"
       >
-        <NavLink
-          to="/inbox"
-          className={({ isActive }) => `sp-mobile-nav-item ${isActive ? 'active' : ''}`}
-        >
-          <Inbox size={18} strokeWidth={2} aria-hidden="true" />
+        <NavLink to="/inbox" className={({ isActive }) => `sp-tab ${isActive ? 'active' : ''}`}>
+          <Inbox size={22} strokeWidth={1.9} aria-hidden="true" />
           <span>收件箱</span>
         </NavLink>
-        <NavLink
-          to="/projects"
-          className={({ isActive }) => `sp-mobile-nav-item ${isActive ? 'active' : ''}`}
-        >
-          <Folder size={18} strokeWidth={2} aria-hidden="true" />
+        <NavLink to="/projects" className={({ isActive }) => `sp-tab ${isActive ? 'active' : ''}`}>
+          <Folder size={22} strokeWidth={1.9} aria-hidden="true" />
           <span>项目</span>
         </NavLink>
-        <NavLink
-          to="/collections"
-          className={({ isActive }) => `sp-mobile-nav-item ${isActive ? 'active' : ''}`}
-        >
-          <Search size={18} strokeWidth={2} aria-hidden="true" />
+        <button type="button" className="sp-tab sp-tab--capture" aria-label="记一条" onClick={handleQuickCapture}>
+          <span className="sp-tab-capture-disc" aria-hidden="true">
+            <Plus size={24} strokeWidth={2.4} />
+          </span>
+        </button>
+        <NavLink to="/collections" className={({ isActive }) => `sp-tab ${isActive ? 'active' : ''}`}>
+          <Search size={22} strokeWidth={1.9} aria-hidden="true" />
           <span>搜索</span>
         </NavLink>
         <button
           type="button"
-          className="sp-mobile-nav-item sp-mobile-nav-item--relative"
+          className={`sp-tab ${drawerOpen ? 'active' : ''}`}
           aria-label="更多导航"
+          aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(true)}
         >
-          <MoreHorizontal size={18} strokeWidth={2} aria-hidden="true" />
+          <span className="sp-tab-icon-wrap">
+            <MoreHorizontal size={22} strokeWidth={1.9} aria-hidden="true" />
+            {pendingSuggestionsCount > 0 && (
+              <span className="sp-tab-badge" aria-hidden="true">
+                {badgeText}
+              </span>
+            )}
+          </span>
           <span>更多</span>
-          {pendingSuggestionsCount > 0 && (
-            <span className="sp-mobile-nav-badge" aria-hidden="true">
-              {pendingSuggestionsCount > 99 ? '99+' : pendingSuggestionsCount}
-            </span>
-          )}
         </button>
       </nav>
 
-      {/* Tablet & Mobile Navigation Drawer */}
+      <QuickCaptureSheet open={captureOpen} onClose={() => setCaptureOpen(false)} />
+
+      {/* Tablet side drawer / phone bottom sheet — one panel, two presentations. */}
       {drawerOpen && (
         <div
           className="sp-drawer-backdrop"
@@ -432,37 +470,41 @@ export function AppShell({
             aria-label="导航菜单"
             tabIndex={-1}
           >
-            <div className="sp-row-between" style={{ marginBottom: 14 }}>
-              <Link to="/inbox" className="sp-brand" style={{ padding: '0 8px' }}>
-                <span className="sp-brand-mark" aria-hidden="true">S</span>
-                <span>Spark</span>
-              </Link>
+            <span className="sp-sheet-grabber" aria-hidden="true" />
+            <div className="sp-drawer-head">
+              <BrandLink />
               <button
                 type="button"
-                className="sp-btn--quiet sp-btn--icon"
+                className="sp-icon-btn"
                 aria-label="关闭导航菜单"
                 onClick={() => setDrawerOpen(false)}
               >
-                <X size={18} strokeWidth={1.7} />
+                <X size={20} strokeWidth={2} />
               </button>
             </div>
 
+            <Link to="/settings" className="sp-drawer-account">
+              <span className="sp-avatar sp-avatar--lg" aria-hidden="true">
+                {userInitial}
+              </span>
+              <span className="sp-account-text">
+                <span className="sp-account-email">{user?.email}</span>
+                <span className="sp-account-role">
+                  {user?.role === 'admin' ? '管理员 · 设置与会话' : '设置与会话'}
+                </span>
+              </span>
+              <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
+            </Link>
+
             {renderPrimaryAndProjectsNav()}
 
-            <div className="sp-sidebar-footer" style={{ paddingTop: 24 }}>
+            <div className="sp-drawer-footer">
               <NavLink
                 to="/trash"
                 className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
               >
                 <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
                 <span>回收站</span>
-              </NavLink>
-              <NavLink
-                to="/settings"
-                className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
-              >
-                <Settings size={16} strokeWidth={2} aria-hidden="true" />
-                <span>设置与会话</span>
               </NavLink>
               {user?.role === 'admin' && (
                 <NavLink
@@ -473,15 +515,9 @@ export function AppShell({
                   <span>管理后台</span>
                 </NavLink>
               )}
-              <div
-                className="sp-help sp-break-anywhere"
-                style={{ padding: '10px 12px 6px', borderTop: '1px solid var(--sp-border)', marginTop: 6 }}
-              >
-                {user?.email}
-              </div>
               <button
                 type="button"
-                className="sp-nav-link sp-menu-item--danger"
+                className="sp-nav-link sp-nav-link--danger"
                 onClick={() => void logout()}
               >
                 <LogOut size={16} strokeWidth={2} aria-hidden="true" />

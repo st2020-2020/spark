@@ -48,7 +48,7 @@ export function TrashPage() {
       />
 
       {actionError && (
-        <div className="sp-banner sp-banner--error" style={{ marginBottom: 14 }} role="alert">
+        <div className="sp-banner sp-banner--error sp-spaced" role="alert">
           <span>{actionError}</span>
         </div>
       )}
@@ -61,7 +61,7 @@ export function TrashPage() {
         <EmptyState title="回收站是空的" description="移入回收站的收藏会暂时保留在这里。" />
       )}
 
-      <div className="sp-stack">
+      <div className="sp-note-list">
         {items.map((col) => (
           <article key={col.id} className="sp-note">
             <div className="sp-note-meta">
@@ -74,8 +74,7 @@ export function TrashPage() {
               </Link>
               <button
                 type="button"
-                className="sp-btn sp-btn--sm"
-                style={{ marginLeft: 'auto' }}
+                className="sp-btn sp-btn--sm sp-note-footer-action"
                 disabled={restoreMutation.isPending}
                 onClick={() => restoreMutation.mutate(col)}
               >
@@ -88,7 +87,7 @@ export function TrashPage() {
       </div>
 
       {trashQuery.hasNextPage && (
-        <div style={{ textAlign: 'center', marginTop: 20 }}>
+        <div className="sp-load-more">
           <button
             type="button"
             className="sp-btn"

@@ -7,33 +7,16 @@ import { PageHeader } from '../components/PageHeader';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import {
+  PALETTES,
+  applyPalette,
+  applyThemePreference,
+  readPalette,
+  readThemePref,
+  type PaletteId,
+  type ThemePref,
+} from '../lib/appearance';
 import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/format';
-
-type ThemePref = 'system' | 'light' | 'dark';
-
-function readStoredTheme(): ThemePref {
-  try {
-    const val = window.localStorage.getItem('spark:theme');
-    if (val === 'light' || val === 'dark') return val;
-  } catch {
-    // Ignore storage error
-  }
-  return 'system';
-}
-
-export function applyThemePreference(pref: ThemePref): void {
-  if (pref === 'system') {
-    document.documentElement.removeAttribute('data-theme');
-  } else {
-    document.documentElement.setAttribute('data-theme', pref);
-  }
-  try {
-    if (pref === 'system') window.localStorage.removeItem('spark:theme');
-    else window.localStorage.setItem('spark:theme', pref);
-  } catch {
-    // Ignore storage error
-  }
-}
 
 export function SettingsPage() {
   const api = useApi();
@@ -41,7 +24,8 @@ export function SettingsPage() {
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
-  const [themePref, setThemePref] = useState<ThemePref>(() => readStoredTheme());
+  const [themePref, setThemePref] = useState<ThemePref>(() => readThemePref());
+  const [palette, setPalette] = useState<PaletteId>(() => readPalette());
   const [aiConsentOpen, setAiConsentOpen] = useState(false);
 
   const usageQuery = useQuery({
@@ -90,15 +74,13 @@ export function SettingsPage() {
     <div>
       <PageHeader title="设置" showSearch={false} />
 
-      <div className="sp-stack" style={{ gap: 14 }}>
+      <div className="sp-stack sp-stack--loose">
         <section className="sp-card" aria-label="账号信息">
-          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>账号</h2>
+          <h2 className="sp-card-title">账号</h2>
           <div className="sp-row-between">
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 500 }}>{user?.email}</div>
-              <div className="sp-help">
-                {user?.role === 'admin' ? '管理员' : '个人用户'}
-              </div>
+            <div className="sp-setting-row-main">
+              <span className="sp-strong sp-break-anywhere">{user?.email}</span>
+              <span className="sp-help">{user?.role === 'admin' ? '管理员' : '个人用户'}</span>
             </div>
             <button type="button" className="sp-btn" onClick={() => void logout()}>
               退出登录
@@ -107,8 +89,32 @@ export function SettingsPage() {
         </section>
 
         <section className="sp-card" aria-label="界面外观">
-          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>外观主题</h2>
-          <div className="sp-segmented" role="group" aria-label="选择外观主题">
+          <h2 className="sp-card-title">主题配色</h2>
+          <div className="sp-palette-grid" role="group" aria-label="选择主题配色">
+            {PALETTES.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                className="sp-palette-option"
+                aria-pressed={palette === p.id}
+                onClick={() => {
+                  setPalette(p.id);
+                  applyPalette(p.id);
+                }}
+              >
+                <span className="sp-palette-swatches" aria-hidden="true">
+                  {p.swatches.map((color) => (
+                    <span key={color} style={{ background: color }} />
+                  ))}
+                </span>
+                <span className="sp-palette-name">{p.label}</span>
+                <span className="sp-palette-hint">{p.hint}</span>
+              </button>
+            ))}
+          </div>
+
+          <h3 className="sp-card-subtitle">明暗模式</h3>
+          <div className="sp-segmented" role="group" aria-label="选择明暗模式">
             {([
               { id: 'system', label: '跟随系统', Icon: Monitor },
               { id: 'light', label: '浅色', Icon: Sun },
@@ -124,7 +130,7 @@ export function SettingsPage() {
                   applyThemePreference(pref);
                 }}
               >
-                <Icon size={14} strokeWidth={2} aria-hidden="true" />
+                <Icon size={15} strokeWidth={2} aria-hidden="true" />
                 <span>{label}</span>
               </button>
             ))}
@@ -132,14 +138,12 @@ export function SettingsPage() {
         </section>
 
         <section className="sp-card" aria-label="平台 AI 自动整理">
-          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>AI 自动整理</h2>
-          <div className="sp-stack" style={{ gap: 10 }}>
-            <div className="sp-row-between">
-              <div className="sp-stack" style={{ gap: 4, minWidth: 0 }}>
+          <h2 className="sp-card-title">AI 自动整理</h2>
+          <div className="sp-stack">
+            <div className="sp-setting-row">
+              <div className="sp-setting-row-main">
                 <div className="sp-row">
-                  <span
-                    className={`sp-pill ${user?.ai_enabled ? 'sp-pill--green' : ''}`}
-                  >
+                  <span className={`sp-pill ${user?.ai_enabled ? 'sp-pill--success' : ''}`}>
                     {user?.ai_enabled
                       ? '已开启'
                       : !aiPlatformEnabled
@@ -164,7 +168,6 @@ export function SettingsPage() {
                 <button
                   type="button"
                   className={`sp-btn sp-btn--sm ${user?.ai_enabled ? '' : 'sp-btn--primary'}`}
-                  style={{ flexShrink: 0 }}
                   disabled={prefsMutation.isPending}
                   onClick={() => {
                     if (!user?.ai_enabled) setAiConsentOpen(true);
@@ -181,8 +184,8 @@ export function SettingsPage() {
             ) : usageQuery.isError ? (
               <div className="sp-help">{getFriendlyErrorMessage(usageQuery.error)}</div>
             ) : usageQuery.data ? (
-              <div className="sp-stack" style={{ gap: 6 }}>
-                <div className="sp-help" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              <div className="sp-stack sp-stack--tight">
+                <div className="sp-help sp-tabular">
                   当日额度（{usageQuery.data.budget_day} · 北京时间）：已结算{' '}
                   {formatUnitsToYuan(usageQuery.data.settled_units)} / 预留{' '}
                   {formatUnitsToYuan(usageQuery.data.reserved_units)} / 上限{' '}
@@ -206,31 +209,26 @@ export function SettingsPage() {
         </section>
 
         <section className="sp-card" aria-label="活跃设备会话">
-          <h2 style={{ margin: '0 0 12px', fontSize: 15 }}>活跃设备会话</h2>
+          <h2 className="sp-card-title">活跃设备会话</h2>
           {isSessionsUnavailable ? (
-            <p className="sp-help" style={{ margin: 0 }}>
-              多设备会话管理暂未开放，将在后续里程碑接入。
-            </p>
+            <p className="sp-help">多设备会话管理暂未开放，将在后续里程碑接入。</p>
           ) : (
             <div>
               {(sessionsQuery.data?.items ?? []).map((sess) => (
                 <div key={sess.id} className="sp-session-row">
-                  <div style={{ minWidth: 0, flex: 1 }}>
+                  <div className="sp-setting-row-main">
                     <div className="sp-row">
-                      <span style={{ fontWeight: 500 }} title={sess.device_label}>
+                      <span className="sp-strong" title={sess.device_label}>
                         {formatDeviceLabel(sess.device_label)}
                       </span>
                       {sess.current && <span className="sp-pill sp-pill--green">当前设备</span>}
                     </div>
-                    <div className="sp-help" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                      到期于 {formatDateTime(sess.expires_at)}
-                    </div>
+                    <div className="sp-help sp-tabular">到期于 {formatDateTime(sess.expires_at)}</div>
                   </div>
                   {!sess.current && (
                     <button
                       type="button"
                       className="sp-btn sp-btn--sm sp-btn--danger"
-                      style={{ flexShrink: 0 }}
                       disabled={revokeMutation.isPending}
                       onClick={() => revokeMutation.mutate(sess.id)}
                     >

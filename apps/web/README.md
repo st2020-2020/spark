@@ -1,6 +1,6 @@
 # Spark Web (`apps/web`)
 
-Spark 在线邀请内测版 Web 前端，基于 React、TypeScript、Vite、React Router、TanStack Query 与受限 Tiptap 编辑器构建，接口类型由 `contracts/openapi.json` 生成。
+Spark 在线邀请内测版 Web 前端，基于 React、TypeScript、Vite、React Router、TanStack Query 与受限 Tiptap 编辑器构建，接口类型由 `contracts/openapi.json` 生成。页面行为见 [WEB.md](../../docs/design/WEB.md)，视觉、配色令牌与组件规范见 [WEB-VISUAL.md](../../docs/design/WEB-VISUAL.md)。
 
 ## 依赖安装与类型生成
 

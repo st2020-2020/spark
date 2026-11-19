@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, Search } from 'lucide-react';
+import { ArrowLeft, Pencil, Search, X } from 'lucide-react';
 import type { CollectionType, ProjectState } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { CollectionCard } from '../components/CollectionCard';
@@ -12,6 +12,7 @@ import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks
 import { useApi } from '../context/ApiContext';
 import { useToast } from '../context/ToastContext';
 import { projectStateLabel } from '../lib/format';
+import { projectToneClass } from '../lib/projectTone';
 
 export function ProjectDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -145,48 +146,42 @@ export function ProjectDetailPage() {
 
   return (
     <div>
-      <div style={{ marginBottom: 12 }}>
+      <div className="sp-detail-bar">
         <Link to="/projects" className="sp-btn--quiet sp-back-link">
-          <ArrowLeft size={16} strokeWidth={2} aria-hidden="true" />
-          <span>返回项目</span>
+          <ArrowLeft size={18} strokeWidth={2} aria-hidden="true" />
+          <span>项目</span>
         </Link>
+        <div className="sp-detail-actions">
+          <button type="button" className="sp-btn--quiet" onClick={openEditModal}>
+            <Pencil size={16} strokeWidth={2} aria-hidden="true" />
+            <span className="sp-collapse-label">编辑项目</span>
+          </button>
+        </div>
       </div>
 
+      <span className={`sp-tape sp-tape--header ${projectToneClass(project.id)}`} aria-hidden="true" />
       <PageHeader
         title={project.name}
         badge={
           <span
-            className="sp-help"
-            style={{
-              color: project.state === 'active' ? 'var(--sp-primary)' : 'var(--sp-muted)',
-              fontWeight: 500,
-              whiteSpace: 'nowrap',
-            }}
+            className={`sp-project-state ${
+              project.state === 'active' ? 'sp-project-state--active' : ''
+            }`}
           >
             {projectStateLabel(project.state)}
           </span>
         }
-        actions={
-          <button type="button" className="sp-btn--quiet" onClick={openEditModal}>
-            <Pencil size={15} strokeWidth={2} aria-hidden="true" />
-            <span>编辑项目</span>
-          </button>
-        }
       />
 
       {(project.description || project.focus_points.length > 0) && (
-        <details className="sp-details" style={{ marginBottom: 20 }}>
+        <details className="sp-details sp-project-about">
           <summary>项目说明与关注点</summary>
-          <div style={{ padding: '8px 0 4px' }}>
-            {project.description && (
-              <p className="sp-help sp-break-anywhere" style={{ margin: '0 0 8px', color: 'var(--sp-fg)' }}>
-                {project.description}
-              </p>
-            )}
+          <div className="sp-project-about-body">
+            {project.description && <p className="sp-break-anywhere">{project.description}</p>}
             {project.focus_points.length > 0 && (
               <div className="sp-row">
                 {project.focus_points.map((fp) => (
-                  <span key={fp} className="sp-pill">
+                  <span key={fp} className="sp-pill sp-pill--outline">
                     {fp}
                   </span>
                 ))}
@@ -197,7 +192,7 @@ export function ProjectDetailPage() {
       )}
 
       {project.state !== 'active' && (
-        <div className="sp-banner sp-banner--info" style={{ marginBottom: 16 }}>
+        <div className="sp-banner sp-banner--info sp-spaced">
           <span>
             该项目当前为「{projectStateLabel(project.state)}」：既有资料可继续浏览，仍可手动收集至此项目。
           </span>
@@ -206,9 +201,9 @@ export function ProjectDetailPage() {
 
       <CollectionComposer defaultProjectId={project.id} />
 
-      <div className="sp-row" style={{ marginBottom: 14 }}>
-        <div className="sp-search-bar" style={{ flex: 1, minWidth: 180 }}>
-          <Search size={16} strokeWidth={2} style={{ color: 'var(--sp-muted)', flexShrink: 0 }} />
+      <div className="sp-list-toolbar">
+        <div className="sp-search-bar">
+          <Search size={16} strokeWidth={2} aria-hidden="true" />
           <input
             type="search"
             aria-label="在当前项目内搜索"
@@ -220,7 +215,6 @@ export function ProjectDetailPage() {
         <button
           type="button"
           className="sp-btn--quiet"
-          style={{ height: 36 }}
           aria-pressed={unreadOnly}
           onClick={() => setUnreadOnly((v) => !v)}
         >
@@ -249,7 +243,7 @@ export function ProjectDetailPage() {
         />
       )}
 
-      <div className="sp-stack">
+      <div className="sp-note-list">
         {hits.map((hit) => (
           <CollectionCard
             key={hit.collection.id}
@@ -261,7 +255,7 @@ export function ProjectDetailPage() {
       </div>
 
       <Modal open={editOpen} title="编辑项目" onClose={() => setEditOpen(false)}>
-        <form onSubmit={handleEditSubmit} className="sp-stack" style={{ gap: 14 }}>
+        <form onSubmit={handleEditSubmit} className="sp-stack sp-stack--loose">
           {editError && (
             <div className="sp-banner sp-banner--error" role="alert">
               <span>{editError}</span>
@@ -325,13 +319,12 @@ export function ProjectDetailPage() {
             <label htmlFor="edit-proj-focus" className="sp-label">
               关注点
             </label>
-            <div className="sp-row">
+            <div className="sp-input-group">
               <input
                 id="edit-proj-focus"
                 type="text"
                 maxLength={100}
                 className="sp-input"
-                style={{ flex: 1 }}
                 value={editFocusInput}
                 onChange={(e) => setEditFocusInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -359,17 +352,17 @@ export function ProjectDetailPage() {
               </button>
             </div>
             {editFocusPoints.length > 0 && (
-              <div className="sp-row" style={{ marginTop: 6 }}>
+              <div className="sp-composer-chips">
                 {editFocusPoints.map((fp) => (
                   <span key={fp} className="sp-pill sp-pill--green">
-                    {fp}
+                    <span>{fp}</span>
                     <button
                       type="button"
+                      className="sp-chip-remove"
                       aria-label={`移除 ${fp}`}
                       onClick={() => setEditFocusPoints((prev) => prev.filter((x) => x !== fp))}
-                      style={{ padding: '0 2px' }}
                     >
-                      ×
+                      <X size={12} strokeWidth={2.4} aria-hidden="true" />
                     </button>
                   </span>
                 ))}
@@ -377,7 +370,7 @@ export function ProjectDetailPage() {
             )}
           </div>
 
-          <div className="sp-row" style={{ justifyContent: 'flex-end' }}>
+          <div className="sp-form-actions">
             <button type="button" className="sp-btn" onClick={() => setEditOpen(false)}>
               取消
             </button>

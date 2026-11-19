@@ -1,109 +1,333 @@
+/*
+ * Spark design tokens — the single entry point for color, type, radius and elevation.
+ *
+ * Appearance is two independent choices, both set on <html> by src/lib/appearance.ts:
+ *   data-palette = mint | sea | matcha | sakura   (default mint)
+ *   data-mode    = light | dark                   (resolved from the user's light/dark/system choice)
+ *
+ * Each palette defines the same set of color tokens for light and dark. Status colors,
+ * radii, type and motion are shared. Within a palette:
+ *   primary  — actions, links, current navigation, focus
+ *   accent   — soft tint of primary (selected states, project tags)
+ *   spark    — the palette's second, softer hue (badges, AI suggestions, highlights)
+ */
+
+/* ---------- Shared (palette-independent) ---------- */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
-  --sp-bg: #f5f6f5;
-  --sp-surface: #ffffff;
-  --sp-surface-muted: #eef1ef;
-  --sp-fg: #303832;
-  --sp-muted: #647068;
+  --sp-success: #2f7d55;
+  --sp-success-bg: #e6f4ec;
+  --sp-danger: #c2334d;
+  --sp-danger-bg: #fdeff1;
+  --sp-warning: #8a5a00;
+  --sp-warning-bg: #fff5dc;
 
-  --sp-primary: #287b59;
-  --sp-primary-hover: #21674a;
-  --sp-on-primary: #ffffff;
-  --sp-accent: #e7f0e9;
-  --sp-accent-fg: #287b59;
+  --sp-scrim: rgba(30, 38, 40, 0.36);
+  --sp-shadow-rgb: 40, 52, 56;
+  --sp-toast-bg: var(--sp-fg);
+  --sp-toast-fg: #ffffff;
 
-  --sp-border: #e1e6e2;
-  --sp-border-strong: #cdd5cf;
-  --sp-control-border: #829087;
-  --sp-focus-border: #8aae99;
-
-  --sp-danger: #b33345;
-  --sp-danger-bg: #fdf1f2;
-  --sp-warning: #8a5b14;
-  --sp-warning-bg: #fef7eb;
-  --sp-highlight-bg: #fff1b8;
-  --sp-highlight-fg: #303832;
-
-  --sp-radius-card: 10px;
-  --sp-radius-control: 6px;
+  --sp-radius-xs: 6px;
+  --sp-radius-control: 10px;
+  --sp-radius-card: 14px;
+  --sp-radius-panel: 18px;
   --sp-radius-pill: 999px;
 
-  --sp-shadow-popover: 0 2px 6px rgba(20, 39, 29, 0.05), 0 10px 28px rgba(20, 39, 29, 0.12);
-  --sp-shadow-modal: 0 4px 12px rgba(20, 39, 29, 0.08), 0 20px 56px rgba(20, 39, 29, 0.18);
-  --sp-shadow-composer-rest: 0 1px 2px rgba(20, 39, 29, 0.03), 0 2px 6px rgba(20, 39, 29, 0.02);
-  --sp-shadow-composer-active: 0 2px 8px rgba(20, 39, 29, 0.05), 0 10px 26px rgba(20, 39, 29, 0.07);
-  --sp-shadow-card-hover: 0 1px 4px rgba(20, 39, 29, 0.04), 0 4px 14px rgba(20, 39, 29, 0.05);
-  --sp-shadow-float: 0 2px 8px rgba(20, 39, 29, 0.06), 0 12px 30px rgba(20, 39, 29, 0.13);
+  --sp-shadow-hairline: 0 1px 0 rgba(var(--sp-shadow-rgb), 0.04);
+  --sp-shadow-card-hover: 0 1px 2px rgba(var(--sp-shadow-rgb), 0.04), 0 6px 18px rgba(var(--sp-shadow-rgb), 0.06);
+  --sp-shadow-composer-rest: 0 1px 2px rgba(var(--sp-shadow-rgb), 0.04), 0 2px 8px rgba(var(--sp-shadow-rgb), 0.03);
+  --sp-shadow-composer-active: 0 2px 6px rgba(var(--sp-shadow-rgb), 0.05), 0 16px 40px rgba(var(--sp-shadow-rgb), 0.09);
+  --sp-shadow-popover: 0 2px 6px rgba(var(--sp-shadow-rgb), 0.06), 0 14px 36px rgba(var(--sp-shadow-rgb), 0.13);
+  --sp-shadow-float: 0 2px 8px rgba(var(--sp-shadow-rgb), 0.06), 0 18px 44px rgba(var(--sp-shadow-rgb), 0.15);
+  --sp-shadow-modal: 0 8px 24px rgba(var(--sp-shadow-rgb), 0.1), 0 32px 80px rgba(var(--sp-shadow-rgb), 0.2);
+  --sp-shadow-active-nav: 0 1px 2px rgba(var(--sp-shadow-rgb), 0.06), 0 0 0 1px rgba(var(--sp-shadow-rgb), 0.05);
 
-  --sp-font-sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
-  --sp-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --sp-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "HarmonyOS Sans SC",
+    "MiSans", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", system-ui,
+    "Noto Sans CJK SC", sans-serif;
+  --sp-font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  /* Rounded display face for the wordmark, day stamps and page titles; degrades to the UI sans. */
+  --sp-font-round: ui-rounded, "SF Pro Rounded", "Hiragino Maru Gothic ProN", "Arial Rounded MT Bold",
+    var(--sp-font-sans);
+
+  /* Washi-tape tones: each project gets one, derived from its id (lib/projectTone.ts). */
+  --sp-tape-1: #ffd9c7;
+  --sp-tape-1-fg: #7a3a22;
+  --sp-tape-2: #cdebdd;
+  --sp-tape-2-fg: #1f5e48;
+  --sp-tape-3: #d3e6f7;
+  --sp-tape-3-fg: #24527d;
+  --sp-tape-4: #ffefb0;
+  --sp-tape-4-fg: #6b5300;
+  --sp-tape-5: #e3dcf5;
+  --sp-tape-5-fg: #4b3c80;
+  --sp-tape-6: #f8d7df;
+  --sp-tape-6-fg: #8a3a4e;
+
+  --sp-text-xs: 12px;
+  --sp-text-sm: 13px;
+  --sp-text-ui: 14px;
+  --sp-text-md: 15px;
+  --sp-text-body: 16px;
+  --sp-text-lg: 18px;
+  --sp-text-xl: 22px;
+  --sp-text-title: 26px;
+  --sp-leading-body: 1.75;
+
+  --sp-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --sp-ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --sp-topbar-h: 56px;
+  --sp-tabbar-h: 62px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --sp-bg: #141916;
-    --sp-surface: #1c231f;
-    --sp-surface-muted: #252f29;
-    --sp-fg: #e8eee9;
-    --sp-muted: #a3b0a7;
+:root[data-mode="dark"] {
+  color-scheme: dark;
 
-    --sp-primary: #78c9a1;
-    --sp-primary-hover: #94d7b4;
-    --sp-on-primary: #14271d;
-    --sp-accent: #263e30;
-    --sp-accent-fg: #78c9a1;
+  --sp-success: #7fd6a6;
+  --sp-success-bg: #173126;
+  --sp-danger: #ff9aaa;
+  --sp-danger-bg: #3a1c24;
+  --sp-warning: #f2c66e;
+  --sp-warning-bg: #33280f;
 
-    --sp-border: #3a493f;
-    --sp-border-strong: #4c5f52;
-    --sp-control-border: #7d9385;
-    --sp-focus-border: #78c9a1;
+  --sp-scrim: rgba(0, 0, 0, 0.55);
+  --sp-shadow-rgb: 0, 0, 0;
 
-    --sp-danger: #ff9ca9;
-    --sp-danger-bg: #361c20;
-    --sp-warning: #eac27f;
-    --sp-warning-bg: #332613;
-    --sp-highlight-bg: #4f4218;
-    --sp-highlight-fg: #e8eee9;
+  --sp-tape-1: #4a3027;
+  --sp-tape-1-fg: #f7cdb9;
+  --sp-tape-2: #1f3d33;
+  --sp-tape-2-fg: #bfe8d6;
+  --sp-tape-3: #213448;
+  --sp-tape-3-fg: #c5ddf3;
+  --sp-tape-4: #463c17;
+  --sp-tape-4-fg: #f3e3a0;
+  --sp-tape-5: #322b4a;
+  --sp-tape-5-fg: #d6ccf2;
+  --sp-tape-6: #45272f;
+  --sp-tape-6-fg: #f5c9d4;
+  --sp-toast-bg: var(--sp-surface-muted);
+  --sp-toast-fg: var(--sp-fg);
 
-    --sp-shadow-popover: 0 10px 30px rgba(0, 0, 0, 0.42);
-    --sp-shadow-modal: 0 20px 64px rgba(0, 0, 0, 0.56);
-    --sp-shadow-composer-rest: 0 1px 3px rgba(0, 0, 0, 0.18);
-    --sp-shadow-composer-active: 0 8px 24px rgba(0, 0, 0, 0.34);
-    --sp-shadow-card-hover: 0 2px 10px rgba(0, 0, 0, 0.28);
-    --sp-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.48);
-  }
+  --sp-shadow-hairline: 0 1px 0 rgba(0, 0, 0, 0.2);
+  --sp-shadow-card-hover: 0 2px 12px rgba(0, 0, 0, 0.3);
+  --sp-shadow-composer-rest: 0 1px 3px rgba(0, 0, 0, 0.22);
+  --sp-shadow-composer-active: 0 10px 32px rgba(0, 0, 0, 0.4);
+  --sp-shadow-popover: 0 12px 34px rgba(0, 0, 0, 0.5);
+  --sp-shadow-float: 0 14px 40px rgba(0, 0, 0, 0.55);
+  --sp-shadow-modal: 0 24px 72px rgba(0, 0, 0, 0.6);
+  --sp-shadow-active-nav: 0 0 0 1px rgba(255, 255, 255, 0.06);
 }
 
-:root[data-theme="dark"] {
-  --sp-bg: #141916;
-  --sp-surface: #1c231f;
-  --sp-surface-muted: #252f29;
-  --sp-fg: #e8eee9;
-  --sp-muted: #a3b0a7;
+/* ---------- 薄荷晨雾 mint (default) ---------- */
+:root {
+  --sp-bg: #f2f8f6;
+  --sp-bg-translucent: rgba(242, 248, 246, 0.82);
+  --sp-surface: #ffffff;
+  --sp-surface-muted: #e7f1ed;
+  --sp-surface-hover: rgba(44, 62, 56, 0.05);
+  --sp-fg: #2c3e38;
+  --sp-fg-soft: #4a5d56;
+  --sp-muted: #627870;
+  --sp-primary: #2a8369;
+  --sp-primary-hover: #23705a;
+  --sp-on-primary: #ffffff;
+  --sp-accent: #e0f2eb;
+  --sp-accent-fg: #23705a;
+  --sp-spark: #ffd9c7;
+  --sp-spark-strong: #ec9a78;
+  --sp-on-spark: #6b3420;
+  --sp-spark-soft: #fff1ea;
+  --sp-border: #dcebe5;
+  --sp-border-strong: #c3d8d0;
+  --sp-control-border: #7a948a;
+  --sp-focus-ring: rgba(42, 131, 105, 0.22);
+  --sp-highlight-bg: #ffe1d2;
+  --sp-highlight-fg: #2c3e38;
+}
 
-  --sp-primary: #78c9a1;
-  --sp-primary-hover: #94d7b4;
-  --sp-on-primary: #14271d;
-  --sp-accent: #263e30;
-  --sp-accent-fg: #78c9a1;
+:root[data-mode="dark"] {
+  --sp-bg: #0f1715;
+  --sp-bg-translucent: rgba(15, 23, 21, 0.82);
+  --sp-surface: #16201d;
+  --sp-surface-muted: #1f2b27;
+  --sp-surface-hover: rgba(230, 240, 236, 0.06);
+  --sp-fg: #e3eeea;
+  --sp-fg-soft: #c2d2cc;
+  --sp-muted: #93a8a0;
+  --sp-primary: #6fd1b2;
+  --sp-primary-hover: #8edcc3;
+  --sp-on-primary: #0b2a21;
+  --sp-accent: #1c3a31;
+  --sp-accent-fg: #8edcc3;
+  --sp-spark: #f2b49a;
+  --sp-spark-strong: #f7c7b2;
+  --sp-on-spark: #3a1a0d;
+  --sp-spark-soft: #3a2620;
+  --sp-border: #25332e;
+  --sp-border-strong: #344640;
+  --sp-control-border: #62786f;
+  --sp-focus-ring: rgba(111, 209, 178, 0.28);
+  --sp-highlight-bg: #5a3a2a;
+  --sp-highlight-fg: #f6ede8;
+}
 
-  --sp-border: #3a493f;
-  --sp-border-strong: #4c5f52;
-  --sp-control-border: #7d9385;
-  --sp-focus-border: #78c9a1;
+/* ---------- 海盐蓝 sea ---------- */
+:root[data-palette="sea"] {
+  --sp-bg: #f1f6fa;
+  --sp-bg-translucent: rgba(241, 246, 250, 0.82);
+  --sp-surface: #ffffff;
+  --sp-surface-muted: #e6eef5;
+  --sp-surface-hover: rgba(43, 56, 70, 0.05);
+  --sp-fg: #2b3846;
+  --sp-fg-soft: #4a5868;
+  --sp-muted: #627283;
+  --sp-primary: #3274aa;
+  --sp-primary-hover: #2a6292;
+  --sp-on-primary: #ffffff;
+  --sp-accent: #e2eef8;
+  --sp-accent-fg: #2a6292;
+  --sp-spark: #fff1a6;
+  --sp-spark-strong: #e2bf3c;
+  --sp-on-spark: #5c4a00;
+  --sp-spark-soft: #fff9db;
+  --sp-border: #dce7f0;
+  --sp-border-strong: #c5d5e3;
+  --sp-control-border: #7e93a8;
+  --sp-focus-ring: rgba(50, 116, 170, 0.22);
+  --sp-highlight-bg: #fff0a0;
+  --sp-highlight-fg: #2b3846;
+}
 
-  --sp-danger: #ff9ca9;
-  --sp-danger-bg: #361c20;
-  --sp-warning: #eac27f;
-  --sp-warning-bg: #332613;
-  --sp-highlight-bg: #4f4218;
-  --sp-highlight-fg: #e8eee9;
+:root[data-palette="sea"][data-mode="dark"] {
+  --sp-bg: #0f141a;
+  --sp-bg-translucent: rgba(15, 20, 26, 0.82);
+  --sp-surface: #161d25;
+  --sp-surface-muted: #1f2833;
+  --sp-surface-hover: rgba(232, 238, 245, 0.06);
+  --sp-fg: #e3eaf2;
+  --sp-fg-soft: #c2cdd9;
+  --sp-muted: #93a2b3;
+  --sp-primary: #8cc0ec;
+  --sp-primary-hover: #a9d0f2;
+  --sp-on-primary: #0b2238;
+  --sp-accent: #1c2e42;
+  --sp-accent-fg: #a9d0f2;
+  --sp-spark: #f4e07a;
+  --sp-spark-strong: #f8ea9e;
+  --sp-on-spark: #3a2f00;
+  --sp-spark-soft: #363016;
+  --sp-border: #253140;
+  --sp-border-strong: #34445a;
+  --sp-control-border: #647689;
+  --sp-focus-ring: rgba(140, 192, 236, 0.28);
+  --sp-highlight-bg: #4f4618;
+  --sp-highlight-fg: #f5f0d8;
+}
 
-  --sp-shadow-popover: 0 10px 30px rgba(0, 0, 0, 0.42);
-  --sp-shadow-modal: 0 20px 64px rgba(0, 0, 0, 0.56);
-  --sp-shadow-composer-rest: 0 1px 3px rgba(0, 0, 0, 0.18);
-  --sp-shadow-composer-active: 0 8px 24px rgba(0, 0, 0, 0.34);
-  --sp-shadow-card-hover: 0 2px 10px rgba(0, 0, 0, 0.28);
-  --sp-shadow-float: 0 12px 32px rgba(0, 0, 0, 0.48);
+/* ---------- 抹茶奶白 matcha ---------- */
+:root[data-palette="matcha"] {
+  --sp-bg: #f6f7f1;
+  --sp-bg-translucent: rgba(246, 247, 241, 0.82);
+  --sp-surface: #fffffc;
+  --sp-surface-muted: #eceee4;
+  --sp-surface-hover: rgba(51, 57, 45, 0.05);
+  --sp-fg: #33392d;
+  --sp-fg-soft: #4f5747;
+  --sp-muted: #6a7160;
+  --sp-primary: #557f45;
+  --sp-primary-hover: #476b39;
+  --sp-on-primary: #ffffff;
+  --sp-accent: #e9f0df;
+  --sp-accent-fg: #476b39;
+  --sp-spark: #f3e3c3;
+  --sp-spark-strong: #d4ac62;
+  --sp-on-spark: #5a4313;
+  --sp-spark-soft: #faf3e3;
+  --sp-border: #e3e7d9;
+  --sp-border-strong: #cdd4c0;
+  --sp-control-border: #8a937c;
+  --sp-focus-ring: rgba(85, 127, 69, 0.22);
+  --sp-highlight-bg: #f6e2b0;
+  --sp-highlight-fg: #33392d;
+}
+
+:root[data-palette="matcha"][data-mode="dark"] {
+  --sp-bg: #12140f;
+  --sp-bg-translucent: rgba(18, 20, 15, 0.82);
+  --sp-surface: #1a1d16;
+  --sp-surface-muted: #24281e;
+  --sp-surface-hover: rgba(236, 240, 228, 0.06);
+  --sp-fg: #e8ecdf;
+  --sp-fg-soft: #c8cebc;
+  --sp-muted: #9ca38f;
+  --sp-primary: #a6cc8f;
+  --sp-primary-hover: #bcdba8;
+  --sp-on-primary: #1c2e12;
+  --sp-accent: #27331e;
+  --sp-accent-fg: #bcdba8;
+  --sp-spark: #e6cf9c;
+  --sp-spark-strong: #eeddb6;
+  --sp-on-spark: #3a2c0c;
+  --sp-spark-soft: #352d1a;
+  --sp-border: #2a2f23;
+  --sp-border-strong: #3a4130;
+  --sp-control-border: #6e7660;
+  --sp-focus-ring: rgba(166, 204, 143, 0.28);
+  --sp-highlight-bg: #4f4420;
+  --sp-highlight-fg: #f2eedd;
+}
+
+/* ---------- 樱花雾粉 sakura ---------- */
+:root[data-palette="sakura"] {
+  --sp-bg: #fbf6f6;
+  --sp-bg-translucent: rgba(251, 246, 246, 0.82);
+  --sp-surface: #ffffff;
+  --sp-surface-muted: #f5ebec;
+  --sp-surface-hover: rgba(61, 47, 50, 0.05);
+  --sp-fg: #3d2f32;
+  --sp-fg-soft: #5c4a4e;
+  --sp-muted: #7f6a6e;
+  --sp-primary: #ae5468;
+  --sp-primary-hover: #964457;
+  --sp-on-primary: #ffffff;
+  --sp-accent: #fbe6ea;
+  --sp-accent-fg: #964457;
+  --sp-spark: #cfe6de;
+  --sp-spark-strong: #6fb29b;
+  --sp-on-spark: #24574a;
+  --sp-spark-soft: #eaf5f1;
+  --sp-border: #f0e1e3;
+  --sp-border-strong: #e2cbcf;
+  --sp-control-border: #a28c90;
+  --sp-focus-ring: rgba(174, 84, 104, 0.22);
+  --sp-highlight-bg: #fcd9e0;
+  --sp-highlight-fg: #3d2f32;
+}
+
+:root[data-palette="sakura"][data-mode="dark"] {
+  --sp-bg: #171213;
+  --sp-bg-translucent: rgba(23, 18, 19, 0.82);
+  --sp-surface: #201a1b;
+  --sp-surface-muted: #2b2325;
+  --sp-surface-hover: rgba(245, 232, 234, 0.06);
+  --sp-fg: #f2e6e8;
+  --sp-fg-soft: #d6c4c7;
+  --sp-muted: #aa959a;
+  --sp-primary: #f0a3b4;
+  --sp-primary-hover: #f5bac7;
+  --sp-on-primary: #3d1520;
+  --sp-accent: #3a2329;
+  --sp-accent-fg: #f5bac7;
+  --sp-spark: #9fd3c1;
+  --sp-spark-strong: #b9e0d2;
+  --sp-on-spark: #0f2e25;
+  --sp-spark-soft: #1d302a;
+  --sp-border: #33282a;
+  --sp-border-strong: #463639;
+  --sp-control-border: #7f6b6f;
+  --sp-focus-ring: rgba(240, 163, 180, 0.28);
+  --sp-highlight-bg: #5a2e38;
+  --sp-highlight-fg: #f8e8eb;
 }

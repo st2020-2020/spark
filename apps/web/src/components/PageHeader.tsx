@@ -141,7 +141,7 @@ export function PageHeader({
     <header className="sp-pagehead">
       <div className="sp-pagehead-main">
         <div>
-          <div className="sp-row">
+          <div className="sp-pagehead-title-row">
             <h1 className="sp-page-title sp-break-anywhere">{title}</h1>
             {badge}
           </div>
@@ -169,12 +169,7 @@ export function PageHeader({
                   }
                 }}
               >
-                <Search
-                  size={16}
-                  strokeWidth={2}
-                  style={{ color: 'var(--sp-muted)', flexShrink: 0 }}
-                  aria-hidden="true"
-                />
+                <Search size={16} strokeWidth={2} aria-hidden="true" />
                 <input
                   ref={inputRef}
                   type="search"
@@ -193,8 +188,7 @@ export function PageHeader({
                 {currentQ ? (
                   <button
                     type="button"
-                    className="sp-btn--quiet sp-btn--icon"
-                    style={{ width: 24, height: 24, flexShrink: 0 }}
+                    className="sp-search-clear"
                     aria-label="清空搜索"
                     onClick={handleClear}
                   >

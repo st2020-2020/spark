@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, X } from 'lucide-react';
 import { generateUuid } from '../lib/idempotency';
 
 export interface ToastItem {
@@ -98,13 +98,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               )}
               <span>{toast.message}</span>
             </div>
-            <div className="sp-row" style={{ flexShrink: 0 }}>
+            <div className="sp-toast-actions">
               {toast.actionLabel && toast.onAction && (
                 <button
                   type="button"
-                  className={`sp-btn sp-btn--sm ${
-                    toast.variant === 'ai-suggestion' ? 'sp-btn--primary' : ''
-                  }`}
+                  className="sp-toast-action"
                   onClick={() => {
                     void toast.onAction?.();
                     dismissToast(toast.id);
@@ -115,11 +113,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               )}
               <button
                 type="button"
-                className="sp-btn sp-btn--sm sp-btn--quiet"
+                className="sp-toast-close"
                 aria-label="关闭提示"
                 onClick={() => dismissToast(toast.id)}
               >
-                ×
+                <X size={16} strokeWidth={2} aria-hidden="true" />
               </button>
             </div>
           </div>

@@ -1,5 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { X } from 'lucide-react';
 
+/** Centered dialog on desktop, bottom sheet on phones (see .sp-modal in global.css). */
 export function Modal({
   open,
   title,
@@ -19,6 +21,8 @@ export function Modal({
     if (!open) return;
     const prevActive = document.activeElement as HTMLElement | null;
     panelRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
@@ -29,6 +33,7 @@ export function Modal({
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
       prevActive?.focus?.();
     };
   }, [open]);
@@ -51,15 +56,16 @@ export function Modal({
         aria-label={title}
         tabIndex={-1}
       >
-        <div className="sp-row-between" style={{ marginBottom: 14 }}>
-          <h2 style={{ margin: 0, fontSize: 17 }}>{title}</h2>
+        <span className="sp-sheet-grabber" aria-hidden="true" />
+        <div className="sp-modal-head">
+          <h2 className="sp-modal-title">{title}</h2>
           <button
             type="button"
-            className="sp-btn sp-btn--sm sp-btn--quiet"
+            className="sp-icon-btn"
             onClick={() => onCloseRef.current()}
             aria-label="关闭弹窗"
           >
-            关闭
+            <X size={18} strokeWidth={2} aria-hidden="true" />
           </button>
         </div>
         {children}

@@ -41,8 +41,8 @@ export function AIConsentModal({
 
   return (
     <Modal open={open} title="开启平台 AI 自动整理" onClose={onClose}>
-      <div className="sp-stack" style={{ gap: 14 }}>
-        <p style={{ margin: 0 }}>
+      <div className="sp-stack sp-stack--loose">
+        <p className="sp-consent-intro">
           开启后，你在保存新收藏时将自动进入后台整理队列，无需自行配置模型或密钥。请确认以下处理范围：
         </p>
         <ul className="sp-consent-list">
@@ -63,7 +63,7 @@ export function AIConsentModal({
             开启仅对后续新保存的收藏生效，不会自动重跑全部历史收藏；旧资料可在详情页按需点击「重新整理」。
           </li>
         </ul>
-        <div className="sp-row" style={{ justifyContent: 'flex-end' }}>
+        <div className="sp-form-actions">
           <button type="button" className="sp-btn" onClick={onClose}>
             取消
           </button>

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Folder, Plus } from 'lucide-react';
+import { ChevronRight, Folder, Plus, X } from 'lucide-react';
 import type { ProjectState } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { Modal } from '../components/Modal';
@@ -11,6 +11,7 @@ import { useApi } from '../context/ApiContext';
 import { useToast } from '../context/ToastContext';
 import { projectStateLabel } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { projectToneClass } from '../lib/projectTone';
 
 export function ProjectsPage() {
   const api = useApi();
@@ -133,6 +134,7 @@ export function ProjectsPage() {
       )}
       {!projectsQuery.isLoading && !projectsQuery.isError && items.length === 0 && (
         <EmptyState
+          art="notebook"
           title="还没有项目"
           description="先建立一个你正在持续关注的事情，也可以在收件箱直接开始记录。"
           action={
@@ -144,42 +146,46 @@ export function ProjectsPage() {
         />
       )}
 
-      <div>
-        {items.map((proj) => (
-          <article key={proj.id} className="sp-project-row">
-            <Link to={`/projects/${proj.id}`} className="sp-project-row-link">
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <h2 className="sp-project-row-title sp-break-anywhere">
-                  <Folder size={16} strokeWidth={2} style={{ color: 'var(--sp-primary)', flexShrink: 0 }} aria-hidden="true" />
-                  <span>{proj.name}</span>
-                </h2>
-                {proj.description && (
-                  <p className="sp-help sp-break-anywhere" style={{ margin: '0 0 8px' }}>
-                    {proj.description}
-                  </p>
-                )}
-                <div className="sp-project-meta">
-                  <span
-                    style={{
-                      color: proj.state === 'active' ? 'var(--sp-primary)' : 'var(--sp-muted)',
-                      fontWeight: proj.state === 'active' ? 500 : 400,
-                    }}
-                  >
-                    {projectStateLabel(proj.state)}
-                  </span>
-                  {typeof proj.collection_count === 'number' && (
-                    <span className="sp-help">{proj.collection_count} 条收藏</span>
+      {items.length > 0 && (
+        <ul className="sp-project-list">
+          {items.map((proj) => (
+            <li key={proj.id} className="sp-project-row">
+              <Link to={`/projects/${proj.id}`} className="sp-project-row-link">
+                <span
+                  className={`sp-project-tile ${projectToneClass(proj.id)} ${
+                    proj.state === 'active' ? '' : 'sp-project-tile--idle'
+                  }`}
+                  aria-hidden="true"
+                >
+                  <Folder size={18} strokeWidth={2} />
+                </span>
+                <div className="sp-project-row-body">
+                  <h2 className="sp-project-row-title sp-break-anywhere">{proj.name}</h2>
+                  {proj.description && (
+                    <p className="sp-project-row-desc sp-break-anywhere">{proj.description}</p>
                   )}
+                  <div className="sp-project-meta">
+                    <span
+                      className={`sp-project-state ${
+                        proj.state === 'active' ? 'sp-project-state--active' : ''
+                      }`}
+                    >
+                      {projectStateLabel(proj.state)}
+                    </span>
+                    {typeof proj.collection_count === 'number' && (
+                      <span>{proj.collection_count} 条收藏</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <ChevronRight size={16} strokeWidth={2} className="sp-project-row-chevron" aria-hidden="true" />
-            </Link>
-          </article>
-        ))}
-      </div>
+                <ChevronRight size={18} strokeWidth={2} className="sp-project-row-chevron" aria-hidden="true" />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
 
       {projectsQuery.hasNextPage && (
-        <div style={{ textAlign: 'center', marginTop: 20 }}>
+        <div className="sp-load-more">
           <button
             type="button"
             className="sp-btn"
@@ -192,7 +198,7 @@ export function ProjectsPage() {
       )}
 
       <Modal open={modalOpen} title="新建项目" onClose={() => setModalOpen(false)}>
-        <form onSubmit={handleCreateSubmit} className="sp-stack" style={{ gap: 14 }}>
+        <form onSubmit={handleCreateSubmit} className="sp-stack sp-stack--loose">
           {formError && (
             <div className="sp-banner sp-banner--error" role="alert">
               <span>{formError}</span>
@@ -234,13 +240,12 @@ export function ProjectsPage() {
             <label htmlFor="proj-focus-input" className="sp-label">
               关注点（最多 20 项）
             </label>
-            <div className="sp-row">
+            <div className="sp-input-group">
               <input
                 id="proj-focus-input"
                 type="text"
                 maxLength={100}
                 className="sp-input"
-                style={{ flex: 1 }}
                 placeholder="例如：多端同步、搜索交互"
                 value={focusInput}
                 onChange={(e) => setFocusInput(e.target.value)}
@@ -257,17 +262,17 @@ export function ProjectsPage() {
               </button>
             </div>
             {focusPoints.length > 0 && (
-              <div className="sp-row" style={{ marginTop: 6 }}>
+              <div className="sp-composer-chips">
                 {focusPoints.map((fp) => (
                   <span key={fp} className="sp-pill sp-pill--green">
-                    {fp}
+                    <span>{fp}</span>
                     <button
                       type="button"
+                      className="sp-chip-remove"
                       aria-label={`移除关注点 ${fp}`}
                       onClick={() => setFocusPoints((prev) => prev.filter((x) => x !== fp))}
-                      style={{ padding: '0 2px' }}
                     >
-                      ×
+                      <X size={12} strokeWidth={2.4} aria-hidden="true" />
                     </button>
                   </span>
                 ))}
@@ -275,7 +280,7 @@ export function ProjectsPage() {
             )}
           </div>
 
-          <div className="sp-row" style={{ justifyContent: 'flex-end' }}>
+          <div className="sp-form-actions">
             <button type="button" className="sp-btn" onClick={() => setModalOpen(false)}>
               取消
             </button>

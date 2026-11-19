@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Folder, MoreHorizontal } from 'lucide-react';
+import { ChevronRight, Link2, Mail, MailOpen, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
 import type { CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
@@ -12,7 +12,9 @@ import {
   organizationStatusLabel,
   searchFieldLabel,
 } from '../lib/format';
+import { formatClock, isJustCreated } from '../lib/journal';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
+import { projectToneClass } from '../lib/projectTone';
 import { HighlightText } from './StateBlocks';
 
 function shouldShowDistinctTitle(collection: CollectionSummary): boolean {
@@ -28,10 +30,13 @@ export function CollectionCard({
   collection,
   snippets,
   searchQuery = '',
+  timeStyle = 'relative',
 }: {
   collection: CollectionSummary;
   snippets?: SearchHit['snippets'];
   searchQuery?: string;
+  /** "clock" inside day-grouped lists, where the day is already shown by the group stamp. */
+  timeStyle?: 'relative' | 'clock';
 }) {
   const api = useApi();
   const { pushToast } = useToast();
@@ -118,13 +123,21 @@ export function CollectionCard({
     collection.organization_status === 'blocked';
 
   const detailState = { from: `${location.pathname}${location.search}` };
+  const hasUrl = collection.content_types.includes('url');
 
   return (
-    <article className="sp-note">
+    <article className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
       <div className="sp-note-meta">
         <time dateTime={collection.created_at} title={formatDateTime(collection.created_at)}>
-          {formatRelativeTime(collection.created_at)}
+          {timeStyle === 'clock'
+            ? formatClock(collection.created_at)
+            : formatRelativeTime(collection.created_at)}
         </time>
+        {hasUrl && (
+          <span className="sp-note-kind" role="img" aria-label="含网址" title="含网址">
+            <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
+          </span>
+        )}
         {isUnread && <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />}
 
         {showOrgStatus &&
@@ -138,7 +151,6 @@ export function CollectionCard({
                   ? 'sp-pill--danger'
                   : 'sp-pill--warning'
               }`}
-              style={{ textDecoration: 'none' }}
             >
               {organizationStatusLabel(collection.organization_status)}
             </Link>
@@ -168,53 +180,60 @@ export function CollectionCard({
           </button>
 
           {menuOpen && (
-            <div
-              className="sp-popover sp-popover--right"
-              role="menu"
-              aria-label="收藏操作菜单"
-            >
-              <button
-                type="button"
-                role="menuitem"
-                className="sp-menu-item"
-                disabled={toggleReadMutation.isPending}
-                onClick={() => toggleReadMutation.mutate()}
+            <>
+              {/* Phone-only scrim: absorbs the outside tap so it never activates the card below. */}
+              <div className="sp-sheet-scrim" aria-hidden="true" onClick={() => setMenuOpen(false)} />
+              <div
+                className="sp-popover sp-popover--right sp-popover--sheet"
+                role="menu"
+                aria-label="收藏操作菜单"
               >
-                {collection.read_at ? '标为未读' : '标为已读'}
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                className="sp-menu-item"
-                onClick={() => {
-                  setMenuOpen(false);
-                  navigate(`/collections/${collection.id}`, { state: { ...detailState, edit: true } });
-                }}
-              >
-                编辑
-              </button>
-              <div className="sp-menu-divider" role="separator" />
-              <button
-                type="button"
-                role="menuitem"
-                className="sp-menu-item sp-menu-item--danger"
-                disabled={trashMutation.isPending}
-                onClick={() => trashMutation.mutate()}
-              >
-                移入回收站
-              </button>
-            </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sp-menu-item"
+                  disabled={toggleReadMutation.isPending}
+                  onClick={() => toggleReadMutation.mutate()}
+                >
+                  {collection.read_at ? (
+                    <Mail size={16} strokeWidth={2} aria-hidden="true" />
+                  ) : (
+                    <MailOpen size={16} strokeWidth={2} aria-hidden="true" />
+                  )}
+                  <span>{collection.read_at ? '标为未读' : '标为已读'}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sp-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    navigate(`/collections/${collection.id}`, { state: { ...detailState, edit: true } });
+                  }}
+                >
+                  <Pencil size={16} strokeWidth={2} aria-hidden="true" />
+                  <span>编辑</span>
+                </button>
+                <div className="sp-menu-divider" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sp-menu-item sp-menu-item--danger"
+                  disabled={trashMutation.isPending}
+                  onClick={() => trashMutation.mutate()}
+                >
+                  <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
+                  <span>移入回收站</span>
+                </button>
+              </div>
+            </>
           )}
         </div>
       </div>
 
       {showTitle && (
         <h3 className="sp-note-title">
-          <Link
-            to={`/collections/${collection.id}`}
-            state={detailState}
-            style={{ color: 'inherit' }}
-          >
+          <Link to={`/collections/${collection.id}`} state={detailState}>
             {searchQuery ? (
               <HighlightText text={collection.display_title} query={searchQuery} />
             ) : (
@@ -235,19 +254,10 @@ export function CollectionCard({
       )}
 
       {snippets && snippets.length > 0 && (
-        <div
-          className="sp-stack"
-          style={{
-            gap: 4,
-            marginTop: 12,
-            padding: '10px 12px',
-            background: 'var(--sp-bg)',
-            borderRadius: 'var(--sp-radius-control)',
-          }}
-        >
+        <div className="sp-note-snippets">
           {snippets.slice(0, 3).map((snip, idx) => (
-            <div key={idx} className="sp-help sp-break-anywhere" style={{ color: 'var(--sp-fg)' }}>
-              <strong style={{ marginRight: 6 }}>{searchFieldLabel(snip.field)}:</strong>
+            <div key={idx} className="sp-break-anywhere">
+              <span className="sp-note-snippet-field">{searchFieldLabel(snip.field)}</span>
               <HighlightText text={snip.text} query={searchQuery} />
             </div>
           ))}
@@ -256,9 +266,12 @@ export function CollectionCard({
 
       <div className="sp-note-footer">
         {effectiveProjects.map((p) => (
-          <Link key={p.project_id} to={`/projects/${p.project_id}`} className="sp-project-link">
-            <Folder size={15} strokeWidth={2} aria-hidden="true" />
-            <span>{p.name}</span>
+          <Link
+            key={p.project_id}
+            to={`/projects/${p.project_id}`}
+            className={`sp-tape ${projectToneClass(p.project_id)}`}
+          >
+            <span className="sp-truncate">{p.name}</span>
           </Link>
         ))}
 
@@ -268,6 +281,7 @@ export function CollectionCard({
           className="sp-note-open"
         >
           查看全文
+          <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
         </Link>
       </div>
     </article>
