@@ -53,6 +53,16 @@ type exportAccount struct {
 	uid string
 }
 
+func (a exportAccount) download(t *testing.T, format string) (*http.Response, error) {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, a.base+exportPath+"?format="+format, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-CSRF-Token", a.csrf)
+	return a.http.Do(req)
+}
+
 func signedExportAccount(t *testing.T, s *Server, base, name string) exportAccount {
 	t.Helper()
 	email := name + "@example.test"
@@ -129,6 +139,13 @@ func TestExportAccountsAndFormats(t *testing.T) {
 	} {
 		a.withHeaders("GET", "/me/export?format=json", nil, "", headers).want(t, 403)
 	}
+	for _, token := range []string{"", "wrong-token", b.csrf} {
+		res := a.withHeaders("GET", "/me/export?format=json", nil, "", map[string]string{"X-CSRF-Token": token})
+		if res.want(t, 403)["error"].(map[string]any)["code"] != "csrf_failed" || res.header.Get("Content-Disposition") != "" {
+			t.Fatal("export did not reject a missing or invalid session token")
+		}
+	}
+	// The first valid download below must succeed after the rejected requests.
 	ctx := t.Context()
 	exec := func(sql string, args ...any) {
 		t.Helper()
@@ -153,7 +170,7 @@ func TestExportAccountsAndFormats(t *testing.T) {
 
 	fetch := func(who exportAccount, format string) (map[string]string, *http.Response) {
 		t.Helper()
-		resp, err := who.http.Get(base + exportPath + "?format=" + format)
+		resp, err := who.download(t, format)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -269,6 +286,7 @@ func TestExportSnapshotCapacityAndCancellation(t *testing.T) {
 			t.Fatal(err)
 		}
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
+		req.Header.Set("X-CSRF-Token", who.csrf)
 		ch := make(chan requestResult, 1)
 		go func() {
 			resp, err := who.http.Do(req)
@@ -298,6 +316,7 @@ func TestExportSnapshotCapacityAndCancellation(t *testing.T) {
 	waitReaders(2)
 	time.Sleep(2 * shortServer.Config.WriteTimeout)
 	c.do("GET", "/auth/session", nil, "").want(t, 200)
+	c.withHeaders("GET", "/me/export?format=json", nil, "", map[string]string{"X-CSRF-Token": ""}).want(t, 403)
 	c.do("GET", "/me/export?format=json", nil, "").want(t, 503)
 	cancel()
 	if r := <-second; r.err == nil {
@@ -351,7 +370,7 @@ func TestExportAbortsPartialDownload(t *testing.T) {
         VALUES(gen_random_uuid(),$1,'{"schema_version":2}','待修复','')`, a.uid); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := a.http.Get(base + exportPath + "?format=markdown")
+	resp, err := a.download(t, "markdown")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,7 +383,7 @@ func TestExportAbortsPartialDownload(t *testing.T) {
 		t.Fatalf("%d connections remain checked out", n)
 	}
 	expireExport(t, a)
-	resp, err = a.http.Get(base + exportPath + "?format=json")
+	resp, err = a.download(t, "json")
 	if err != nil {
 		t.Fatal(err)
 	}

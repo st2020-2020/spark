@@ -407,6 +407,7 @@
       "get": {
         "operationId": "exportMyData",
         "summary": "导出我的收藏和项目",
+        "description": "同源请求须携带会话对应的 CSRF token。会话及来源校验在导出限流和读取前完成。",
         "tags": [
           "me"
         ],
@@ -427,6 +428,14 @@
                 "json"
               ]
             }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -445,6 +454,16 @@
                 "schema": {
                   "type": "string",
                   "format": "binary"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "会话 CSRF token 缺失或错误（csrf_failed），或来源不受信任（forbidden）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -1895,7 +1914,7 @@
             }
           },
           "409": {
-            "description": "决定版本冲突、所选建议失效，或幂等键冲突",
+            "description": "决定版本冲突、所选建议失效、幂等键冲突或收藏已进入回收站",
             "content": {
               "application/json": {
                 "schema": {
@@ -1927,7 +1946,7 @@
             "name": "Idempotency-Key",
             "in": "header",
             "required": false,
-            "description": "整理模式提交使用。实际变更时返回撤销回执。相同键与请求体重放同一响应。",
+            "description": "整理模式提交使用。实际变更时返回撤销回执并重放原响应。无变化的提交重放时读取当前收藏，不执行决定或返回回执。回收站中的收藏拒绝重放。",
             "schema": {
               "type": "string",
               "minLength": 16,

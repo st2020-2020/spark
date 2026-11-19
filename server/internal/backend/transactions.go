@@ -16,7 +16,17 @@ import (
 	"spark/server/internal/store"
 )
 
+// A successful no-op can return a full response now and store only a marker.
+// The replay callback must read and authorize the current resource.
+type idempotentCurrentResponse struct{ body any }
+
+const idempotentCurrentMarker = "null"
+
 func (s *Server) idempotent(c *gin.Context, request any, status int, work func(pgx.Tx) (any, error)) (any, error) {
+	return s.idempotentWithReplay(c, request, status, work, nil)
+}
+
+func (s *Server) idempotentWithReplay(c *gin.Context, request any, status int, work func(pgx.Tx) (any, error), replay func(pgx.Tx, json.RawMessage) (any, error)) (any, error) {
 	key := c.GetHeader("Idempotency-Key")
 	if n := utf8.RuneCountInString(key); n < 16 || n > 128 {
 		return nil, problem(400, "invalid_request", "需要 16 至 128 字符的 Idempotency-Key。")
@@ -51,9 +61,16 @@ func (s *Server) idempotent(c *gin.Context, request any, status int, work func(p
 		if !hmac.Equal(hash, stored) {
 			return nil, problem(409, "idempotency_mismatch", "幂等键已用于不同的请求。")
 		}
+		var result any = json.RawMessage(response)
+		if replay != nil {
+			result, err = replay(tx, response)
+			if err != nil {
+				return nil, err
+			}
+		}
 		c.Header("Idempotent-Replayed", "true")
 		c.Set("status", savedStatus)
-		return json.RawMessage(response), nil
+		return result, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
@@ -62,7 +79,12 @@ func (s *Server) idempotent(c *gin.Context, request any, status int, work func(p
 	if err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO idempotency_keys(user_id,operation,key,request_digest,response_status,response_json) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,operation,key) DO UPDATE SET request_digest=excluded.request_digest,response_status=excluded.response_status,response_json=excluded.response_json,expires_at=excluded.expires_at`, uid, op, key, hash, status, jsonBytes(result)); err != nil {
+	storedResponse := result
+	if current, ok := result.(idempotentCurrentResponse); ok {
+		storedResponse = json.RawMessage(idempotentCurrentMarker)
+		result = current.body
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO idempotency_keys(user_id,operation,key,request_digest,response_status,response_json) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(user_id,operation,key) DO UPDATE SET request_digest=excluded.request_digest,response_status=excluded.response_status,response_json=excluded.response_json,expires_at=excluded.expires_at`, uid, op, key, hash, status, jsonBytes(storedResponse)); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {

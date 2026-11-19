@@ -56,8 +56,24 @@ func (s *Server) projectDecisions(c *gin.Context) (any, error) {
 	}
 	key := c.GetHeader("Idempotency-Key")
 	if key != "" {
-		return s.idempotent(c, req, 200, func(tx pgx.Tx) (any, error) {
-			return s.applyProjectDecisions(c, tx, req, key)
+		return s.idempotentWithReplay(c, req, 200, func(tx pgx.Tx) (any, error) {
+			result, err := s.applyProjectDecisions(c, tx, req, key)
+			if err == nil && result.UndoReceipt == nil {
+				return idempotentCurrentResponse{body: result}, nil
+			}
+			return result, err
+		}, func(tx pgx.Tx, response json.RawMessage) (any, error) {
+			row, err := s.loadCollection(c.Request.Context(), tx, current(c).User.ID, c.Param("id"))
+			if err != nil {
+				return nil, err
+			}
+			if err = checkActive(row); err != nil {
+				return nil, err
+			}
+			if string(response) == idempotentCurrentMarker {
+				return row.Collection, nil
+			}
+			return response, nil
 		})
 	}
 	tx, err := s.userTx(c)

@@ -37,7 +37,7 @@
 
 ## 幂等与版本
 
-OpenAPI 标有 Idempotency-Key 的接口必须提供 16 至 128 字符随机键。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。
+OpenAPI 中必填的 Idempotency-Key 使用 16 至 128 字符的随机键。项目决定 PATCH 的键为可选，整理模式会提供。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。
 
 存储的上传授权重放可能已过期，客户端应重新申请新上传会话和新的幂等键。旧临时对象通过清理任务回收。收藏创建携带客户端 UUID，响应丢失可先按 ID 查询。
 
@@ -63,7 +63,7 @@ POST /collections 返回 201 时，原始数据与初始任务已落库。organi
 
 项目和标签 PATCH 接受 operations 数组，同一 ID 在一次请求中只能出现一次。include 表示用户确认，exclude 表示显式排除并阻止自动重新添加，reset 清除人工覆盖并恢复自动判断资格。每个集合操作原子执行，验证全部目标属于当前用户后提交。成功返回完整 Collection。
 
-整理模式通过项目 PATCH 的 `Idempotency-Key` 取得可选 `undo_receipt`。确认页面上显示的建议时携带相应运行及项目版本。撤销调用 `POST /collections/{id}/projects/undo`，提交回执中的操作键与决定版本。服务端核对账号、收藏、项目和当前状态，在一个事务中恢复此前关联及引文。重复请求可安全重放，过期回执或并发修改返回 409。
+整理模式通过项目 PATCH 的 `Idempotency-Key` 取得可选 `undo_receipt`。确认页面上显示的建议时携带相应运行及项目版本。撤销调用 `POST /collections/{id}/projects/undo`，提交回执中的操作键与决定版本。服务端核对账号、收藏、项目和当前状态，在一个事务中恢复此前关联及引文。有变更的 PATCH 和撤销保留原成功响应。无变更的 PATCH 重放时返回当前可访问的收藏，不再写入或生成回执。同键异体、过期回执或并发修改返回 409。
 
 活动项目可自动关联，用户可主动把收藏加入暂停或已结束项目。有效归类为 manual、confirmed、auto；suggested 和 rejected 不计入项目收藏数。unclassified 表示没有任一有效项目关联，与阅读和整理状态独立。
 
@@ -75,7 +75,7 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 ## 导出本人数据
 
-`GET /me/export?format=markdown|json` 需要有效会话，返回 ZIP 下载。项目与未删除收藏来自当前账号的同一个数据库快照。导出按账号限流，每十分钟可发起一次。429 响应通过 `Retry-After` 返回实际剩余秒数；客户端可据此显示可再次导出的时间。具体参数和响应头见 [OpenAPI](../../contracts/openapi.json)。
+`GET /me/export?format=markdown|json` 需要有效会话及对应的 `X-CSRF-Token` 请求头，返回 ZIP 下载。项目与未删除收藏来自当前账号的同一个数据库快照。导出按账号限流，每十分钟可发起一次。429 响应通过 `Retry-After` 返回实际剩余秒数；客户端可据此显示可再次导出的时间。具体参数和响应头见 [OpenAPI](../../contracts/openapi.json)。
 
 ## 附件时序
 

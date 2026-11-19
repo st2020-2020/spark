@@ -2,10 +2,71 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 )
+
+func TestProjectDecisionNoChangeReplayReadsCurrentCollection(t *testing.T) {
+	app, base := testBackend(t)
+	ctx := t.Context()
+	if err := app.BootstrapAdmin(ctx, "no-change@example.test", "test-password-12345"); err != nil {
+		t.Fatal(err)
+	}
+	user := newClient(t, app, base)
+	user.signIn("no-change@example.test")
+	uid := user.do("GET", "/auth/session", nil, "").want(t, 200)["user"].(map[string]any)["id"]
+	project := user.do("POST", "/projects", map[string]any{"name": "项目", "description": "", "focus_points": []string{}}, uuid.NewString()).want(t, 201)["id"]
+	id := uuid.NewString()
+	collection := "/collections/" + id
+	path := collection + "/projects"
+	user.do("POST", "/collections", collectionInput(id, strings.Repeat("原文", 4000)), uuid.NewString()).want(t, 201)
+	decide := func(version int, action string) map[string]any {
+		return map[string]any{"base_decision_version": version, "operations": []any{map[string]any{"id": project, "action": action}}}
+	}
+	user.do("PATCH", path, decide(1, "include"), "").want(t, 200)
+	key, legacyKey := uuid.NewString(), uuid.NewString()
+	body := decide(2, "include")
+	initial := user.do("PATCH", path, body, key).want(t, 200)
+	if initial["undo_receipt"] != nil || initial["decision_version"] != float64(2) {
+		t.Fatal("unchanged decision produced a receipt or changed the version")
+	}
+	var size int
+	operation := "PATCH /api/v1" + path
+	if err := app.Pool.QueryRow(ctx, `SELECT octet_length(response_json::text)
+		FROM idempotency_keys WHERE user_id=$1 AND operation=$2 AND key=$3`, uid, operation, key).Scan(&size); err != nil {
+		t.Fatal(err)
+	}
+	if size > 128 {
+		t.Fatalf("unchanged decision stored %d bytes of response data", size)
+	}
+	// A row written by the earlier snapshot format must still replay as-is.
+	if _, err := app.Pool.Exec(ctx, `INSERT INTO idempotency_keys(user_id,operation,key,request_digest,response_status,response_json)
+		SELECT user_id,operation,$4,request_digest,response_status,$5 FROM idempotency_keys
+		WHERE user_id=$1 AND operation=$2 AND key=$3`, uid, operation, key, legacyKey, jsonBytes(initial)); err != nil {
+		t.Fatal(err)
+	}
+	user.do("PATCH", collection, map[string]any{"base_content_version": 1, "document": textDocument("更新后的正文")}, "").want(t, 200)
+	updated := user.do("PATCH", path, decide(2, "exclude"), "").want(t, 200)
+	res := user.do("PATCH", path, body, key)
+	if got := res.want(t, 200); res.header.Get("Idempotent-Replayed") != "true" || !equalJSON(got, updated) {
+		t.Fatal("unchanged decision did not replay with the current collection")
+	}
+	if got := user.do("PATCH", path, body, legacyKey).want(t, 200); !equalJSON(got, initial) {
+		t.Fatal("historical response did not replay its original snapshot")
+	}
+	if got := user.do("PATCH", path, decide(2, "exclude"), key).want(t, 409); got["error"].(map[string]any)["code"] != "idempotency_mismatch" {
+		t.Fatal("same key with a different request was not rejected")
+	}
+	user.do("DELETE", collection, map[string]any{"base_resource_version": updated["resource_version"]}, "").want(t, 200)
+	if got := user.do("PATCH", path, body, key).want(t, 409); got["error"].(map[string]any)["code"] != "collection_in_trash" {
+		t.Fatal("unchanged decision replay did not respect the trash boundary")
+	}
+	if got := user.do("PATCH", path, body, legacyKey).want(t, 409); got["error"].(map[string]any)["code"] != "collection_in_trash" {
+		t.Fatal("historical decision replay did not respect the trash boundary")
+	}
+}
 
 func TestProjectUndoRestoresSuggestionAndManualLinkAtomically(t *testing.T) {
 	app, base := testBackend(t)

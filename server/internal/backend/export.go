@@ -72,6 +72,9 @@ func (s *Server) exportMyData(c *gin.Context) (any, error) {
 	if s.crossOriginRead(c) {
 		return nil, problem(403, "forbidden", "数据导出仅支持同源请求。")
 	}
+	if err := requireCSRF(c); err != nil {
+		return nil, err
+	}
 	uid := current(c).User.ID
 	format := c.Query("format")
 	if format != "markdown" && format != "json" {

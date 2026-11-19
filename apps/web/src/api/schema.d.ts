@@ -181,7 +181,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 导出我的收藏和项目 */
+        /**
+         * 导出我的收藏和项目
+         * @description 同源请求须携带会话对应的 CSRF token。会话及来源校验在导出限流和读取前完成。
+         */
         get: operations["exportMyData"];
         put?: never;
         post?: never;
@@ -1732,7 +1735,9 @@ export interface operations {
             query: {
                 format: "markdown" | "json";
             };
-            header?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1747,6 +1752,15 @@ export interface operations {
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description 会话 CSRF token 缺失或错误（csrf_failed），或来源不受信任（forbidden） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 导出限流 rate_limited */
@@ -2541,7 +2555,7 @@ export interface operations {
             query?: never;
             header: {
                 "X-CSRF-Token": string;
-                /** @description 整理模式提交使用。实际变更时返回撤销回执。相同键与请求体重放同一响应。 */
+                /** @description 整理模式提交使用。实际变更时返回撤销回执并重放原响应。无变化的提交重放时读取当前收藏，不执行决定或返回回执。回收站中的收藏拒绝重放。 */
                 "Idempotency-Key"?: string;
             };
             path: {
@@ -2564,7 +2578,7 @@ export interface operations {
                     "application/json": components["schemas"]["Collection"];
                 };
             };
-            /** @description 决定版本冲突、所选建议失效，或幂等键冲突 */
+            /** @description 决定版本冲突、所选建议失效、幂等键冲突或收藏已进入回收站 */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -146,11 +146,19 @@ func (s *Server) authenticate(c *gin.Context) {
 	c.Next()
 }
 func (s *Server) csrf(c *gin.Context) {
-	if c.Request.Method != "GET" && c.Request.Method != "HEAD" && !hmac.Equal([]byte(c.GetHeader("X-CSRF-Token")), []byte(current(c).CSRF)) {
-		s.fail(c, problem(403, "csrf_failed", "页面验证已失效，请刷新后重试。"))
-		return
+	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+		if err := requireCSRF(c); err != nil {
+			s.fail(c, err)
+			return
+		}
 	}
 	c.Next()
+}
+func requireCSRF(c *gin.Context) error {
+	if !hmac.Equal([]byte(c.GetHeader("X-CSRF-Token")), []byte(current(c).CSRF)) {
+		return problem(403, "csrf_failed", "页面验证已失效，请刷新后重试。")
+	}
+	return nil
 }
 func (s *Server) cookie(c *gin.Context, token string, expires time.Time) {
 	maxAge := int(time.Until(expires).Seconds())
