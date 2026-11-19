@@ -1,5 +1,12 @@
 import type { SparkApi } from '../api/client';
-import type { Collection, Organization, ProjectAssociation, Stage } from '../api/types';
+import type {
+  AssociationUpdate,
+  Collection,
+  ExpectedProjectSuggestion,
+  Organization,
+  ProjectAssociation,
+  Stage,
+} from '../api/types';
 
 export type OrganizationDisplayKind =
   | 'excluded'
@@ -333,6 +340,21 @@ export class StaleSuggestionError extends Error {
   }
 }
 
+function toExpectedSuggestion(assoc: ProjectAssociation | undefined): ExpectedProjectSuggestion | undefined {
+  if (
+    assoc &&
+    assoc.decision === 'suggested' &&
+    assoc.suggestion_run_id &&
+    assoc.project_version !== undefined
+  ) {
+    return {
+      run_id: assoc.suggestion_run_id,
+      project_version: assoc.project_version,
+    };
+  }
+  return undefined;
+}
+
 export async function decideCollectionProjectSafely(
   api: Pick<SparkApi, 'getCollection' | 'updateProjectDecisions'>,
   params: {
@@ -346,14 +368,71 @@ export async function decideCollectionProjectSafely(
   if (fresh.deleted_at) {
     throw new StaleSuggestionError('该收藏已移入回收站，列表已为你同步最新状态。', fresh);
   }
+  const assoc = fresh.projects.find((p) => p.project_id === params.projectId);
   if (params.requireSuggested) {
-    const assoc = fresh.projects.find((p) => p.project_id === params.projectId);
     if (!assoc || assoc.decision !== 'suggested') {
       throw new StaleSuggestionError('该条建议已在其他页面处理完成，列表已为你同步最新状态。', fresh);
     }
   }
+  const expected = params.requireSuggested ? toExpectedSuggestion(assoc) : undefined;
   return api.updateProjectDecisions(params.collectionId, {
     base_decision_version: fresh.decision_version,
-    operations: [{ id: params.projectId, action: params.action }],
+    operations: [
+      {
+        id: params.projectId,
+        action: params.action,
+        ...(expected ? { expected_suggestion: expected } : {}),
+      },
+    ],
   });
+}
+
+export interface FrozenTriageSelectionItem {
+  projectId: string;
+  expectedSuggestion?: ExpectedProjectSuggestion;
+}
+
+export function buildTriageAssociationUpdateFromSnapshot(
+  baseDecisionVersion: number,
+  items: FrozenTriageSelectionItem[],
+): AssociationUpdate {
+  const deduped: FrozenTriageSelectionItem[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.projectId)) continue;
+    seen.add(item.projectId);
+    deduped.push(item);
+  }
+  if (deduped.length === 0) {
+    throw new Error('请选择至少一个目标项目');
+  }
+  return {
+    base_decision_version: baseDecisionVersion,
+    operations: deduped.map((item) => ({
+      id: item.projectId,
+      action: 'include',
+      ...(item.expectedSuggestion ? { expected_suggestion: item.expectedSuggestion } : {}),
+    })),
+  };
+}
+
+export function getExpectedProjectSuggestion(
+  collection: Collection,
+  projectId: string,
+): ExpectedProjectSuggestion | undefined {
+  const assoc = collection.projects.find((p) => p.project_id === projectId);
+  return toExpectedSuggestion(assoc);
+}
+
+export function buildTriageAssociationUpdate(
+  collection: Collection,
+  projectIds: string[],
+): AssociationUpdate {
+  return buildTriageAssociationUpdateFromSnapshot(
+    collection.decision_version,
+    projectIds.map((projectId) => ({
+      projectId,
+      expectedSuggestion: getExpectedProjectSuggestion(collection, projectId),
+    })),
+  );
 }

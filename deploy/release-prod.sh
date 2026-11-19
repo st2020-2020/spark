@@ -18,6 +18,7 @@ Commands:
 
 Options:
   --commit <sha40>         Immutable 40-char Git commit SHA on trusted trunk (deploy)
+  --tag <vX.Y.Z>           Published annotated release tag for --commit (production deploy)
   --trusted-ref <ref>      Trusted trunk ref for ancestry check (default: origin/main)
   --mode <ssh|local>       Target execution mode (default: ssh)
   --host <user@host>       SSH target host (required for --mode ssh)
@@ -62,6 +63,7 @@ case "$CMD" in
 esac
 
 COMMIT=""
+RELEASE_TAG=""
 TRUSTED_REF="origin/main"
 MODE="ssh"
 HOST=""
@@ -84,6 +86,7 @@ DRY_RUN="false"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --commit) COMMIT="${2:-}"; shift 2 ;;
+    --tag) RELEASE_TAG="${2:-}"; shift 2 ;;
     --trusted-ref) TRUSTED_REF="${2:-}"; shift 2 ;;
     --mode) MODE="${2:-}"; shift 2 ;;
     --host) HOST="${2:-}"; shift 2 ;;
@@ -272,6 +275,11 @@ if [[ "$CMD" == "deploy" ]]; then
   git -C "$REPO_ROOT" cat-file -e "${COMMIT}^{commit}" 2>/dev/null || die "commit not found locally: $COMMIT (run git fetch first)"
   git -C "$REPO_ROOT" rev-parse --verify "${TRUSTED_REF}^{commit}" >/dev/null 2>&1 || die "trusted trunk ref not found: $TRUSTED_REF"
   git -C "$REPO_ROOT" merge-base --is-ancestor "$COMMIT" "$TRUSTED_REF" || die "commit $COMMIT is not an ancestor of trusted trunk $TRUSTED_REF"
+  [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "deploy requires a published --tag vX.Y.Z"
+  # ls-remote patterns also match ref suffixes. Require the full peeled name and commit on one line.
+  peeled_ref="refs/tags/${RELEASE_TAG}^{}"
+  tag_refs="$(git -C "$REPO_ROOT" ls-remote --exit-code origin "$peeled_ref")" || die "published annotated release tag missing or origin unavailable"
+  grep -Fxq -- "$COMMIT"$'\t'"$peeled_ref" <<< "$tag_refs" || die "published tag $RELEASE_TAG does not identify --commit"
   if [[ "$SKIP_WEB" != "true" ]]; then
     require_cmd npm
     require_cmd node
@@ -601,11 +609,11 @@ if "${dcmd[@]}" ps -aq --filter "name=^${PROJECT}-worker-1$" | grep -q .; then
   dc --profile ai stop worker
 fi
 
-# T11 expects existing schema v3 (no auto-init or migration upgrade in release-prod.sh)
+# Verify the existing schema against the release build before replacing the API.
 expected_version="$(sed -n 's/^const Version = \([0-9][0-9]*\).*/\1/p' "${DEPLOY_DIR}/server/db/migrate.go" | head -n1)"
 current_version="$(dc exec -T postgres psql -U spark -d spark -tAc "SELECT coalesce(max(version), 0) FROM schema_migrations;" | tr -d '[:space:]')"
 [[ -n "$expected_version" && "$current_version" == "$expected_version" ]] || {
-  echo "DB schema version (${current_version:-missing}) != expected (${expected_version:-unknown}); T11 requires existing v3 schema" >&2
+  echo "DB schema version (${current_version:-missing}) != expected (${expected_version:-unknown}); apply the required migration before deployment" >&2
   exit 1
 }
 echo "DB schema v${current_version} verified"

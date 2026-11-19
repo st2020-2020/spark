@@ -71,6 +71,44 @@ describe('realApiClient', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps the new session when an earlier account receives a late 401', async () => {
+    const client = createRealApiClient();
+    const expired = vi.fn();
+    client.setUnauthorizedHandler(expired);
+    client.setCsrfToken('session-A');
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementationOnce(() =>
+      new Promise<Response>((resolve) => { finish = resolve; }),
+    ).mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const stale = client.getCollection('stale');
+      client.setCsrfToken('session-B');
+      finish(new Response(null, { status: 401 }));
+      await expect(stale).rejects.toMatchObject({ status: 401 });
+      expect(expired).not.toHaveBeenCalled();
+      await client.revokeSession('other');
+      expect(fetchMock.mock.calls[1][1].headers['X-CSRF-Token']).toBe('session-B');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reports an uncertain write if the successful response body is interrupted', async () => {
+    const client = createRealApiClient();
+    client.setCsrfToken('session-A');
+    const body = new ReadableStream({ start(controller) { controller.error(new TypeError()); } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    try {
+      const write = client.updateProjectDecisions('item', {
+        base_decision_version: 1, operations: [{ id: 'project', action: 'include' }],
+      }, crypto.randomUUID());
+      await expect(write).rejects.toMatchObject({ status: 0, code: 'invalid_response' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('subscribes to same-origin /api/v1/organization/events with credentials and cleans up', () => {
     const listeners = new Map<string, Set<(ev: MessageEvent) => void>>();
     const closeMock = vi.fn();
@@ -150,6 +188,117 @@ describe('realApiClient', () => {
     unsub();
     expect(listeners.get('ready')?.size ?? 0).toBe(0);
     expect(listeners.get('organization')?.size ?? 0).toBe(0);
+    vi.unstubAllGlobals();
+  });
+
+  it('downloads export ZIP with filename and surfaces 429 Retry-After metadata', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(new Blob(['zip-bytes'], { type: 'application/zip' }), {
+        status: 200,
+        headers: {
+          'content-type': 'application/zip',
+          'content-disposition': 'attachment; filename="spark-export-20261119.zip"',
+        },
+      }),
+    );
+
+    const client = createRealApiClient();
+    await expect(client.exportMyData('markdown')).rejects.toMatchObject({ status: 403 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    client.setCsrfToken('test-export');
+    const res = await client.exportMyData('markdown');
+    expect(res.filename).toBe('spark-export-20261119.zip');
+    expect(res.blob.size).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/me/export?format=markdown',
+      expect.objectContaining({ method: 'GET', credentials: 'include' }),
+    );
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'rate_limited',
+            message: '导出过于频繁',
+            request_id: 'req-429',
+          },
+        }),
+        {
+          status: 429,
+          headers: {
+            'content-type': 'application/json',
+            'Retry-After': '45',
+          },
+        },
+      ),
+    );
+
+    await expect(client.exportMyData('json')).rejects.toMatchObject({
+      status: 429,
+      code: 'rate_limited',
+      retryAfter: '45',
+    } satisfies Partial<ApiError>);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('sends Idempotency-Key on updateProjectDecisions and calls undoProjectDecisions with CSRF token', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = createRealApiClient();
+    client.setCsrfToken('csrf-triage-1');
+    const operationKey = crypto.randomUUID();
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: 'col-1', decision_version: 2 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await client.updateProjectDecisions(
+      'col-1',
+      {
+        base_decision_version: 1,
+        operations: [
+          {
+            id: 'proj-1',
+            action: 'include',
+            expected_suggestion: { run_id: 'run-1', project_version: 1 },
+          },
+        ],
+      },
+      operationKey,
+    );
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/v1/collections/col-1/projects');
+    expect((fetchMock.mock.calls[0][1] as RequestInit).headers).toMatchObject({
+      'X-CSRF-Token': 'csrf-triage-1',
+      'Idempotency-Key': operationKey,
+    });
+
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: 'col-1', decision_version: 3 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+
+    await client.undoProjectDecisions('col-1', {
+      operation_key: operationKey,
+      base_decision_version: 2,
+    });
+
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/v1/collections/col-1/projects/undo');
+    expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('POST');
+    expect((fetchMock.mock.calls[1][1] as RequestInit).headers).toMatchObject({
+      'X-CSRF-Token': 'csrf-triage-1',
+    });
+
     vi.unstubAllGlobals();
   });
 });

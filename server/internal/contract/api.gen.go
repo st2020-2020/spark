@@ -309,6 +309,12 @@ const (
 	ListCollectionsParamsScopeUnclassified ListCollectionsParamsScope = "unclassified"
 )
 
+// Defines values for ExportMyDataParamsFormat.
+const (
+	Json     ExportMyDataParamsFormat = "json"
+	Markdown ExportMyDataParamsFormat = "markdown"
+)
+
 // Defines values for ListProjectsParamsState.
 const (
 	ListProjectsParamsStateActive    ListProjectsParamsState = "active"
@@ -348,8 +354,9 @@ type AcceptedStatus string
 type AssociationUpdate struct {
 	BaseDecisionVersion int `json:"base_decision_version"`
 	Operations          []struct {
-		Action AssociationUpdateOperationsAction `json:"action"`
-		Id     openapi_types.UUID                `json:"id"`
+		Action             AssociationUpdateOperationsAction `json:"action"`
+		ExpectedSuggestion *ExpectedProjectSuggestion        `json:"expected_suggestion,omitempty"`
+		Id                 openapi_types.UUID                `json:"id"`
 	} `json:"operations"`
 }
 
@@ -435,6 +442,7 @@ type Collection struct {
 	ReadAt          *time.Time           `json:"read_at,omitempty"`
 	ResourceVersion int                  `json:"resource_version"`
 	Tags            []TagAssociation     `json:"tags"`
+	UndoReceipt     *ProjectUndoReceipt  `json:"undo_receipt,omitempty"`
 	UpdatedAt       time.Time            `json:"updated_at"`
 }
 
@@ -535,6 +543,12 @@ type Error struct {
 		Message   string                  `json:"message"`
 		RequestId string                  `json:"request_id"`
 	} `json:"error"`
+}
+
+// ExpectedProjectSuggestion defines model for ExpectedProjectSuggestion.
+type ExpectedProjectSuggestion struct {
+	ProjectVersion int                `json:"project_version"`
+	RunId          openapi_types.UUID `json:"run_id"`
 }
 
 // Extraction defines model for Extraction.
@@ -789,6 +803,9 @@ type ProjectAssociation struct {
 	ProjectId      openapi_types.UUID         `json:"project_id"`
 	ProjectVersion *int                       `json:"project_version,omitempty"`
 	Reason         *string                    `json:"reason,omitempty"`
+
+	// SuggestionRunId suggested 关联的来源运行 ID。与 project_version 一起用于确认时校验。
+	SuggestionRunId *openapi_types.UUID `json:"suggestion_run_id,omitempty"`
 }
 
 // ProjectAssociationDecision defines model for ProjectAssociation.Decision.
@@ -814,6 +831,13 @@ type ProjectEvidenceSourceId string
 type ProjectPage struct {
 	Items      []Project `json:"items"`
 	NextCursor *string   `json:"next_cursor,omitempty"`
+}
+
+// ProjectUndoReceipt defines model for ProjectUndoReceipt.
+type ProjectUndoReceipt struct {
+	DecisionVersion int       `json:"decision_version"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	OperationKey    string    `json:"operation_key"`
 }
 
 // ProjectUpdate defines model for ProjectUpdate.
@@ -968,6 +992,12 @@ type TextNode struct {
 
 // TextNodeType defines model for TextNode.Type.
 type TextNodeType string
+
+// UndoProjectDecision defines model for UndoProjectDecision.
+type UndoProjectDecision struct {
+	BaseDecisionVersion int    `json:"base_decision_version"`
+	OperationKey        string `json:"operation_key"`
+}
 
 // Upload defines model for Upload.
 type Upload struct {
@@ -1175,6 +1205,14 @@ type RestartOrganizationParams struct {
 // UpdateProjectDecisionsParams defines parameters for UpdateProjectDecisions.
 type UpdateProjectDecisionsParams struct {
 	XCSRFToken string `json:"X-CSRF-Token"`
+
+	// IdempotencyKey 整理模式提交使用。实际变更时返回撤销回执并重放原响应。无变化的提交重放时读取当前收藏，不执行决定或返回回执。回收站中的收藏拒绝重放。
+	IdempotencyKey *string `json:"Idempotency-Key,omitempty"`
+}
+
+// UndoProjectDecisionsParams defines parameters for UndoProjectDecisions.
+type UndoProjectDecisionsParams struct {
+	XCSRFToken string `json:"X-CSRF-Token"`
 }
 
 // PurgeCollectionParams defines parameters for PurgeCollection.
@@ -1203,6 +1241,15 @@ type ListRevisionsParams struct {
 type UpdateTagDecisionsParams struct {
 	XCSRFToken string `json:"X-CSRF-Token"`
 }
+
+// ExportMyDataParams defines parameters for ExportMyData.
+type ExportMyDataParams struct {
+	Format     ExportMyDataParamsFormat `form:"format" json:"format"`
+	XCSRFToken string                   `json:"X-CSRF-Token"`
+}
+
+// ExportMyDataParamsFormat defines parameters for ExportMyData.
+type ExportMyDataParamsFormat string
 
 // UpdatePreferencesParams defines parameters for UpdatePreferences.
 type UpdatePreferencesParams struct {
@@ -1328,6 +1375,9 @@ type SetAIExclusionJSONRequestBody = AIExclusion
 
 // UpdateProjectDecisionsJSONRequestBody defines body for UpdateProjectDecisions for application/json ContentType.
 type UpdateProjectDecisionsJSONRequestBody = AssociationUpdate
+
+// UndoProjectDecisionsJSONRequestBody defines body for UndoProjectDecisions for application/json ContentType.
+type UndoProjectDecisionsJSONRequestBody = UndoProjectDecision
 
 // PurgeCollectionJSONRequestBody defines body for PurgeCollection for application/json ContentType.
 type PurgeCollectionJSONRequestBody = ResourceCondition
@@ -1852,6 +1902,11 @@ type ClientInterface interface {
 
 	UpdateProjectDecisions(ctx context.Context, id openapi_types.UUID, params *UpdateProjectDecisionsParams, body UpdateProjectDecisionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// UndoProjectDecisionsWithBody request with any body
+	UndoProjectDecisionsWithBody(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UndoProjectDecisions(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, body UndoProjectDecisionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// PurgeCollectionWithBody request with any body
 	PurgeCollectionWithBody(ctx context.Context, id openapi_types.UUID, params *PurgeCollectionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1880,6 +1935,9 @@ type ClientInterface interface {
 
 	// HealthReady request
 	HealthReady(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ExportMyData request
+	ExportMyData(ctx context.Context, params *ExportMyDataParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UpdatePreferencesWithBody request with any body
 	UpdatePreferencesWithBody(ctx context.Context, params *UpdatePreferencesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2482,6 +2540,30 @@ func (c *Client) UpdateProjectDecisions(ctx context.Context, id openapi_types.UU
 	return c.Client.Do(req)
 }
 
+func (c *Client) UndoProjectDecisionsWithBody(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoProjectDecisionsRequestWithBody(c.Server, id, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UndoProjectDecisions(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, body UndoProjectDecisionsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUndoProjectDecisionsRequest(c.Server, id, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) PurgeCollectionWithBody(ctx context.Context, id openapi_types.UUID, params *PurgeCollectionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPurgeCollectionRequestWithBody(c.Server, id, params, contentType, body)
 	if err != nil {
@@ -2604,6 +2686,18 @@ func (c *Client) HealthLive(ctx context.Context, reqEditors ...RequestEditorFn) 
 
 func (c *Client) HealthReady(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewHealthReadyRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ExportMyData(ctx context.Context, params *ExportMyDataParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewExportMyDataRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -4474,6 +4568,77 @@ func NewUpdateProjectDecisionsRequestWithBody(server string, id openapi_types.UU
 
 		req.Header.Set("X-CSRF-Token", headerParam0)
 
+		if params.IdempotencyKey != nil {
+			var headerParam1 string
+
+			headerParam1, err = runtime.StyleParamWithLocation("simple", false, "Idempotency-Key", runtime.ParamLocationHeader, *params.IdempotencyKey)
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Idempotency-Key", headerParam1)
+		}
+
+	}
+
+	return req, nil
+}
+
+// NewUndoProjectDecisionsRequest calls the generic UndoProjectDecisions builder with application/json body
+func NewUndoProjectDecisionsRequest(server string, id openapi_types.UUID, params *UndoProjectDecisionsParams, body UndoProjectDecisionsJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUndoProjectDecisionsRequestWithBody(server, id, params, "application/json", bodyReader)
+}
+
+// NewUndoProjectDecisionsRequestWithBody generates requests for UndoProjectDecisions with any type of body
+func NewUndoProjectDecisionsRequestWithBody(server string, id openapi_types.UUID, params *UndoProjectDecisionsParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithLocation("simple", false, "id", runtime.ParamLocationPath, id)
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/collections/%s/projects/undo", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithLocation("simple", false, "X-CSRF-Token", runtime.ParamLocationHeader, params.XCSRFToken)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-CSRF-Token", headerParam0)
+
 	}
 
 	return req, nil
@@ -4849,6 +5014,64 @@ func NewHealthReadyRequest(server string) (*http.Request, error) {
 	req, err := http.NewRequest("GET", queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewExportMyDataRequest generates requests for ExportMyData
+func NewExportMyDataRequest(server string, params *ExportMyDataParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/me/export")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if queryFrag, err := runtime.StyleParamWithLocation("form", true, "format", runtime.ParamLocationQuery, params.Format); err != nil {
+			return nil, err
+		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+			return nil, err
+		} else {
+			for k, v := range parsed {
+				for _, v2 := range v {
+					queryValues.Add(k, v2)
+				}
+			}
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithLocation("simple", false, "X-CSRF-Token", runtime.ParamLocationHeader, params.XCSRFToken)
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-CSRF-Token", headerParam0)
+
 	}
 
 	return req, nil
@@ -5970,6 +6193,11 @@ type ClientWithResponsesInterface interface {
 
 	UpdateProjectDecisionsWithResponse(ctx context.Context, id openapi_types.UUID, params *UpdateProjectDecisionsParams, body UpdateProjectDecisionsJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateProjectDecisionsResponse, error)
 
+	// UndoProjectDecisionsWithBodyWithResponse request with any body
+	UndoProjectDecisionsWithBodyWithResponse(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UndoProjectDecisionsResponse, error)
+
+	UndoProjectDecisionsWithResponse(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, body UndoProjectDecisionsJSONRequestBody, reqEditors ...RequestEditorFn) (*UndoProjectDecisionsResponse, error)
+
 	// PurgeCollectionWithBodyWithResponse request with any body
 	PurgeCollectionWithBodyWithResponse(ctx context.Context, id openapi_types.UUID, params *PurgeCollectionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PurgeCollectionResponse, error)
 
@@ -5998,6 +6226,9 @@ type ClientWithResponsesInterface interface {
 
 	// HealthReadyWithResponse request
 	HealthReadyWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*HealthReadyResponse, error)
+
+	// ExportMyDataWithResponse request
+	ExportMyDataWithResponse(ctx context.Context, params *ExportMyDataParams, reqEditors ...RequestEditorFn) (*ExportMyDataResponse, error)
 
 	// UpdatePreferencesWithBodyWithResponse request with any body
 	UpdatePreferencesWithBodyWithResponse(ctx context.Context, params *UpdatePreferencesParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdatePreferencesResponse, error)
@@ -6729,6 +6960,7 @@ type UpdateProjectDecisionsResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON200      *Collection
+	JSON409      *Error
 	JSONDefault  *Error
 }
 
@@ -6742,6 +6974,30 @@ func (r UpdateProjectDecisionsResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r UpdateProjectDecisionsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type UndoProjectDecisionsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *Collection
+	JSON409      *Error
+	JSONDefault  *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r UndoProjectDecisionsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UndoProjectDecisionsResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6903,6 +7159,30 @@ func (r HealthReadyResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r HealthReadyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ExportMyDataResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON403      *Error
+	JSON429      *Error
+	JSONDefault  *Error
+}
+
+// Status returns HTTPResponse.Status
+func (r ExportMyDataResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ExportMyDataResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -7665,6 +7945,23 @@ func (c *ClientWithResponses) UpdateProjectDecisionsWithResponse(ctx context.Con
 	return ParseUpdateProjectDecisionsResponse(rsp)
 }
 
+// UndoProjectDecisionsWithBodyWithResponse request with arbitrary body returning *UndoProjectDecisionsResponse
+func (c *ClientWithResponses) UndoProjectDecisionsWithBodyWithResponse(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UndoProjectDecisionsResponse, error) {
+	rsp, err := c.UndoProjectDecisionsWithBody(ctx, id, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoProjectDecisionsResponse(rsp)
+}
+
+func (c *ClientWithResponses) UndoProjectDecisionsWithResponse(ctx context.Context, id openapi_types.UUID, params *UndoProjectDecisionsParams, body UndoProjectDecisionsJSONRequestBody, reqEditors ...RequestEditorFn) (*UndoProjectDecisionsResponse, error) {
+	rsp, err := c.UndoProjectDecisions(ctx, id, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUndoProjectDecisionsResponse(rsp)
+}
+
 // PurgeCollectionWithBodyWithResponse request with arbitrary body returning *PurgeCollectionResponse
 func (c *ClientWithResponses) PurgeCollectionWithBodyWithResponse(ctx context.Context, id openapi_types.UUID, params *PurgeCollectionParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PurgeCollectionResponse, error) {
 	rsp, err := c.PurgeCollectionWithBody(ctx, id, params, contentType, body, reqEditors...)
@@ -7758,6 +8055,15 @@ func (c *ClientWithResponses) HealthReadyWithResponse(ctx context.Context, reqEd
 		return nil, err
 	}
 	return ParseHealthReadyResponse(rsp)
+}
+
+// ExportMyDataWithResponse request returning *ExportMyDataResponse
+func (c *ClientWithResponses) ExportMyDataWithResponse(ctx context.Context, params *ExportMyDataParams, reqEditors ...RequestEditorFn) (*ExportMyDataResponse, error) {
+	rsp, err := c.ExportMyData(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExportMyDataResponse(rsp)
 }
 
 // UpdatePreferencesWithBodyWithResponse request with arbitrary body returning *UpdatePreferencesResponse
@@ -8916,6 +9222,53 @@ func ParseUpdateProjectDecisionsResponse(rsp *http.Response) (*UpdateProjectDeci
 		}
 		response.JSON200 = &dest
 
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUndoProjectDecisionsResponse parses an HTTP response from a UndoProjectDecisionsWithResponse call
+func ParseUndoProjectDecisionsResponse(rsp *http.Response) (*UndoProjectDecisionsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UndoProjectDecisionsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Collection
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest Error
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -9146,6 +9499,46 @@ func ParseHealthReadyResponse(rsp *http.Response) (*HealthReadyResponse, error) 
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSONDefault = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseExportMyDataResponse parses an HTTP response from a ExportMyDataWithResponse call
+func ParseExportMyDataResponse(rsp *http.Response) (*ExportMyDataResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ExportMyDataResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest Error
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON429 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && true:
 		var dest Error
@@ -9676,119 +10069,133 @@ func ParseCompleteUploadResponse(rsp *http.Response) (*CompleteUploadResponse, e
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"H4sIAAAAAAAC/+w961cT177/Slbu+RgKUk9X6zernlPvaU9dgufe3i5v1iazCVOSmXFmgtIu1gIrAjZA",
+	"tAg+8IFH1NvWoFWRl/LHmD1JPvEv3LX3npnsmex5RRLE8EmEPfvxe7/2b/8UT8lZRZagpGvxIz/FtdQA",
+	"zALy49GTJy6kMjlNlCX8XyAIoi7KEsicUmUFqroItfiRfpDRYCKuML/6KQ7xdwIU8M/6sALjR+J9spyB",
+	"QIqPjCTiKjyXE1X85+9rQ88mrKFy3w8wpcdHEvGjqRRUdChEXB7/DPDYpEg+7ZfVLNDjR+K5nCjE7XU0",
+	"XRWlNF5H04GeozuXclm8rXM5mIN4rJqTJDwqQeCUgbpjq9YUrkM5NmBPzz2hpskpkYw9owhAhxGP2gc0",
+	"mBRgSsRYSg5B1cJWVpTELD7LIXtVUdJhGqp4WXuDZBJRh1kt4sIgpZsrWSATJYLJeMLCKYYe1KDOgRce",
+	"o8CUDoWklkunoWZN9hcV9sePxP+js0aVnSZJdp4wPzmlyhh8PbUPRxLxUJh2oYkMMQ/CQ04WXDhJQfPX",
+	"rgSGqPm/GkiBqoLhunn5SHFAnUsLug5SA1ko6RFx0S9moASykGG3GqBDskBWzMIk/S1nEkXWRN1NWV08",
+	"ytLEH2Gyb1iHmmMshwp5yLBPwm7IMSmzFx4MvwR6aqDHZucIQKyXAZgyhvDygqiBvkwYxvfh9C9VCAb/",
+	"KQtROdzCibWrAaAKZK7g3ZC/cveSE9JQPyZL/WI64naUDNAxMSUFIGaGkzlJ1LVgqshpUI32RWhRdl5W",
+	"B6GaTMlSKqeqUEoNk2/ABfrN54koRFjjVe45OQfhbsAb5o0L+dAAaRWGdhXwjiM2BfqZDNS/FrWosjUl",
+	"S7opkW016aek8BJYTcRHfDVGoo6v+2o7DMfYCXtvvAMfkwXYkBy0hV2w7caRi+wGMhloGwlRLAsx6Wc/",
+	"JuLA1pNaaLQwunWkHhcmIIm6cc5pYUeHF3RMgGomnoiLWZCGXKvGMXEinpPEczlo0oCu5iCzVmh+TqkQ",
+	"YEMJ6A5FjuVIhy4SXVm3j+gWoQAzMPIqoqZkwHBSF/UM324Q5FTOMmj80HPcGjeSiA8AzWUUClBLqaJC",
+	"/xtHb35FU9PG4pRxfbK0NofejpeXipXiw/KtS9Wl9fLtItrcqBSL70YvxhMc6glpD4k229f9KQukHMj4",
+	"nFpW00ASfwRhjNpv2bHkWzEtSiCTxKTGm1yh1m940jfNZcbT4LGAklPTMAn6daiGJwAVgmgUo0JNzqmp",
+	"CNpMB+nwR+0F6YBj5iRBTqowBUVFDwm4M5Ignza/wDMQDR7l2DxD12YMm9Lc7OSWSvWSgwNODuc75SVD",
+	"PyZsXeSacMhfh/RxnN1f5B8jX+224G9EmkRm9yy48DWU0voA9vq6uroSwQKA+aSb+4GbqZkPDnd98VnC",
+	"k8uTouCk/mA/zuGzhtBHOki3YJWckpGB8D4LfRFinbCcxuzGCeoaOPzp+xRIR6Vu+8yhJFltqZ5cNgvU",
+	"YZ4wk+AFPZnKqZqsclWFLusgU69AjdlC6e3tmFPPxirbE8bmQ2NhtbI9h27f3dnKo/w4KvxuTI0ai1Mo",
+	"v14dn64uvdrZypfWptHsQowuHDMm52MZMSvqMfTmOfp1mupdP9fBjSUCD394W0BoyHbfZbOuUZMs0FiC",
+	"F1JQVfg2x4dhFLGaIhkqaKrlUikIqSpRgKqLAEO6H4gZ8ittUFQU8lNfRk4N0t/lFKhqUODGW5pm/+xD",
+	"U2Z3DBGX0WERYb354W84WOTgbTFwQObP9A3FSmrGTrOVTYIGLSL7cw1ZMR+YebIn6pwLbh4JHWcg3Fio",
+	"JwxeTssyWY3+nsW/KQ8PnQ3Ufa5v/UM6joXfP4olS/Db/viR7wOkJ1BBWgXKQHwk4T+SCbEFDf1WFaAK",
+	"BTr2bNRImSCndiVEdlw+L2Ey/rsKItMKvKCIKtQiaQyTu2pMooqBMppaJsxqvIOcUFVZjXqABr5JmdkL",
+	"TrhJB2LGJ9KI2Zmz8SzUNNOS5ujXczmo6WYK1x9KZGO16Rwf1wPM9TGFBBeungnHiDkT08MIrSLUXMjU",
+	"teso5neJuhX5p9NV0EiANrLGIxBOelJP2CQ9tR249GD/dVCUBFZWBFn25mfeRnlzrFzeVogvwtvC7hh6",
+	"LIBYYPLiSrYtFxDwqZFQA5mVaA5xbal6Wzi0Q/k3IGZyKmz6Zs11PF33qBtu1P3NSbqDO7sa4E5N50vo",
+	"+sw3kbzMbAlzB7yDfQVBRh+IeKB6XpQHieEIhoCYwamo98rQn5SGRB2SCoKokG4gHhBS6nnWdTRWr2AG",
+	"hQiCwmWFhXBjeSLHrOSwpQm7tGNuh9MYgJqmh96YtaIH3UJzNl3lWPR6kD68sbCFbX7J3ERDRmzIhbPg",
+	"QjKnBRcB2WQQQlTxSMyGBrOkY86Ef5a6hoYW0RXBeLPJ6pQKh0R4vhGXoOGCQE8F4mvky+cjlonhLxJu",
+	"g58HCTeAm0jsQyAjCklVPt+QlGS+Tlg4CHT5HHg+Tb2dqAjThtzRoc+6Dx0+TLxx61eHfFQS8+Whrq6A",
+	"z1wnN1UD3gPveHYVTRuHOTIWDHYj1vG1nBalxugEZoHoDFzQ3/Bi80DTzsuq4KaO7s+jUYe1gD0f70jf",
+	"AHXQieD3qKrskzOYFwfE9EBGTA/ojRdXRo1Wq1EF7QChuOAorWu/5DNvQcnSnTQYmuboAeqnxdT+jSzA",
+	"TENFpikVClDCbjSO9/aL6ZzqWRMAlYw8TOL9Wkr2KF+Gko8VlMXb9AorKKo8JAqQn19VYdqMf9SrhHCx",
+	"Ec/yU2vHzA6YndpLc86f8IAel4XwhC0oSWV2BDIisNSkn5Lh4TXgk9BYDpiHxXnA0BoFRBFvrmLXXcI1",
+	"hSwPzaweOtJ0+aTpQNUdpcCHaKIqAiPQOXhnaVk9rswAbTc08LeuosA9DLimoQRV4m57xz1Dh6DNCFF4",
+	"P6gHD+dZ6HtUUKDVgmu7H3r1ia2aYAsMsrKEc2KokbSmlVAPi9D6YpN6ebonyKoDLnsyBrSuA/CgWjP4",
+	"W+Vi9MIL+j+p9x/gYdg3hYgZFSSoFPskjV8IOmUa2qehBiPT1wDIZKCUhmHJK4JDIcHzybBORXeCa4aJ",
+	"/WKKVqhY8lABug5VKX4k/r/fd3V8cfanz0b+Eg/rkjhOy1vAtWkutFXYD1UopaDWQImsn5WTkiXNrSlc",
+	"Xrr/MZkF+DsnecXGJVDInERjdx6Ygjh31Quv7KVfTuW0pCKL7oskkQIbbFFLd1c9u0aM80dcG4s8yE0C",
+	"KABHQQPuLTei4Rp1btiUAIsrFyKsMyXibFWMi4Ci1aVzKgAj3okyi+pZQNMqK2r09YtqlsAa5HSZWOw/",
+	"kMIBos+IGvKAPsTmvpSCUYsZT1jfOWuxOWFlr/RRreo5FHlGL2GAQPPwjWuaOVmzMh3cW4NaDI2/qIzN",
+	"lW9dMu4sGxuFynahspSPnTz+bvRiaW0m5tpXrLQ2Wnn1ujz3pLQxQytgjYVV4/5S9bc8rX2NVlDBQImh",
+	"XZMYfEitofsPH6gA28Vwrw/b+wDzBMMkEcB5Lifr7o1/GkaksnUmNW/QLJE0K8ZFt6PncfDaZAlzQz4H",
+	"bXoKylynifknzp2pxkRtBGe3gcROrUHHIBwOMiw/C9/uA8/GvYMVkM6xwNb8UNzHJGTe2/zxi8vx0HQa",
+	"AqEhHKkQhLlQTYbxF06Lmg7VBjN9TfTQRJKItH0rBn+fHQ72zz4s387eTSg3jz05H2dU+B+TJUFswOgk",
+	"1Bj1lgmPokNduzgNh8QGOj29z3ULr1v4zb0Z/163Lxq5C+57nzswXMi7vugCemD1lIXbptsX1kJNNDB6",
+	"IFBTA1+JjccgGrp6qUmiokC94eqYfhFmHAaldd/KaU8m7IJ/u9qV3LaKUjDsAiVd2RwdXCjjGWKNM0Dw",
+	"RkzTSayG/2bSmNaAKGxEGtGeNbpXantITMFkBvTBjMeF0SaVNHEvCrK7ccVfmI3UzuQD2aYXYFsYbLzy",
+	"2pzhNNRyGT16lNZuYMSEa103dtdfoNlnxvwEerpgXH9ZLlw2RjfR1igaf+F1SxeISV3FqV6YEdNiXwZy",
+	"ZiX3gCsvH6HZ18aNFVR4VP7jESpM0tUqK9fLc08q+Z/R7Zdei6Q0tT+py4NQ2jWay2lQDcLYGY1jvpAP",
+	"HVsK9KR69OgSCOg6zCphel4FJFYtL8YS8qYYTzqEepLcRtHitTwsKV7FdazMFVugKJlhfr6yRTdS+CEc",
+	"O8dmA42HhV6QbnqOoPHAendwjaMCVGpehVpDAfQuQwgxaoKRfMEJbHsAcw9C12fDn9PqmhFds5jf2fDw",
+	"ja32gnRDcdXmUwCPVTxO0HQDqRdQjDTHNOoF6dN2r9Fo92Vpu9fGkNHIV3z55dwI94hWnj7aCbNAHQyP",
+	"JVK86oiKfVqPM8vADwCOuyDAZen7lyx5ugU4hGuGJY8zMqSFvYmbEpvlb4oLANLjoJE7FN4GQjNv3Pg2",
+	"8PVoy8tv4VtnYChQEqhdQQJhw/RnFQJh2A5HQIHVHtZRQxgWztKdAPPujNLKG/sDEAjQrwDyJy9uZLYc",
+	"Fn9QH5AdIYJTZ3r5KfsG+giQNc0lrCCDdbqQQG8s9sz2pnY3IgnKGLAUbQGFGM+dPygwbd3r7lSk2s9p",
+	"sd/++TzsU/gWtJMZrDLVv3Yf7v7882iFqv21htXMrOzeuQDVolsBlqHODRX0kebCSQEM1xE3j9ZIv66w",
+	"fX5VqEF1CAphx2tQ1zPhh2Pe+1GWHEg+qomgs2cASOkBIIbI29ROz8znPGbdOdwb5blCLMagusu1WjhK",
+	"IGfE1HCEVGeEvEw4qaPKGQfkTY8bCFlRCul9NtAmnezF2jrZAutY1uDGA5IXdppuWNMIRdMsazz9h9e4",
+	"PhG/0JGWO6gEx+9xYC+VbtPSByOJ+L+Y9FjzL5nlVEXWHFSrmulRJoeX9Hp6wiv3Z87KQ43zeA0EBKMn",
+	"YE2FLIaqtNKgJNRa90bQXq4sJ7Oqa1puEx0NpnKqqA/3YAYxaZFGTY/J8qBIMIQPEE/R/1puXFxTgDqY",
+	"NMfWjg8U8R8Qx2hJyq1f5kQ3346j4l1j/o0xs4xm/42Wr5Y3HuFKsI3H6NexylK+tLaBZq+g4hQaf/Ju",
+	"dAytXyw/nULX8mjycnXpVWXlaWl9qvJ4LCbIKa1TgJqYljqPnjr5SVYww6E0jxfvwTuMocUn5Y3t6sXR",
+	"ysprdHncePVL7Oipk0xl4pH4oU+6PunqoDOZzosEFDF+JP7pJ12ffGpGNghsOolQ7aTKivwmDfX6M1YX",
+	"RyuPxmKUh2Pl4lK5cBldvUFDuu9GL9L2nOjyOCquV28WShsztCYOjf9sXH9mTJs9Hm2/56QQPxL/O9S/",
+	"NNclmFVkybyc393V5Sprx5FHk9g7fzBr+KgMDJKQjmclCBpdjUd/nS69WTQmC+jKPZrg6AcmM+3K+rQP",
+	"Fmfh6tzNyspK+f4YJoWVdbQxF/uqt/dUrHxl1Rgd4xOEg8RJcb+LuL8/O3KWuT0Sr6xsotn56oNL5eJC",
+	"dXy6/KZodUrEIpkqVCK+WoX0HhbpClBBFurEm/ne5EvqANT48r87jvWc/ltHrxlpr0kK2r6rhgS3SD1r",
+	"d9z6UhaGd5mezIKbkZER95ZGDmi5SbRs3H5pzD+jtFxam0Hrq2j2avVmAU2ucoh6JGEJt37ar6jF0g2n",
+	"E/9mrdxEmmDbR7UfSSyOVravxroPx9CzWWNhFT18Xnm5XL2xahRfldZm6B4qxSXj+jNfEqFlUx2kccte",
+	"EArT3gd6CcZzOagO1+Siadz7ScAE/0vigTo+tIni066E44ZsQNjhbBPp2t1dqe1oG00uoIkNauiV748Z",
+	"U+vGH0sRqLjzJ1EYMcsPafOw1qh3BnE9lvvMo2czu2YSpXmp3Eu5B+a69ov1wIClxcaDo4VY2zFTYaU8",
+	"98SYnC8/GsM/NMRMnXbTub3QDsfI4vtGNySawebNVzh217V21zc2VYbhEsIYe6twmLflDvQNUzdsQ2VP",
+	"1A3tLNjm2gZNXy+t/WZzVhiGErOKrNKAnCJrrVI2Zus+irqTZAvNjtJ4MdJJAWYVWYdSarjjH3DYd86I",
+	"tRhNYjVu98NQTHeoOXtow3AAuVMdO9bzrxhaN9+MQitbaHy5+uBS5fFkBM6zDL5sVtRbzIXHyKIhmPDD",
+	"1mh7xdlNZa12dZ9m7qGnBfxG28ZD+p4XZasQfhTpGdeRsjsutjS/xHZ7bKKtwy7Tpikm9PrPyqXnxvVZ",
+	"48kSuvvLh5JrchLAfsw3se0wW2zCtzVZl95sYxt+cRpdWSr/voImnlZWxtDk76gwTRNRAYRek4A5zSzX",
+	"bG3U6IxG6ygPcgmddilW+1nE95bLi78QZ/Q1nTiYVPcqjsMUmx1EcBy0uzcRHPP2Y7txzNw6mr3Bcgxa",
+	"XzWuPazOjdJoDv1TaetWZeWOFzPVHjenfqRgvurHaIE6W9V6+a8VxN9MYet8wbD9XKXZefR2ofx4zFic",
+	"qt68VNpcLd97aizeqxS3qwtFtPgM3RllyaZGKhbx5PSBzoycFiU27uDS7+TPzRE4jlcZWixynBfcPzba",
+	"cdLJ5kb5919i/wX7YvWyJKcPuKhBzum+5ID/3goHx4H4w5x33D9u5UD0AO1nEIg1q+q7Q7UaGPOxR/ob",
+	"n6q1eWoGUzt7KYfi6o8NuQ5EVn/LV1bGqheL5eJztL5ancBeHFq57ErPuDBql/T74NIc0Rw0uluutTi9",
+	"0E7iefyqMf2glg1fXzVePEGX8z7UodU69HBtvGO0B40JxPiBGm1yRJLpOoNmr8Sw1otZDVu8cMj21PPm",
+	"8h4oCez9myZxO+8GUyiO727SFrzIqbS5ia4sodd/Gvmx0vo4ys/vbOXR1kXj6TJ6eKlcuLzPZcHs1eoo",
+	"dv2qo3O43rx4i6oPT2VR66CieUoDHKI7xozbd4VdrgUcXamjh2Fcs9k9WN5/JjyMncfRkSIR8Bi316wq",
+	"BAIPDUwTVf6H1htJ9fuxL0jqKtCwq5+TUhmgaWK/6HFZ0oNGzCZo/aqc5QPQ96UY/0l1uaEpXdonP0WF",
+	"s5lKfDtOu6KjzY1KsVjZnjA2H74bvUj/W13aNO4sVyZ+Mz95+m9jfqI8NWks/rGzlS+tzVWX1su3i6XN",
+	"aePlJrqCb9jRv6L8enV8Gl/E27qPU5ULq+jXabQxh/LjqPB7jLz7SyORvAO7XmvxRXUzoyk1EdGuVYn4",
+	"kmRpbaa8eQkVJstPb1dHp4y51crCLCN7WYFLcoxctU0bNR1ju0ce1DZFpEIKw1Y7HgzO2pADbqPNDUry",
+	"+M5bccqYuYYKM7hRI2nR6MkHLlPEzusIMAN1WM8fvVjxBLJHW2Zh6vtmtzgy2s4cUH68icaX0e27xtxq",
+	"+febPnLfK7fSWqI+e0AHTfTrqSSsrDwyfh73MwGs5LWTGGglzYGQ86etvak3amfaNv49atxbpkUTpv+y",
+	"vlremq+8vRpJv3cCsQNeSGVyVijSLLerq7Y4evKEPeyAB2wqYMFyQP6tE+3FtzgBM33duLMUO3oyZsxc",
+	"q958GI3ya+8TaH51FieYYfvcGKgdpT3bP7CBfio0jdkCNhHuFIz5m9GoR3Y9he1FPo4ns/c5/TjO0tbU",
+	"Qz1p2jgkclzpNCRPw7eaMj7OGzvdLaPujy9rFWxl5qeMxVFj/plZnTsxjQvZo0eROu1HIdgyYZ6n5erW",
+	"re1XxnAJRvo2ypMltDVLb0XR6wI4a1G8W705jmZv4FsCC+YlRLNu6PZdY+oxLTcx5t7iS1UkI/Fu9KKx",
+	"cB/N3kD5efyoLJmQjsEzsGKK+L4k7zFtTD3GRdWXX6DiLWNy3qy6JkvgbVjRktLaUzwn+dD45Vp58w6d",
+	"mUl9BPP7hxaPZp6e2A+u6uGuL5ovQCglmL7j5T/Lv429Gx0zpkaro1M0k4YePjeuT9odKKtzRTrMmDRj",
+	"KvgO1/ZtR6jt41P6z342rr80c4YbG+j1MoVbY+KvMycJsvf1YJzonLlHqcFk/mt5yt6oMFO+dYnFGZUR",
+	"JutOPS5vXkXFW2b5yrU8xdC70Yvl22uokK+svDaeXzQRyfCzSwTXP5dwcLeCveFQD58DQRJnRUjMfpUC",
+	"3+DNiCkd20iMOIkxD6ezQwgNl9am0SxuhRHDfJLMSWAIiBnc/fljLQ0urY0afyxR8WKqZsLuEcVLTk1D",
+	"Vqy42nTgP+/zEPbHkxtvMDW4e37O0VQKKjoUDnwcmi8nCXLj2Ro+7+T9yGFE61lsr8A5fm8bX8iDB5qU",
+	"ZQL7EfKDqHmLo+bVG+OVlc26272hSF3TZRX6Xk3BAw7SpQc1IR+auTX2AD2cth3VgIpAD+ofMl0ivxrt",
+	"0/aog9abzSJkx1vw7ZqHIBFZNHMZzf5JPbBo1EyHBkRje0H6IBCw/+OJH2NIzrg/UX76NnRIbgCCDL4Z",
+	"LQ5BT/H9FRnztUhuVTQNdXSVj/s2ZGX7dvnJL+jpDePlJoMWigQnRugDnP4oOU3GHODkvXBCe+mgjV9L",
+	"azOV7TFcJPvseXnzNy/8ZGEnvEC6SXq1okKFvLFRoKFlfO2msIHWHtFr7nTH5VuXmGuU5GoN+ePsFePO",
+	"srFRoP030eIT3B1wYqN6s2C8wuc1NdzUNCrmjckCL1R9gmztm+HjQAfhLC1T9/hpj9rb4uogbsEST8QJ",
+	"Ns+2SlOFJu8fRcVJY7Zm7RMlQI7tXqA+AUTrYGjnmluXKA5i/3PyVNzxaOwxuoOO46KmyJpo1bu4qJV0",
+	"LjHmJ0qbq6gwHSOvo3VQ+un47rvvvvvmm+PHP/lRVHa2JlF+obTxh7GwWl14ubM15Wv7jpAg9qfNZzdK",
+	"mQy1xspbGzhkPTlPOXFnazKlqf1J/DoQFHa2pna28jgTRgiZBK4XSttLpc3Nna3JflntEwUBSvh4+ATd",
+	"rcjnMTwUU4EOk8RDgIITnaehrg53HLUe2nPNMfV/pTc38XNzb8fLj6/RZ3Bq+/L1IkY+vsgggagxedVO",
+	"iKNreRqrZ4RmFtYEpqLCfqhCKQXDVDrUxu7PVpPsCQ56jbXsRTNc74rGZtHyGw8qzFkvM3vVJNKnm5uK",
+	"nvb0zGde09IbY2EZY6n64A7aeMTDEls92gmH8BkCzKwYXTTW03MC1/+szBp/LFW27+JHRMcnaceBGLGl",
+	"d7YmBaCDWGltI/bTCFVU1VuzqDATY1fd2ZpkC95O4D3sbE2Rh0h/KW2uljbH8UOkk69xxddsofxwAyu8",
+	"hfv0r7GTx2NYNVqlBGTlGNbptETs3nJl5QFbg4TB7ry3jSsXtn+uvH6BN9rTcyJmvHhSnbhiW4k0QUoq",
+	"lSaMxXulrVto/EV14anxaoxnENYdJsQrejq8oFPod2i6CkHWSWiBFhTeNYWH8WpsZyvPwjeGjd//7Pn2",
+	"n7HKy3uVN28widXtER/kI8wyPKjeGGfbqWD9SSvgiAAjMzpKAj2jqaesQfu93YVmZgB9+jgoIKcRaw1j",
+	"NAN1fheHZsZVTWi3c+cA81Ujt5FnE2tQtwAThAetAiLS3N70CbCw1aZNAvzInBXRdicAL4PSn+r3TV6p",
+	"bcnBfPbbX+qFKNs/yBHVEdPe5IfalpKtXk7zpe2iMbceJOE0CNTUgKdo6yF/Pmi7dtB2rS3arvGmPBfW",
+	"huw2SdK2IVuruymrtqnrwmRy0OVxnMx5ulC98wAHTOaKlZVpo7BYfvmAEYOm3LOEoBZc19RjDWp+H9r2",
+	"vJxOPU/cuPD18/KtS3Xtwm0sOZEW2KXrNBySB2Gti/A+NdAOGsnPjRr5CVS8FUQZ9Nc+rNyLB+x3Q+Zc",
+	"3E8PtVLz9IJ0mz4WRbQKVTu0HIshSvJvULSsF6QPImUR6GxvomQYS20aIUPPL5Y3HnsRtyVt619Ac6tg",
+	"THTexN6W8ZFekKZwaXVspC3JmV4tR4Xp8uNnxp2l0ibO1KKrb/DzlD7UnVPw01ya940fKpHOKD4vkR2I",
+	"8vr6CAKvPXqV5YzSxs+tledeVFZeo9tvy1MTpTXccaW0dqW0dd+YmTTu/MwwgUX5Dj4ITIT4MsK+yYOY",
+	"p2jH108rKw8oQdBSlbpbkt5k0Wml7X2EpTmidVTSAl+8uwVk14bX0in9UVrEr0mRUnlaYM0nRzK/OmTR",
+	"Eg6YH4l3AkXsHDoUHzk78v8DAKCvh+QlAQEA",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

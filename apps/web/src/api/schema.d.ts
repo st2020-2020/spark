@@ -174,6 +174,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/me/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 导出我的收藏和项目
+         * @description 同源请求须携带会话对应的 CSRF token。会话及来源校验在导出限流和读取前完成。
+         */
+        get: operations["exportMyData"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/sessions": {
         parameters: {
             query?: never;
@@ -467,6 +487,26 @@ export interface paths {
         head?: never;
         /** 调整项目人工决定 */
         patch: operations["updateProjectDecisions"];
+        trace?: never;
+    };
+    "/collections/{id}/projects/undo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 撤销一次项目决定提交
+         * @description 按原操作回执和提交后的决定版本撤销。回执绑定账号和收藏。相同请求幂等重放。
+         */
+        post: operations["undoProjectDecisions"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/collections/{id}/tags": {
@@ -1056,6 +1096,11 @@ export interface components {
             reason?: string;
             project_version?: number;
             evidence?: components["schemas"]["ProjectEvidence"][];
+            /**
+             * Format: uuid
+             * @description suggested 关联的来源运行 ID。与 project_version 一起用于确认时校验。
+             */
+            suggestion_run_id?: string;
         };
         TagAssociation: {
             /** Format: uuid */
@@ -1071,6 +1116,7 @@ export interface components {
                 id: string;
                 /** @enum {string} */
                 action: "include" | "exclude" | "reset";
+                expected_suggestion?: components["schemas"]["ExpectedProjectSuggestion"];
             }[];
         };
         Stage: {
@@ -1123,6 +1169,7 @@ export interface components {
             updated_at: string;
             /** @description 当前有效且待确认的项目建议。 */
             has_suggestion?: boolean;
+            undo_receipt?: components["schemas"]["ProjectUndoReceipt"];
         };
         CollectionSummary: {
             /** Format: uuid */
@@ -1348,6 +1395,21 @@ export interface components {
             /** @enum {string} */
             status: "queued" | "running" | "succeeded" | "partial" | "failed" | "skipped" | "blocked" | "superseded";
             has_suggestion: boolean;
+        };
+        ExpectedProjectSuggestion: {
+            /** Format: uuid */
+            run_id: string;
+            project_version: number;
+        };
+        ProjectUndoReceipt: {
+            operation_key: string;
+            decision_version: number;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        UndoProjectDecision: {
+            operation_key: string;
+            base_decision_version: number;
         };
     };
     responses: never;
@@ -1655,6 +1717,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Usage"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    exportMyData: {
+        parameters: {
+            query: {
+                format: "markdown" | "json";
+            };
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 当前用户的导出 ZIP */
+            200: {
+                headers: {
+                    /** @description 附件文件名 spark-export-YYYYMMDD.zip（北京时间） */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description 会话 CSRF token 缺失或错误（csrf_failed），或来源不受信任（forbidden） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 导出限流 rate_limited */
+            429: {
+                headers: {
+                    /** @description 剩余等待秒数 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
@@ -2438,6 +2555,8 @@ export interface operations {
             query?: never;
             header: {
                 "X-CSRF-Token": string;
+                /** @description 整理模式提交使用。实际变更时返回撤销回执并重放原响应。无变化的提交重放时读取当前收藏，不执行决定或返回回执。回收站中的收藏拒绝重放。 */
+                "Idempotency-Key"?: string;
             };
             path: {
                 id: string;
@@ -2457,6 +2576,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Collection"];
+                };
+            };
+            /** @description 决定版本冲突、所选建议失效、幂等键冲突或收藏已进入回收站 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    undoProjectDecisions: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UndoProjectDecision"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
+                };
+            };
+            /** @description 版本冲突 decision_conflict，建议失效 suggestion_conflict，回执不可用 undo_unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
