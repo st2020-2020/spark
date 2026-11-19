@@ -609,11 +609,11 @@ if "${dcmd[@]}" ps -aq --filter "name=^${PROJECT}-worker-1$" | grep -q .; then
   dc --profile ai stop worker
 fi
 
-# T11 expects existing schema v3 (no auto-init or migration upgrade in release-prod.sh)
+# Verify the existing schema against the release build before replacing the API.
 expected_version="$(sed -n 's/^const Version = \([0-9][0-9]*\).*/\1/p' "${DEPLOY_DIR}/server/db/migrate.go" | head -n1)"
 current_version="$(dc exec -T postgres psql -U spark -d spark -tAc "SELECT coalesce(max(version), 0) FROM schema_migrations;" | tr -d '[:space:]')"
 [[ -n "$expected_version" && "$current_version" == "$expected_version" ]] || {
-  echo "DB schema version (${current_version:-missing}) != expected (${expected_version:-unknown}); T11 requires existing v3 schema" >&2
+  echo "DB schema version (${current_version:-missing}) != expected (${expected_version:-unknown}); apply the required migration before deployment" >&2
   exit 1
 }
 echo "DB schema v${current_version} verified"
