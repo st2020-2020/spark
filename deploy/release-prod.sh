@@ -275,12 +275,11 @@ if [[ "$CMD" == "deploy" ]]; then
   git -C "$REPO_ROOT" cat-file -e "${COMMIT}^{commit}" 2>/dev/null || die "commit not found locally: $COMMIT (run git fetch first)"
   git -C "$REPO_ROOT" rev-parse --verify "${TRUSTED_REF}^{commit}" >/dev/null 2>&1 || die "trusted trunk ref not found: $TRUSTED_REF"
   git -C "$REPO_ROOT" merge-base --is-ancestor "$COMMIT" "$TRUSTED_REF" || die "commit $COMMIT is not an ancestor of trusted trunk $TRUSTED_REF"
-  if [[ "$MODE" == "ssh" || "$PROJECT" == "spark-prod" || -n "$RELEASE_TAG" ]]; then
-    [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "production deploy requires a published --tag vX.Y.Z"
-    # The peeled ref exists only for annotated tags. Compare its target before contacting the host.
-    tag_target="$(git -C "$REPO_ROOT" ls-remote --exit-code origin "refs/tags/${RELEASE_TAG}^{}")" || die "published annotated release tag missing or origin unavailable"
-    [[ "${tag_target%%$'\t'*}" == "$COMMIT" ]] || die "published tag $RELEASE_TAG does not identify --commit"
-  fi
+  [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "deploy requires a published --tag vX.Y.Z"
+  # ls-remote patterns also match ref suffixes. Require the full peeled name and commit on one line.
+  peeled_ref="refs/tags/${RELEASE_TAG}^{}"
+  tag_refs="$(git -C "$REPO_ROOT" ls-remote --exit-code origin "$peeled_ref")" || die "published annotated release tag missing or origin unavailable"
+  grep -Fxq -- "$COMMIT"$'\t'"$peeled_ref" <<< "$tag_refs" || die "published tag $RELEASE_TAG does not identify --commit"
   if [[ "$SKIP_WEB" != "true" ]]; then
     require_cmd npm
     require_cmd node

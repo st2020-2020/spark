@@ -98,11 +98,12 @@ docker compose --env-file /opt/spark/.env -f /opt/spark/deploy/compose.prod.yaml
 
 ## 本地 OrbStack 隔离演练
 
-演练使用独立的 OrbStack Docker 上下文；上下文中的 `spark-api:prod` 是演练用镜像标签，须与其他发布环境分开。可使用 `--mode local --docker-context orbstack` 在独立临时目录、独立端口与独立 Compose 项目名下演练全流程（不触碰 `spark-local` 与生产环境），演练结束后按 [AGENTS.md](../AGENTS.md) 清理临时项目容器、卷、镜像与临时目录：
+本地演练同样需要传入与提交匹配的已发布附注标签。演练使用独立的 OrbStack Docker 上下文；上下文中的 `spark-api:prod` 是演练用镜像标签，须与其他发布环境分开。可使用 `--mode local --docker-context orbstack` 在独立临时目录、独立端口与独立 Compose 项目名下演练全流程（不触碰 `spark-local` 与生产环境），演练结束后按 [AGENTS.md](../AGENTS.md) 清理临时项目容器、卷、镜像与临时目录：
 
 ```sh
 ./deploy/release-prod.sh deploy \
-  --commit "$(git rev-parse origin/main)" \
+  --commit "$(git rev-parse 'v0.2.0^{commit}')" \
+  --tag v0.2.0 \
   --mode local \
   --docker-context orbstack \
   --project spark-prod-rehearsal \
