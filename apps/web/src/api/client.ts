@@ -177,6 +177,7 @@ export function createRealApiClient(): SparkApi {
       notifyUnauthorized?: boolean;
     },
   ): Promise<Response> {
+    const requestSession = csrfToken;
     const headers: Record<string, string> = {};
     if (options?.body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -218,7 +219,7 @@ export function createRealApiClient(): SparkApi {
 
     if (!response.ok) {
       const apiErr = await parseApiErrorResponse(response);
-      if (apiErr.status === 401 && options?.notifyUnauthorized !== false) {
+      if (apiErr.status === 401 && options?.notifyUnauthorized !== false && csrfToken === requestSession) {
         csrfToken = null;
         unauthorizedHandler?.();
       }
@@ -245,7 +246,16 @@ export function createRealApiClient(): SparkApi {
       return undefined as T;
     }
 
-    return (await response.json()) as T;
+    try {
+      return (await response.json()) as T;
+    } catch (cause) {
+      if (cause instanceof DOMException && cause.name === 'AbortError') throw cause;
+      throw new ApiError({
+        status: 0,
+        code: 'invalid_response',
+        message: '未收到完整响应，请重试。',
+      });
+    }
   }
 
   return {
@@ -346,10 +356,11 @@ export function createRealApiClient(): SparkApi {
     },
 
     currentSession: async () => {
+      const requestSession = csrfToken;
       const session = await request<SessionResult>('GET', '/auth/session', {
         notifyUnauthorized: false,
       });
-      csrfToken = session.csrf_token;
+      if (csrfToken === requestSession) csrfToken = session.csrf_token;
       return session;
     },
 

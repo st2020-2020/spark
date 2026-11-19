@@ -71,6 +71,44 @@ describe('realApiClient', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps the new session when an earlier account receives a late 401', async () => {
+    const client = createRealApiClient();
+    const expired = vi.fn();
+    client.setUnauthorizedHandler(expired);
+    client.setCsrfToken('session-A');
+    let finish!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementationOnce(() =>
+      new Promise<Response>((resolve) => { finish = resolve; }),
+    ).mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const stale = client.getCollection('stale');
+      client.setCsrfToken('session-B');
+      finish(new Response(null, { status: 401 }));
+      await expect(stale).rejects.toMatchObject({ status: 401 });
+      expect(expired).not.toHaveBeenCalled();
+      await client.revokeSession('other');
+      expect(fetchMock.mock.calls[1][1].headers['X-CSRF-Token']).toBe('session-B');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reports an uncertain write if the successful response body is interrupted', async () => {
+    const client = createRealApiClient();
+    client.setCsrfToken('session-A');
+    const body = new ReadableStream({ start(controller) { controller.error(new TypeError()); } });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+    try {
+      const write = client.updateProjectDecisions('item', {
+        base_decision_version: 1, operations: [{ id: 'project', action: 'include' }],
+      }, crypto.randomUUID());
+      await expect(write).rejects.toMatchObject({ status: 0, code: 'invalid_response' });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('subscribes to same-origin /api/v1/organization/events with credentials and cleans up', () => {
     const listeners = new Map<string, Set<(ev: MessageEvent) => void>>();
     const closeMock = vi.fn();

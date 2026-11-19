@@ -46,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionError: null,
   });
 
+  const sessionGeneration = useRef(0);
   const currentUserIdRef = useRef<string | null>(null);
 
   const applySession = useCallback(
@@ -53,6 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (currentUserIdRef.current && currentUserIdRef.current !== session.user.id) {
         queryClient.clear();
       }
+      sessionGeneration.current += 1;
       currentUserIdRef.current = session.user.id;
       api.setCsrfToken(session.csrf_token);
       setState({
@@ -70,6 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearSessionState = useCallback(
     (message: string | null = null) => {
+      sessionGeneration.current += 1;
       currentUserIdRef.current = null;
       api.setCsrfToken(null);
       queryClient.clear();
@@ -94,11 +97,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [api, clearSessionState]);
 
   const refreshSession = useCallback(async () => {
+    const generation = sessionGeneration.current;
     try {
       const session = await api.currentSession();
+      if (generation !== sessionGeneration.current) return null;
       applySession(session);
       return session;
     } catch (err) {
+      if (generation !== sessionGeneration.current) return null;
       if (isApiErrorCode(err, 'session_expired') || isApiErrorCode(err, 'authentication_failed')) {
         clearSessionState(null);
         return null;
