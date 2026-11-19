@@ -43,7 +43,7 @@
   --env-file /opt/spark/.env
 ```
 
-目标已启用 AI 时，预检、发布和回退命令均追加 `--with-worker`。
+目标已启用 AI 时，预检、发布和回退命令均追加 `--with-worker`。 已运行的 Worker 会随 Docker 重启恢复。运维通过 Compose 执行 `stop worker` 后，Docker 重启时会保留停用状态；需要恢复时显式启动 Worker。
 
 ### 3. 执行不可变发布（兼容 `/opt/spark` 与 Worker）
 
