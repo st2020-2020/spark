@@ -21,6 +21,8 @@ export interface PendingUploadItem {
   progress: number;
   status: 'uploading' | 'verifying' | 'ready' | 'failed';
   uploadId?: string;
+  requestKey: string;
+  bytesTransferred?: boolean;
   error?: string;
   errorCode?: string;
 }
@@ -211,12 +213,8 @@ export function useImageUploader(
   }, [abortAllControllers]);
 
   const runUpload = useCallback(
-    async (
-      localId: string,
-      file: File,
-      mimeType: AllowedImageMime,
-      options?: { resumeExistingUploadId?: string },
-    ) => {
+    async (item: PendingUploadItem, mimeType: AllowedImageMime) => {
+      const { localId, file } = item;
       controllersRef.current.get(localId)?.abort();
       const controller = new AbortController();
       controllersRef.current.set(localId, controller);
@@ -230,15 +228,9 @@ export function useImageUploader(
 
       try {
         let statusRes;
-        if (options?.resumeExistingUploadId) {
+        if (item.bytesTransferred && item.uploadId) {
           updateItem({ status: 'verifying', progress: 100, error: undefined, errorCode: undefined });
-          statusRes = await api.getUpload(options.resumeExistingUploadId);
-          if (isStale()) return;
-          if (statusRes.status !== 'verifying' && statusRes.status !== 'ready') {
-            const failure = formatUploadStatusFailure(statusRes.status, statusRes.error_code);
-            updateItem({ status: 'failed', error: failure.message, errorCode: failure.code });
-            return;
-          }
+          statusRes = await api.completeUpload(item.uploadId);
         } else {
           updateItem({ status: 'uploading', progress: 0, error: undefined, errorCode: undefined });
           const grant = await api.createUpload(
@@ -247,7 +239,7 @@ export function useImageUploader(
               size_bytes: file.size,
               mime_type: mimeType,
             },
-            generateIdempotencyKey(),
+            item.requestKey,
           );
           if (isStale()) return;
           updateItem({ uploadId: grant.id });
@@ -262,7 +254,7 @@ export function useImageUploader(
           );
           if (isStale()) return;
 
-          updateItem({ status: 'verifying', progress: 100 });
+          updateItem({ status: 'verifying', progress: 100, bytesTransferred: true });
           statusRes = await api.completeUpload(grant.id);
         }
 
@@ -281,6 +273,9 @@ export function useImageUploader(
           const failure = formatUploadStatusFailure(statusRes.status, statusRes.error_code);
           updateItem({
             status: 'failed',
+            ...(statusRes.status === 'rejected' || statusRes.status === 'expired'
+              ? { requestKey: generateIdempotencyKey(), bytesTransferred: false, uploadId: undefined }
+              : {}),
             errorCode: failure.code,
             error: failure.message,
           });
@@ -291,6 +286,9 @@ export function useImageUploader(
         updateItem({
           status: 'failed',
           error: formatted.message,
+          ...(isApiErrorCode(err, 'upload_not_pending') || isApiErrorCode(err, 'not_found')
+            ? { requestKey: generateIdempotencyKey(), bytesTransferred: false, uploadId: undefined }
+            : {}),
           errorCode: formatted.code,
         });
       } finally {
@@ -332,6 +330,7 @@ export function useImageUploader(
         addedItems.push({
           item: {
             localId,
+            requestKey: generateIdempotencyKey(),
             file,
             previewUrl,
             progress: 0,
@@ -348,7 +347,7 @@ export function useImageUploader(
       if (addedItems.length === 0) return;
       setItems((prev) => [...prev, ...addedItems.map((entry) => entry.item)]);
       for (const entry of addedItems) {
-        void runUpload(entry.item.localId, entry.item.file, entry.mimeType);
+        void runUpload(entry.item, entry.mimeType);
       }
     },
     [runUpload],
@@ -363,10 +362,7 @@ export function useImageUploader(
         setValidationError(check.message);
         return;
       }
-      void runUpload(localId, target.file, check.mimeType, {
-        resumeExistingUploadId:
-          target.errorCode === 'verifying_timeout' ? target.uploadId : undefined,
-      });
+      void runUpload(target, check.mimeType);
     },
     [runUpload],
   );

@@ -1283,18 +1283,25 @@ export function createTestAdapter(): TestAdapter {
           message: '图片文件名、格式或大小不符合要求',
         });
       }
-      const id = generateUuid();
+      const replay = checkIdempotency<string>(user.id, 'upload', idempotencyKey, body);
+      const id = replay ?? generateUuid();
       const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
       const key = `mock-upload:${user.id}:${id}:${idempotencyKey}`;
-      uploads.set(id, {
-        id,
-        user_id: user.id,
-        filename: body.filename,
-        status: 'pending',
-        size_bytes: body.size_bytes,
-        mime_type: body.mime_type,
-        expires_at: expiresAt,
-      });
+      if (replay && uploads.get(id)?.status !== 'pending') {
+        throw new ApiError({ status: 409, code: 'upload_not_pending', message: '上传已结束，请重新选择图片。' });
+      }
+      if (!replay) {
+        uploads.set(id, {
+          id,
+          user_id: user.id,
+          filename: body.filename,
+          status: 'pending',
+          size_bytes: body.size_bytes,
+          mime_type: body.mime_type,
+          expires_at: expiresAt,
+        });
+        saveIdempotency(user.id, 'upload', idempotencyKey, body, id);
+      }
       return {
         id,
         method: 'PUT',

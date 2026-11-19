@@ -149,6 +149,7 @@ describe('v0.3-T04 multi-image upload & presentation', () => {
     uploadSpy.mockRestore();
 
     // Next upload fails on object storage PUT once, then succeeds on retry
+    const grants = vi.spyOn(adapter, 'createUpload');
     adapter.setMockUploadBehavior({ failPutRemaining: 1 });
     await user.upload(fileInput, makeImageFile('first.png'));
     await screen.findByText(/图片上传到对象存储失败/);
@@ -156,6 +157,10 @@ describe('v0.3-T04 multi-image upload & presentation', () => {
 
     await user.click(screen.getByRole('button', { name: '重试上传 first.png' }));
     await waitForUploadReady('first.png');
+    expect(grants).toHaveBeenCalledTimes(2);
+    expect(grants.mock.calls[1][1]).toBe(grants.mock.calls[0][1]);
+    const [firstGrant, retryGrant] = await Promise.all(grants.mock.results.map((r) => r.value));
+    expect(retryGrant.id).toBe(firstGrant.id);
 
     // Add second image and move it before first.png
     await user.upload(fileInput, makeImageFile('second.png'));
