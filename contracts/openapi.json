@@ -403,6 +403,84 @@
         }
       }
     },
+    "/me/export": {
+      "get": {
+        "operationId": "exportMyData",
+        "summary": "导出我的收藏和项目",
+        "tags": [
+          "me"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "markdown",
+                "json"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "当前用户的导出 ZIP",
+            "headers": {
+              "Content-Disposition": {
+                "description": "附件文件名 spark-export-YYYYMMDD.zip（北京时间）",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "导出限流 rate_limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "剩余等待秒数",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/sessions": {
       "get": {
         "operationId": "listSessions",
@@ -1815,6 +1893,102 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "决定版本冲突、所选建议失效，或幂等键冲突",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "整理模式提交使用。实际变更时返回撤销回执。相同键与请求体重放同一响应。",
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssociationUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/collections/{id}/projects/undo": {
+      "post": {
+        "operationId": "undoProjectDecisions",
+        "summary": "撤销一次项目决定提交",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "版本冲突 decision_conflict，建议失效 suggestion_conflict，回执不可用 undo_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -1841,11 +2015,12 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AssociationUpdate"
+                "$ref": "#/components/schemas/UndoProjectDecision"
               }
             }
           }
-        }
+        },
+        "description": "按原操作回执和提交后的决定版本撤销。回执绑定账号和收藏。相同请求幂等重放。"
       }
     },
     "/collections/{id}/tags": {
@@ -4075,6 +4250,11 @@
             "items": {
               "$ref": "#/components/schemas/ProjectEvidence"
             }
+          },
+          "suggestion_run_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "suggested 关联的来源运行 ID。与 project_version 一起用于确认时校验。"
           }
         },
         "required": [
@@ -4135,6 +4315,9 @@
                     "exclude",
                     "reset"
                   ]
+                },
+                "expected_suggestion": {
+                  "$ref": "#/components/schemas/ExpectedProjectSuggestion"
                 }
               },
               "required": [
@@ -4337,6 +4520,9 @@
           "has_suggestion": {
             "type": "boolean",
             "description": "当前有效且待确认的项目建议。"
+          },
+          "undo_receipt": {
+            "$ref": "#/components/schemas/ProjectUndoReceipt"
           }
         },
         "required": [
@@ -5303,6 +5489,67 @@
           "collection_id",
           "status",
           "has_suggestion"
+        ]
+      },
+      "ExpectedProjectSuggestion": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "run_id",
+          "project_version"
+        ]
+      },
+      "ProjectUndoReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_key": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          },
+          "decision_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "operation_key",
+          "decision_version",
+          "expires_at"
+        ]
+      },
+      "UndoProjectDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "operation_key": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 128
+          },
+          "base_decision_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "operation_key",
+          "base_decision_version"
         ]
       }
     }
