@@ -5,9 +5,9 @@
 | 状态 | 现行规范（已实现） |
 | 版本 | v2「灵光手帐」，2026-11-18 |
 | 适用范围 | `apps/web/` 在线 Web，电脑与手机浏览器 |
-| 关联文档 | 业务交互以 [WEB.md](../../docs/design/WEB.md) 为准；字段以 [OpenAPI](../../contracts/openapi.json) 为准；产品定位见 [PRODUCT.md](../../docs/PRODUCT.md)；候选迭代见 [ITERATION.md](../../docs/ITERATION.md) |
+| 关联文档 | 业务交互以 [WEB.md](WEB.md) 为准；字段以 [OpenAPI](../../contracts/openapi.json) 为准；产品定位见 [PRODUCT.md](../PRODUCT.md)；候选迭代见 [ITERATION.md](../ITERATION.md)；代码位于 `apps/web/` |
 
-根目录 [DESIGN.md](../../DESIGN.md) 与 [UX-CONTRACT.md](../../UX-CONTRACT.md) 仅描述 MyGo 桌面版。
+MyGo 桌面版的设计与交互另见 [docs/desktop](../desktop/README.md)。
 
 **验证状态。** v2 已通过前端类型检查、生产构建与 Vitest 行为测试（22 项），并在测试适配器预览中检查了四套配色、深浅色、390px 手机宽度与随手记面板；尚未在 OrbStack 真实后端下按 WEB.md 验收矩阵复验（见 ITERATION.md O-01）。
 
@@ -174,7 +174,7 @@
 - 路由、接口类型、认证、草稿隔离、版本冲突、幂等与安全渲染不因视觉调整而改变。
 - 正式联调与验收通过 OrbStack Compose 进行，不以宿主机服务替代。仅查看样式时，经用户同意可在宿主机用测试适配器单独启动前端预览；该结果只代表界面表现，不作为联调验收。
 - 复用现有类型检查、构建与行为测试；浏览器检查 1440 / 768 / 390px、长中文与长网址、空态与错误态、四套配色与深浅色，不用 `overflow-x: hidden` 掩盖布局问题。仅对新增行为或回归风险补充必要测试。
-- 早期交互稿 [spark-web-preview.html](../../docs/design/spark-web-preview.html) 仅作历史参考，视觉以本文为准。
+- 早期交互稿已归档为 [2026-11-16-web-preview.html](../archive/2026-11-16-web-preview.html)，仅作历史参考，视觉以本文为准。
 
 ## 8. 变更记录
 

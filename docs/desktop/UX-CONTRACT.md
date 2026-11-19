@@ -1,6 +1,6 @@
 # Spark 当前桌面版交互约定
 
-当前桌面版是本机单用户笔记应用。界面和交互在 `internal/app/app.go`，条目保存和后台整理在 `internal/entries/service.go`。在线版的目标交互见 [产品需求](docs/PRODUCT.md)，后续桌面同步接入时按实施结果更新本文。
+当前桌面版是本机单用户笔记应用。界面和交互在 `internal/app/app.go`，条目保存和后台整理在 `internal/entries/service.go`。在线版的目标交互见 [产品需求](../PRODUCT.md)，后续桌面同步接入时按实施结果更新本文。
 
 ## 录入与整理
 
