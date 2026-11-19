@@ -1,0 +1,10 @@
+<resources>
+    <color name="spark_accent">#287B59</color>
+    <color name="spark_surface">#FFFFFF</color>
+    <color name="spark_on_accent">#FFFFFF</color>
+    <color name="spark_muted">#53635B</color>
+    <color name="spark_disabled">#607469</color>
+    <color name="spark_status_bar">#F0F4F1</color>
+    <color name="spark_navigation_bar">#17251D</color>
+    <bool name="spark_light_status_bar">true</bool>
+</resources>

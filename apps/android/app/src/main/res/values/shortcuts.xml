@@ -1,0 +1,5 @@
+<resources>
+    <string name="drafts_shortcut_label">本机草稿</string>
+    <string name="drafts_launcher_label">灵光草稿</string>
+    <bool name="show_drafts_launcher">true</bool>
+</resources>

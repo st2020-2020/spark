@@ -13,9 +13,8 @@ import java.nio.charset.StandardCharsets;
 import javax.net.ssl.HttpsURLConnection;
 
 public final class SparkApi {
-    public static final String ORIGIN = "https://spark.stwqy.cloud";
-    private static final String SESSION = ORIGIN + "/api/v1/auth/session";
-    private static final String COLLECTIONS = ORIGIN + "/api/v1/collections";
+    private static final String SESSION = WebNavigation.ORIGIN + "/api/v1/auth/session";
+    private static final String COLLECTIONS = WebNavigation.ORIGIN + "/api/v1/collections";
     private static final int SESSION_RESPONSE_LIMIT = 16 * 1024;
 
     private SparkApi() {}
@@ -62,16 +61,14 @@ public final class SparkApi {
     }
 
     /** Retry an uncertain save with the same UUID and unchanged payload. */
-    public static void save(String cookie, String csrf, String uuid, String text, String intent,
-                            boolean aiExcluded) throws IOException {
+    public static void save(String cookie, String csrf, String uuid, byte[] body) throws IOException {
         if (!validHeader(csrf, 1024)) {
             throw new IOException("Invalid Spark CSRF token");
         }
-        byte[] body = CollectionPayload.encode(uuid, text, intent, aiExcluded);
         HttpsURLConnection connection = open(COLLECTIONS, cookie);
         try {
             connection.setRequestMethod("POST");
-            connection.setRequestProperty("Origin", ORIGIN);
+            connection.setRequestProperty("Origin", WebNavigation.ORIGIN);
             connection.setRequestProperty("X-CSRF-Token", csrf);
             connection.setRequestProperty("Idempotency-Key", uuid);
             connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");

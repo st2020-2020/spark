@@ -2,17 +2,22 @@ package cloud.stwqy.spark;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ClipData;
 import android.content.Intent;
 import android.database.sqlite.SQLiteException;
-import android.os.BadParcelableException;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.View;
 import android.view.WindowManager;
+import android.view.inputmethod.BaseInputConnection;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.CookieManager;
+import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.Toast;
@@ -25,36 +30,36 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public final class ShareActivity extends Activity {
+    private static final int LOGIN_REQUEST = 1;
     private static final ExecutorService DISK = Executors.newSingleThreadExecutor();
     private static final ExecutorService NETWORK = Executors.newFixedThreadPool(2);
     private final Handler main = new Handler(Looper.getMainLooper());
-    private final Runnable autosave = this::flushEdits;
+    private final Runnable autosave = this::autosaveEdits;
     private ShareDrafts store;
     private SharePage page;
     private String id, newText, initialScope, loginFromScope, inputError;
     private String cookie, scope, provisional, authMessage, notice;
-    private boolean authenticated, needsLogin, active, dirty;
+    private boolean authenticated, needsLogin, active, dirty, openedFromList, reloadAfterLogin, creatingDraft;
     private int generation, offset;
     private Editor editor;
     private EditText body, purpose;
     private CheckBox excluded;
+    private Button retryLocal;
+    private Bundle editorPosition;
 
-    // All access to stored is serialized on DISK, including edits queued just before a pause.
+    // Queued writes chain revisions on DISK, even if rotation destroys the old UI.
     private static final class Editor {
-        ShareDrafts.Draft stored;
-        final boolean frozen;
-        boolean leaving, conflict;
-        Editor(ShareDrafts.Draft draft) { stored = draft; frozen = draft.frozen(); }
+        volatile ShareDrafts.Draft stored;
+        int writeSequence;
+        boolean writing, conflict, submitting;
+        Runnable afterWrite;
+        Editor(ShareDrafts.Draft draft) { stored = draft; }
     }
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
         store = ShareDrafts.open(this);
-        if (android.os.Build.VERSION.SDK_INT >= 33) {
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
-                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::leave);
-        }
         if (state == null) {
             receive(getIntent());
         } else {
@@ -62,6 +67,10 @@ public final class ShareActivity extends Activity {
             initialScope = state.getString("initialScope");
             loginFromScope = state.getString("loginFrom");
             inputError = state.getString("error");
+            notice = state.getString("notice");
+            openedFromList = state.getBoolean("openedFromList");
+            offset = state.getInt("offset");
+            editorPosition = state.getBundle("editorPosition");
             if (state.getBoolean("creating")) {
                 if (state.getBoolean("blank")) newText = "";
                 else if (Intent.ACTION_SEND.equals(getIntent().getAction())) readSharedText(getIntent());
@@ -69,17 +78,23 @@ public final class ShareActivity extends Activity {
         }
     }
 
-    @Override public void onBackPressed() { leave(); }
-
-    private void leave() { persistThen(this::finish); }
+    @Override public void onBackPressed() {
+        if (creatingDraft) {
+            page.status.setText("正在将分享内容存入本机…");
+            return;
+        }
+        if (newText != null) {
+            new AlertDialog.Builder(this).setMessage("内容尚未存入本机。要退出这次分享吗？")
+                    .setNegativeButton("继续编辑", null)
+                    .setPositiveButton("退出", (dialog, which) -> finish()).show();
+            return;
+        }
+        persistThen(openedFromList ? this::openList : this::finish);
+    }
 
     private void receive(Intent launch) {
         String action = launch.getAction();
         if (action == null || Intent.ACTION_MAIN.equals(action)) return; // Never inspect manual extras.
-        if (!Intent.ACTION_SEND.equals(action) || !"text/plain".equalsIgnoreCase(launch.getType())) {
-            inputError = "此分享入口支持纯文字或网址。";
-            return;
-        }
         readSharedText(launch);
         if (newText != null) {
             id = UUID.randomUUID().toString();
@@ -89,29 +104,26 @@ public final class ShareActivity extends Activity {
 
     private void readSharedText(Intent launch) {
         try {
-            CharSequence shared = launch.getCharSequenceExtra(Intent.EXTRA_TEXT);
-            ClipData clip = launch.getClipData();
-            if (shared == null && clip != null && clip.getItemCount() == 1) {
-                shared = clip.getItemAt(0).getText();
-            }
-            if (shared == null || shared.length() == 0 || shared.length() > 100000) {
-                inputError = "未收到可保存的文字，或分享内容过长。";
-            } else {
-                newText = shared.toString(); // Drop sender-supplied spans.
-            }
-        } catch (BadParcelableException | ClassCastException e) {
-            inputError = "无法读取分享内容，请重新分享纯文字。";
+            newText = SharedText.read(launch);
+        } catch (SharedText.InvalidShare e) {
+            inputError = e.getMessage();
         }
     }
 
     @Override protected void onNewIntent(Intent launch) {
         super.onNewIntent(launch);
-        flushEdits();
-        setIntent(launch);
-        id = newText = initialScope = loginFromScope = inputError = notice = null;
-        offset = 0;
-        receive(launch);
-        if (active) refresh();
+        // Even if the sender asks to reuse the top activity, keep its share
+        // independent of the current draft and any outstanding local write.
+        Intent separate = new Intent(this, ShareActivity.class)
+                .setAction(launch.getAction()).setType(launch.getType());
+        if (Intent.ACTION_SEND.equals(launch.getAction())) {
+            try {
+                separate.putExtra(Intent.EXTRA_TEXT, SharedText.read(launch));
+            } catch (SharedText.InvalidShare invalid) {
+                separate.setType("text/plain"); // Render the ordinary invalid-share state.
+            }
+        }
+        startActivity(separate);
     }
 
     @Override protected void onSaveInstanceState(Bundle out) {
@@ -122,24 +134,43 @@ public final class ShareActivity extends Activity {
         out.putString("initialScope", initialScope);
         out.putString("loginFrom", loginFromScope);
         out.putString("error", inputError);
+        out.putString("notice", notice);
+        out.putBoolean("openedFromList", openedFromList);
+        out.putInt("offset", offset);
+        rememberEditorPosition();
+        out.putBundle("editorPosition", editorPosition);
     }
 
     @Override protected void onResume() {
         super.onResume();
         active = true;
-        refresh();
+        if (page == null || reloadAfterLogin || !Objects.equals(cookie, currentCookie())) {
+            reloadAfterLogin = false;
+            refresh();
+        } else {
+            page.root.setVisibility(View.VISIBLE);
+            if (editor != null && !editor.submitting) restoreEditorPosition(editor.stored);
+        }
     }
 
     @Override protected void onPause() {
-        flushEdits();
         active = false;
-        generation++;
-        screen("本机草稿", "");
+        rememberEditorPosition();
+        flushEdits();
+        page.root.setVisibility(View.INVISIBLE);
         super.onPause();
     }
 
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == LOGIN_REQUEST) {
+            reloadAfterLogin = result == RESULT_OK;
+            if (!reloadAfterLogin) loginFromScope = null;
+        }
+    }
+
     private static String currentCookie() {
-        return CookieManager.getInstance().getCookie(SparkApi.ORIGIN);
+        return CookieManager.getInstance().getCookie(WebNavigation.ORIGIN);
     }
 
     private void screen(String title, String message) {
@@ -148,8 +179,11 @@ public final class ShareActivity extends Activity {
         dirty = false;
         body = purpose = null;
         excluded = null;
+        retryLocal = null;
         page = new SharePage(this, title);
         page.status.setText(message);
+        if (!active) page.root.setVisibility(View.INVISIBLE);
+        setContentView(page.root);
     }
 
     private interface Work<T> { T run() throws IOException; }
@@ -168,14 +202,15 @@ public final class ShareActivity extends Activity {
     }
 
     private boolean current(int token) {
-        if (!active || generation != token || isFinishing()) return false;
+        if (generation != token || isFinishing() || isDestroyed()) return false;
         if (Objects.equals(cookie, currentCookie())) return true;
         flushEdits();
-        refresh();
+        if (active) refresh();
         return false;
     }
 
     private void refresh() {
+        rememberEditorPosition();
         generation++;
         cookie = currentCookie();
         provisional = ShareDrafts.provisionalScope(cookie);
@@ -185,11 +220,13 @@ public final class ShareActivity extends Activity {
         authMessage = "";
         screen("本机草稿", "正在读取…");
         String fingerprint = provisional, draftId = id, captureScope = initialScope, text = newText;
+        creatingDraft = text != null;
         run(DISK, () -> {
             store.observeSession(fingerprint);
             if (text != null) store.create(draftId, captureScope, text);
             return true;
         }, ok -> {
+            creatingDraft = false;
             newText = null;
             if (inputError != null) {
                 page.status.setText(inputError);
@@ -197,7 +234,10 @@ public final class ShareActivity extends Activity {
             } else {
                 verify();
             }
-        }, this::storageFailure);
+        }, error -> {
+            creatingDraft = false;
+            storageFailure(error);
+        });
     }
 
     private void verify() {
@@ -208,6 +248,13 @@ public final class ShareActivity extends Activity {
             return;
         }
         String snapshot = cookie, fingerprint = provisional;
+        ConnectivityManager connectivity = getSystemService(ConnectivityManager.class);
+        Network network = connectivity.getActiveNetwork();
+        NetworkCapabilities capabilities = network == null ? null : connectivity.getNetworkCapabilities(network);
+        if (capabilities == null || !capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            loadOffline(fingerprint);
+            return;
+        }
         run(NETWORK, () -> verifiedSession(snapshot, fingerprint), session -> {
             scope = "user:" + session[0];
             authenticated = true;
@@ -220,12 +267,16 @@ public final class ShareActivity extends Activity {
                 load();
                 return;
             }
-            run(DISK, () -> store.offlineUser(fingerprint), user -> {
-                if (user != null) scope = "user:" + user;
-                authMessage = "当前仅可编辑本机草稿，联网验证后可保存到收件箱。";
-                load();
-            }, this::storageFailure);
+            loadOffline(fingerprint);
         });
+    }
+
+    private void loadOffline(String fingerprint) {
+        run(DISK, () -> store.offlineUser(fingerprint), user -> {
+            if (user != null) scope = "user:" + user;
+            authMessage = "当前可以编辑本机草稿。恢复联网后，重新检查网络和账号即可保存。";
+            load();
+        }, this::storageFailure);
     }
 
     private String[] verifiedSession(String snapshot, String fingerprint) throws IOException {
@@ -279,18 +330,30 @@ public final class ShareActivity extends Activity {
     }
 
     private void showList(List<ShareDrafts.Summary> rows, int start) {
+        if (rows.isEmpty() && start > 0) {
+            offset -= ShareDrafts.PAGE_SIZE;
+            list();
+            return;
+        }
         screen("本机草稿", notice != null ? notice : authMessage);
         notice = null;
-        page.button("记一条", () -> {
+        page.primaryButton("记一条", () -> {
             id = UUID.randomUUID().toString();
             initialScope = scope;
             newText = "";
+            openedFromList = true;
             refresh();
         });
         if (rows.isEmpty()) page.label("此处暂无草稿", 16);
         for (int i = 0; i < Math.min(rows.size(), ShareDrafts.PAGE_SIZE); i++) {
             ShareDrafts.Summary row = rows.get(i);
-            page.button(row.label, () -> { id = row.id; refresh(); });
+            page.draftRow(row.label, () -> {
+                if (!current(generation)) return;
+                id = row.id;
+                openedFromList = true;
+                screen("本机草稿", "正在读取…");
+                load();
+            });
         }
         if (start > 0) page.button("上一页", () -> { offset -= ShareDrafts.PAGE_SIZE; refresh(); });
         if (rows.size() > ShareDrafts.PAGE_SIZE) {
@@ -301,7 +364,9 @@ public final class ShareActivity extends Activity {
 
     private void openList() {
         id = loginFromScope = null;
-        offset = 0;
+        editorPosition = null;
+        openedFromList = false;
+        hideKeyboard();
         refresh();
     }
 
@@ -310,13 +375,12 @@ public final class ShareActivity extends Activity {
                 ? "上次保存结果待确认，可用原内容重试。" : authMessage);
         notice = null;
         editor = new Editor(draft);
-        body = page.field("文字或网址", draft.text, draft.frozen(), 4);
+        body = page.field("文字或网址", draft.text, draft.frozen(), 3);
         purpose = page.field("补一句用途（可选）", draft.purpose, draft.frozen(), 2);
-        excluded = new CheckBox(this);
-        excluded.setText("不参与 AI 整理");
-        excluded.setChecked(draft.excluded);
-        excluded.setEnabled(!draft.frozen());
-        page.column.addView(excluded);
+        excluded = page.aiExclusion(draft.excluded, draft.frozen());
+        page.placeEditorStatus();
+        retryLocal = page.button("重试保存本机草稿", this::flushEdits);
+        retryLocal.setVisibility(View.GONE);
         TextWatcher watcher = new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int start, int count, int after) { }
             public void onTextChanged(CharSequence s, int start, int before, int count) { }
@@ -325,28 +389,43 @@ public final class ShareActivity extends Activity {
         body.addTextChangedListener(watcher);
         purpose.addTextChangedListener(watcher);
         excluded.setOnCheckedChangeListener((button, checked) -> changed());
-        if (authenticated) page.button(draft.frozen() ? "重试保存" : "保存到收件箱", () -> persistThen(this::save));
+        if (authenticated) page.primaryButton(draft.frozen() ? "重试保存到收件箱" : "保存到收件箱",
+                () -> persistThen(this::save));
         else accountActions();
         page.button("本机草稿", () -> persistThen(this::openList));
-        page.button("删除本机草稿", () -> confirmDelete(draft));
+        page.button("删除本机草稿", () -> persistThen(this::confirmDelete));
+        restoreEditorPosition(draft);
     }
 
     private void accountActions() {
-        if (needsLogin || authenticated) page.button("打开 Spark 登录或切换账号", () -> {
+        if (needsLogin || authenticated) page.primaryButton("打开 Spark 登录或切换账号", () -> {
             // Bound drafts always require their original account, including after login.
             persistThen(() -> {
-                loginFromScope = id != null && editor != null && !authenticated ? provisional : null;
-                startActivity(new Intent(this, WebActivity.class));
+                if (!current(generation)) return;
+                loginFromScope = editor != null && !editor.stored.scope.startsWith("user:")
+                        ? editor.stored.scope : null;
+                rememberEditorPosition();
+                hideKeyboard();
+                startActivityForResult(new Intent(this, WebActivity.class), LOGIN_REQUEST);
             });
         });
-        page.button("重新验证账号", () -> persistThen(this::refresh));
+        page.button("重新检查网络和账号", () -> persistThen(this::refresh));
     }
 
     private void changed() {
         dirty = true;
-        page.status.setText("正在保存本机草稿…");
         main.removeCallbacks(autosave);
         main.postDelayed(autosave, 300);
+    }
+
+    private void autosaveEdits() {
+        if (editor == null || !dirty) return;
+        if (BaseInputConnection.getComposingSpanStart(body.getText()) >= 0
+                || BaseInputConnection.getComposingSpanStart(purpose.getText()) >= 0) {
+            main.postDelayed(autosave, 300);
+            return;
+        }
+        flushEdits();
     }
 
     private void flushEdits() { persistThen(null); }
@@ -354,50 +433,77 @@ public final class ShareActivity extends Activity {
     private void persistThen(Runnable next) {
         main.removeCallbacks(autosave);
         Editor target = editor;
-        if (target != null && target.leaving) return;
-        if (target == null || target.frozen || (!dirty && next == null)) {
+        if (target != null && (target.submitting || (next != null && target.afterWrite != null))) return;
+        if (target == null || (!dirty && !target.writing)) {
             if (next != null) next.run();
             return;
         }
-        String text = body.getText().toString(), note = purpose.getText().toString();
+        if (next != null) {
+            target.afterWrite = next;
+            rememberEditorPosition();
+            page.setBusy(true);
+        }
+        if (!dirty) return;
+        String text = body.getText().toString();
+        String note = purpose.getText().toString();
         boolean skip = excluded.isChecked();
         dirty = false;
-        if (next != null) {
-            target.leaving = true;
-            page.enableControls(false);
-        }
-        run(DISK, () -> {
-            ShareDrafts.Draft d = target.stored;
-            target.stored = store.update(d, d.scope, text, note, skip, null);
-            return true;
-        }, ok -> {
-            if (editor != target || (target.leaving && next == null)) return;
-            target.leaving = false;
-            if (dirty) { if (next != null) persistThen(next); return; }
-            page.enableControls(true);
-            if (next != null) next.run();
-            else page.status.setText("已保存本机草稿");
-        }, e -> {
-            if (editor != target || (target.leaving && next == null)) return;
-            target.leaving = false;
-            dirty = true;
-            page.enableControls(true);
-            if (e instanceof ShareDrafts.Changed) {
-                page.status.setText("其他窗口已更改这条草稿。可先复制当前输入，再重新打开。");
-                if (!target.conflict) page.button("重新打开草稿", this::refresh);
-                target.conflict = true;
-            } else page.status.setText("本机草稿写入失败，请检查剩余空间并重试。");
+        target.writing = true;
+        int sequence = ++target.writeSequence;
+        retryLocal.setVisibility(View.GONE);
+        DISK.execute(() -> {
+            try {
+                ShareDrafts.Draft previous = target.stored;
+                target.stored = store.update(previous, previous.scope, text, note, skip, null);
+                main.post(() -> draftWritten(target, sequence));
+            } catch (IOException | SQLiteException error) {
+                main.post(() -> draftWriteFailed(target, sequence, error));
+            }
         });
     }
 
-    private void confirmDelete(ShareDrafts.Draft draft) {
+    private void draftWritten(Editor target, int sequence) {
+        if (editor != target || target.writeSequence != sequence || isDestroyed()) return;
+        target.writing = false;
+        Runnable next = target.afterWrite;
+        target.afterWrite = null;
+        if (dirty && next != null) {
+            persistThen(next);
+            return;
+        }
+        page.setBusy(false);
+        if (!dirty) page.status.setText("已保存本机草稿");
+        if (active && next != null) next.run();
+    }
+
+    private void draftWriteFailed(Editor target, int sequence, Exception error) {
+        if (editor != target || target.writeSequence != sequence || isDestroyed()) return;
+        target.writing = false;
+        target.afterWrite = null;
+        dirty = true;
+        page.setBusy(false);
+        if (error instanceof ShareDrafts.Changed) {
+            page.status.setText("其他窗口已更改这条草稿。可先复制当前输入，再重新打开。");
+            if (!target.conflict) page.button("重新打开草稿", () ->
+                    new AlertDialog.Builder(this).setMessage("重新打开会舍弃本窗口未写入的修改。")
+                            .setNegativeButton("取消", null)
+                            .setPositiveButton("重新打开", (dialog, which) -> refresh()).show());
+            target.conflict = true;
+        } else {
+            page.status.setText("本机草稿写入失败，请检查剩余空间并重试。");
+            retryLocal.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void confirmDelete() {
+        if (!current(generation) || editor == null) return;
+        ShareDrafts.Draft draft = editor.stored;
         new AlertDialog.Builder(this).setMessage(draft.frozen()
                 ? "删除本机草稿？如果上次已保存到收件箱，那条收藏将保留。" : "删除这条本机草稿？")
                 .setNegativeButton("取消", null).setPositiveButton("删除", (dialog, which) -> {
-                    Editor target = editor;
-                    if (target == null) return;
+                    if (!current(generation) || editor == null || editor.stored != draft) return;
                     screen("本机草稿", "正在删除…");
-                    run(DISK, () -> { store.remove(target.stored); return true; },
+                    run(DISK, () -> { store.remove(draft); return true; },
                             ok -> openList(), this::storageFailure);
                 }).show();
     }
@@ -405,10 +511,13 @@ public final class ShareActivity extends Activity {
     private void save() {
         if (!current(generation)) return;
         Editor target = editor;
-        if (target == null) return;
-        String snapshot = cookie, owner = scope;
-        screen("收藏到 Spark", "正在保存…");
-        run(DISK, () -> target.stored, draft -> submit(snapshot, owner, draft), this::storageFailure);
+        if (target == null || target.submitting || !authenticated) return;
+        rememberEditorPosition();
+        hideKeyboard();
+        target.submitting = true;
+        page.setBusy(true);
+        page.status.setText("正在保存到收件箱…");
+        submit(cookie, scope, target.stored);
     }
 
     private static final class InvalidContent extends IOException { }
@@ -416,12 +525,11 @@ public final class ShareActivity extends Activity {
     private void submit(String snapshot, String owner, ShareDrafts.Draft draft) {
         run(NETWORK, () -> {
             String uuid = draft.frozen() ? draft.requestId : UUID.randomUUID().toString();
-            if (!draft.frozen()) {
-                try {
-                    CollectionPayload.encode(uuid, draft.text, draft.purpose, draft.excluded);
-                } catch (IOException e) {
-                    throw new InvalidContent();
-                }
+            byte[] payload;
+            try {
+                payload = CollectionPayload.encode(uuid, draft.text, draft.purpose, draft.excluded);
+            } catch (IOException e) {
+                throw new InvalidContent();
             }
             String fingerprint = ShareDrafts.provisionalScope(snapshot);
             String[] session = verifiedSession(snapshot, fingerprint);
@@ -435,10 +543,10 @@ public final class ShareActivity extends Activity {
             ShareDrafts.Draft frozen = store.update(draft, owner, draft.text, draft.purpose, draft.excluded, uuid);
             // Both requests use the very same immutable Cookie header, even if WebView switches users.
             try {
-                SparkApi.save(snapshot, session[1], frozen.requestId, frozen.text, frozen.purpose, frozen.excluded);
+                SparkApi.save(snapshot, session[1], frozen.requestId, payload);
             } catch (SparkApi.HttpError e) {
                 if (isAuthError(e)) store.forgetUser(fingerprint);
-                if (e.status == 400 || e.status == 413 || e.status == 422) {
+                if (!draft.frozen() && (e.status == 400 || e.status == 413 || e.status == 422)) {
                     store.update(frozen, owner, frozen.text, frozen.purpose, frozen.excluded, null);
                 }
                 throw e;
@@ -446,24 +554,71 @@ public final class ShareActivity extends Activity {
             store.remove(frozen);
             return true;
         }, ok -> {
-            Toast.makeText(this, "已保存到收件箱", Toast.LENGTH_SHORT).show();
-            finish();
-        }, e -> {
-            if (e instanceof SQLiteException || e instanceof ShareDrafts.Changed) {
-                storageFailure(e);
-                return;
+            if (openedFromList) {
+                notice = "已保存到收件箱";
+                openList();
+            } else {
+                Toast.makeText(this, "已保存到收件箱", Toast.LENGTH_SHORT).show();
+                finish();
             }
+        }, e -> {
             if (e instanceof InvalidContent) {
-                notice = "请填写有效的文字或网址。正文与用途合计最多 50,000 字；过长内容请分段收藏。";
+                editor.submitting = false;
+                page.setBusy(false);
+                page.status.setText("请检查文字或网址。正文与用途合计最多 50,000 字，过长内容请分段收藏。");
+                if (!draft.frozen() && !CollectionPayload.hasNonWhitespace(draft.text)) {
+                    body.setError("请输入文字或网址");
+                    body.requestFocus();
+                }
             } else if (isAuthError(e) || e instanceof AccountChanged) {
                 notice = "请验证原账号后重试。";
-            } else if (e instanceof SparkApi.HttpError && !retryable((SparkApi.HttpError) e)) {
-                notice = "服务端未接受保存，请检查草稿或查看收件箱。";
+                refresh();
+            } else if (e instanceof SQLiteException || e instanceof ShareDrafts.Changed) {
+                storageFailure(e);
             } else {
-                notice = "未能确认保存，本机草稿已保留。请稍后重试。";
+                notice = e instanceof SparkApi.HttpError && !retryable((SparkApi.HttpError) e)
+                        ? "服务端未接受保存，请检查草稿或查看收件箱。"
+                        : "未能确认保存，本机草稿已保留。请稍后重试。";
+                // A transport failure may have happened after the server committed.
+                // Read back the frozen draft before allowing editing or another attempt.
+                load();
             }
-            refresh();
         });
+    }
+
+    private void hideKeyboard() {
+        if (page == null) return;
+        getSystemService(InputMethodManager.class).hideSoftInputFromWindow(page.root.getWindowToken(), 0);
+    }
+
+    private void rememberEditorPosition() {
+        if (editor == null || !editor.stored.id.equals(id)) return;
+        EditText focused = body.hasFocus() ? body : purpose.hasFocus() ? purpose : null;
+        if (focused == null && editorPosition != null && id.equals(editorPosition.getString("draft"))) return;
+        Bundle position = new Bundle();
+        position.putString("draft", id);
+        position.putInt("scroll", page.root.getScrollY());
+        if (focused != null) {
+            position.putBoolean("body", focused == body);
+            position.putInt("start", focused.getSelectionStart());
+            position.putInt("end", focused.getSelectionEnd());
+        }
+        editorPosition = position;
+    }
+
+    private void restoreEditorPosition(ShareDrafts.Draft draft) {
+        Bundle position = editorPosition;
+        editorPosition = null;
+        if (position == null || !draft.id.equals(position.getString("draft"))) return;
+        if (position.containsKey("start") && !draft.frozen()) {
+            EditText selected = position.getBoolean("body") ? body : purpose;
+            int length = selected.length();
+            selected.requestFocus();
+            selected.setSelection(Math.max(0, Math.min(length, position.getInt("start"))),
+                    Math.max(0, Math.min(length, position.getInt("end"))));
+        }
+        SharePage restored = page;
+        restored.root.post(() -> restored.root.scrollTo(0, position.getInt("scroll")));
     }
 
     private static final class AccountChanged extends IOException { }

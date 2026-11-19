@@ -1,10 +1,14 @@
 <resources>
-    <style name="SparkTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="SparkPlatformTheme" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <style name="SparkTheme" parent="SparkPlatformTheme">
         <item name="android:fontFamily">sans-serif</item>
-        <item name="android:colorAccent">#287B59</item>
-        <item name="android:windowBackground">#FFFFFF</item>
-        <item name="android:statusBarColor">#224A38</item>
-        <item name="android:navigationBarColor">#17251D</item>
+        <item name="android:colorAccent">@color/spark_accent</item>
+        <item name="android:windowBackground">@color/spark_surface</item>
+        <item name="android:statusBarColor">@color/spark_status_bar</item>
+        <item name="android:windowLightStatusBar">@bool/spark_light_status_bar</item>
+        <item name="android:navigationBarColor">@color/spark_navigation_bar</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:forceDarkAllowed">false</item>
     </style>
     <style name="SparkActivityTheme" parent="SparkTheme" />
 </resources>

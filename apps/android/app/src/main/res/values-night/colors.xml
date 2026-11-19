@@ -1,0 +1,10 @@
+<resources>
+    <color name="spark_accent">#8BD4AB</color>
+    <color name="spark_surface">#152019</color>
+    <color name="spark_on_accent">#10241A</color>
+    <color name="spark_muted">#ADBDB3</color>
+    <color name="spark_disabled">#81978B</color>
+    <color name="spark_status_bar">#152019</color>
+    <color name="spark_navigation_bar">#111913</color>
+    <bool name="spark_light_status_bar">false</bool>
+</resources>

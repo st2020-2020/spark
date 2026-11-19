@@ -13,6 +13,7 @@ import {
   Plus,
   Search,
   Settings,
+  Smartphone,
   ShieldCheck,
   Trash2,
   X,
@@ -161,6 +162,8 @@ export function AppShell({
   const sidebarProjects = activeItems.slice(0, 5);
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
   const isInbox = location.pathname === '/inbox';
+  const androidWorkspace = navigator.userAgent.split(/\s+/).includes('SparkAndroid/2');
+  const inMoreSection = !['inbox', 'projects', 'collections'].includes(location.pathname.split('/')[1]);
   const badgeText = formatBadgeCount(pendingSuggestionsCount);
 
   // On the inbox the composer is already on screen: focus it in place so the draft and scroll
@@ -235,6 +238,15 @@ export function AppShell({
               </li>
             );
           })}
+          {androidWorkspace && (
+            <li className="sp-nav-item">
+              {/* A document navigation deliberately reaches the Android WebViewClient. */}
+              <a href="/android/local-drafts" className="sp-nav-link" onClick={() => setDrawerOpen(false)}>
+                <Smartphone size={17} strokeWidth={2} aria-hidden="true" />
+                <span>本机草稿</span>
+              </a>
+            </li>
+          )}
         </ul>
       </nav>
 
@@ -285,7 +297,7 @@ export function AppShell({
   );
 
   return (
-    <div className="sp-app-root">
+    <div className={`sp-app-root${androidWorkspace && !isInbox ? ' sp-app-root--android-subpage' : ''}`}>
       {api.isTestAdapter && (
         <div className="sp-adapter-banner" role="status">
           <span>测试适配器模式（仅本地内存模拟，非真实后端；邮件 / 模型未连接真实服务）</span>
@@ -434,8 +446,9 @@ export function AppShell({
         </NavLink>
         <button
           type="button"
-          className={`sp-tab ${drawerOpen ? 'active' : ''}`}
+          className={`sp-tab ${drawerOpen || inMoreSection ? 'active' : ''}`}
           aria-label="更多导航"
+          aria-current={inMoreSection ? 'location' : undefined}
           aria-expanded={drawerOpen}
           onClick={() => setDrawerOpen(true)}
         >

@@ -2,7 +2,9 @@ package cloud.stwqy.spark;
 
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
@@ -13,50 +15,49 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
-import android.widget.LinearLayout;
+import android.widget.FrameLayout;
 import android.widget.Toast;
 
 public final class WebActivity extends Activity {
+    private static final String WEB_STATE = "webState";
+    private FrameLayout root;
     private WebView web;
-    private Button retry;
+    private View errorPage;
+    private String failedUrl;
     private boolean returningToDraft;
+    private String loginStartedIn;
+    private String pausedSession;
+    private boolean resumed;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        returningToDraft = !Intent.ACTION_MAIN.equals(getIntent().getAction()) && !isTaskRoot();
-
-        LinearLayout page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setPadding(dp(6), 0, dp(6), 0);
-        page.addView(toolbar);
+        // This activity is also a launcher. Only a result caller from our own draft screen
+        // can start the login round trip, regardless of the incoming intent's contents.
+        returningToDraft = new ComponentName(this, ShareActivity.class).equals(getCallingActivity());
         if (returningToDraft) {
-            action(toolbar, "返回草稿", view -> finish());
-        } else {
-            action(toolbar, "收件箱", view -> open("/inbox"));
-            action(toolbar, "待确认", view -> open("/unclassified?tab=suggested"));
-            action(toolbar, "本机草稿", view ->
-                startActivity(new Intent(this, ShareActivity.class)));
+            loginStartedIn = state == null ? sessionScope() : state.getString("loginStartedIn");
         }
 
-        retry = new Button(this);
-        retry.setText("网页未能载入，点此重试");
-        retry.setVisibility(View.GONE);
-        retry.setOnClickListener(view -> {
-            if (isSparkPage(Uri.parse(web.getUrl() == null ? "" : web.getUrl()))) {
-                web.reload();
-            } else {
-                open("/inbox");
-            }
-        });
-        page.addView(retry);
-        web = new WebView(this);
-        page.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
-        setContentView(page);
+        root = new FrameLayout(this);
+        setContentView(root);
+        createWebView();
 
+        Bundle history = state == null ? null : state.getBundle(WEB_STATE);
+        if (history == null || !sessionScope().equals(state.getString("pageSession"))
+                || web.restoreState(history) == null) {
+            web.loadUrl(startUrl());
+        } else {
+            String previousFailure = state.getString("failedUrl");
+            if (WebNavigation.isSparkUrl(previousFailure)) showError(previousFailure);
+        }
+    }
+
+    private void createWebView() {
+        web = new WebView(this);
+        root.addView(web, new FrameLayout.LayoutParams(-1, -1));
         WebSettings settings = web.getSettings();
+        settings.setUserAgentString(settings.getUserAgentString() + " " + WebNavigation.USER_AGENT_MARKER);
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
@@ -65,92 +66,180 @@ public final class WebActivity extends Activity {
         CookieManager cookies = CookieManager.getInstance();
         cookies.setAcceptCookie(true);
         cookies.setAcceptThirdPartyCookies(web, false);
-        web.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri uri = request.getUrl();
-                if (isSparkPage(uri)) return false;
-                if (request.isForMainFrame() && request.hasGesture()
-                    && ("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))) {
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE));
-                    } catch (ActivityNotFoundException ex) {
-                        Toast.makeText(WebActivity.this, "请先安装可打开链接的浏览器", Toast.LENGTH_SHORT).show();
-                    }
-                }
-                return true;
-            }
+        web.setWebViewClient(new SparkWebClient());
+    }
 
-            @Override
-            public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
-                retry.setVisibility(View.GONE);
+    private final class SparkWebClient extends WebViewClient {
+        @Override
+        public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+            Uri url = request.getUrl();
+            switch (WebNavigation.decide(view.getUrl(), url.toString(), request.getMethod(),
+                    request.isForMainFrame(), request.hasGesture(), request.isRedirect())) {
+                case WEB:
+                    return false;
+                case LOCAL_DRAFTS:
+                    startActivity(new Intent(WebActivity.this, ShareActivity.class));
+                    return true;
+                case BROWSER:
+                    openBrowser(url);
+                    return true;
+                default:
+                    return true;
             }
+        }
 
-            @Override
-            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) retry.setVisibility(View.VISIBLE);
+        @Override
+        public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+            // Form POSTs bypass shouldOverrideUrlLoading.
+            if (request.isForMainFrame() && !WebNavigation.isSparkUrl(request.getUrl().toString())) {
+                return new WebResourceResponse("text/plain", "UTF-8", null);
             }
+            return null;
+        }
 
-            @Override
-            public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
-                if (request.isForMainFrame()) retry.setVisibility(View.VISIBLE);
+        @Override
+        public void onPageStarted(WebView view, String url, Bitmap icon) {
+            if (WebNavigation.isSparkUrl(url)) {
+                clearError();
+            } else {
+                view.stopLoading();
+                showError(startUrl());
             }
+        }
+
+        @Override
+        public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+            if (request.isForMainFrame()) showError(request.getUrl().toString());
+        }
+
+        @Override
+        public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+            if (request.isForMainFrame()) showError(request.getUrl().toString());
+        }
+
+        @Override
+        public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+            // Web login changes routes through the History API.
+            returnAfterLogin(url);
+        }
+
+        @Override
+        public void onPageFinished(WebView view, String url) {
+            returnAfterLogin(url);
+        }
+    }
+
+    private void openBrowser(Uri url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE));
+        } catch (ActivityNotFoundException ex) {
+            Toast.makeText(this, "请先安装可打开链接的浏览器", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private String startUrl() {
+        return WebNavigation.ORIGIN + (returningToDraft ? WebNavigation.LOGIN : WebNavigation.INBOX);
+    }
+
+    private void showError(String url) {
+        failedUrl = WebNavigation.isSparkUrl(url) ? url : startUrl();
+        if (errorPage != null) return;
+        SharePage page = new SharePage(this, "暂时无法打开 Spark");
+        page.status.setText("请检查网络连接，或继续处理本机草稿。");
+        page.primaryButton("重新载入", () -> {
+            String retryUrl = failedUrl;
+            if (retryUrl == null) return;
+            clearError();
+            if (retryUrl.equals(web.getUrl())) web.reload();
+            else web.loadUrl(retryUrl);
         });
-        String previous = state == null ? null : state.getString("page");
-        if (previous != null && isSparkPage(Uri.parse(previous))) web.loadUrl(previous);
-        else open("/inbox");
+        page.button(returningToDraft ? "返回草稿" : "本机草稿", () -> {
+            if (returningToDraft) finish();
+            else startActivity(new Intent(this, ShareActivity.class));
+        });
+        errorPage = page.root;
+        web.setVisibility(View.GONE);
+        root.addView(errorPage, new FrameLayout.LayoutParams(-1, -1));
     }
 
-    private static boolean isSparkPage(Uri uri) {
-        return uri != null && SparkApi.ORIGIN.equals("https://" + uri.getEncodedAuthority())
-            && "https".equalsIgnoreCase(uri.getScheme());
+    private void clearError() {
+        failedUrl = null;
+        if (errorPage == null) return;
+        root.removeView(errorPage);
+        errorPage = null;
+        web.setVisibility(View.VISIBLE);
     }
 
-    private void open(String path) {
-        web.loadUrl(SparkApi.ORIGIN + path);
+    private static String sessionScope() {
+        return ShareDrafts.provisionalScope(CookieManager.getInstance().getCookie(WebNavigation.ORIGIN));
     }
 
-    private void action(LinearLayout bar, String title, View.OnClickListener click) {
-        Button button = new Button(this, null, android.R.attr.borderlessButtonStyle);
-        button.setText(title);
-        button.setMinHeight(dp(48));
-        button.setOnClickListener(click);
-        bar.addView(button, new LinearLayout.LayoutParams(0, -2, 1));
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
+    private boolean returnAfterLogin(String url) {
+        if (!returningToDraft || !resumed || isFinishing() || errorPage != null
+                || !WebNavigation.isInbox(url)) return false;
+        String scope = sessionScope();
+        if (ShareDrafts.GUEST.equals(scope) || scope.equals(loginStartedIn)) return false;
+        // The draft screen verifies the new session and the draft owner before exposing or saving data.
+        setResult(RESULT_OK);
+        finish();
+        return true;
     }
 
     @Override
     protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        state.putString("page", web.getUrl());
+        Bundle history = new Bundle();
+        if (web.saveState(history) != null) state.putBundle(WEB_STATE, history);
+        state.putString("pageSession", pausedSession != null ? pausedSession : sessionScope());
+        state.putString("failedUrl", failedUrl);
+        if (returningToDraft) state.putString("loginStartedIn", loginStartedIn);
     }
 
     @Override
     public void onBackPressed() {
-        if (!returningToDraft && web.canGoBack()) web.goBack();
-        else super.onBackPressed();
+        if (returnAfterLogin(web.getUrl())) return;
+        // Back within a login round trip supports registration and password recovery.
+        if (web.canGoBack()) {
+            clearError();
+            web.goBack();
+        } else {
+            super.onBackPressed();
+        }
     }
 
     @Override
     protected void onPause() {
+        resumed = false;
+        pausedSession = sessionScope();
         web.onPause();
-        CookieManager.getInstance().flush();
         super.onPause();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
+        resumed = true;
+        if (pausedSession != null && !pausedSession.equals(sessionScope())) {
+            clearError();
+            destroyWebView();
+            createWebView();
+            web.loadUrl(startUrl());
+        }
+        pausedSession = null;
         web.onResume();
+        returnAfterLogin(web.getUrl());
+    }
+
+    private void destroyWebView() {
+        web.setWebViewClient(new WebViewClient());
+        web.stopLoading();
+        root.removeView(web);
+        web.destroy();
     }
 
     @Override
     protected void onDestroy() {
-        ((LinearLayout) web.getParent()).removeView(web);
-        web.destroy();
+        destroyWebView();
         super.onDestroy();
     }
 }

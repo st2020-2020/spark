@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
 
 final class CollectionPayload {
     private static final int MAX_CHARACTERS = 50000;
+    static final int MAX_UTF16_UNITS = 2 * MAX_CHARACTERS;
     private static final int MAX_DOCUMENT_NODES = 10000;
     private static final int MAX_REQUEST_BYTES = 1 << 20;
     private static final Pattern UUID = Pattern.compile(
@@ -35,7 +36,7 @@ final class CollectionPayload {
             intent = "";
         }
         // A supplementary character or a CRLF in shared text can occupy two UTF-16 units.
-        if (text == null || (long) text.length() + intent.length() > 2 * MAX_CHARACTERS) {
+        if (text == null || (long) text.length() + intent.length() > MAX_UTF16_UNITS) {
             throw new IOException("Invalid collection text length");
         }
         text = text.replace("\r\n", "\n").replace('\r', '\n');
@@ -88,7 +89,7 @@ final class CollectionPayload {
         }
     }
 
-    private static boolean hasNonWhitespace(String text) {
+    static boolean hasNonWhitespace(CharSequence text) {
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             if (!Character.isSpaceChar(c) && !(c >= '\t' && c <= '\r') && c != '\u0085') {
@@ -109,7 +110,7 @@ final class CollectionPayload {
         }
     }
 
-    private static String firstLink(String text) {
+    static String firstLink(String text) {
         Matcher links = LINK.matcher(text);
         while (links.find()) {
             String link = links.group();

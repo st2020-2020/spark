@@ -1,0 +1,3 @@
+<resources>
+    <style name="SparkPlatformTheme" parent="android:style/Theme.Material.NoActionBar" />
+</resources>

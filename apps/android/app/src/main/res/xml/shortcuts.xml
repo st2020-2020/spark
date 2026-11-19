@@ -1,0 +1,11 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="local_drafts"
+        android:icon="@drawable/ic_spark"
+        android:shortcutShortLabel="@string/drafts_shortcut_label">
+        <intent
+            android:action="android.intent.action.MAIN"
+            android:targetPackage="cloud.stwqy.spark"
+            android:targetClass="cloud.stwqy.spark.DraftsShortcutActivity" />
+    </shortcut>
+</shortcuts>

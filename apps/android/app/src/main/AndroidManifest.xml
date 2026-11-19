@@ -1,5 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application
         android:enableOnBackInvokedCallback="false"
         android:allowBackup="false"
@@ -15,6 +16,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
         <activity android:name=".ShareActivity" android:exported="true"
             android:windowSoftInputMode="adjustResize">
@@ -24,5 +26,16 @@
                 <data android:mimeType="text/plain" />
             </intent-filter>
         </activity>
+        <activity android:name=".DraftsShortcutActivity" android:exported="true"
+            android:taskAffinity="" android:theme="@android:style/Theme.NoDisplay" />
+        <!-- Android 7.0 predates launcher shortcuts. -->
+        <activity-alias android:name=".DraftsLauncher" android:targetActivity=".DraftsShortcutActivity"
+            android:enabled="@bool/show_drafts_launcher" android:exported="true"
+            android:label="@string/drafts_launcher_label">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
     </application>
 </manifest>

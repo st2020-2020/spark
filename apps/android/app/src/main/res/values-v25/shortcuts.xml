@@ -1,0 +1,3 @@
+<resources>
+    <bool name="show_drafts_launcher">false</bool>
+</resources>
