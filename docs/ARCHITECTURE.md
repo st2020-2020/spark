@@ -12,7 +12,7 @@ MyGo 程序继续通过 `internal/entries/service.go` 操作本地 SQLite，图�
 flowchart TB
     Browser[电脑和手机 Web] --> Edge[Caddy HTTPS 与静态资源]
     Desktop[MyGo 桌面端 后续接入] --> Edge
-    Mobile[移动 App 后续接入] --> Edge
+    Android[Android 系统分享与同源 WebView] --> Edge
     Edge --> API[Go API]
     API --> DB[(PostgreSQL)]
     Worker[Go Worker] <--> DB
@@ -35,7 +35,7 @@ flowchart TB
 | 任务 | River 与 PostgreSQL | 收藏写入和任务入队同事务 |
 | 附件 | 阿里云 OSS 私有桶 | 短期授权、服务端确认、孤立上传回收 |
 | 桌面 | MyGo Native UI、SQLite | 本地副本、待同步操作和客户端适配 |
-| 移动 | 后续 React Native、Expo、SQLite | 与云端共享接口契约和同步语义 |
+| Android | Java、系统 WebView、私有 SQLite | 网页承担在线业务和导航，原生处理系统分享、离线草稿及提交恢复 |
 | 部署 | Docker Compose、Caddy | API、Worker、数据库分别运行 |
 | 诊断 | Go 结构化日志、云监控 | 请求 ID、任务 ID、错误统计、外部探测；按需要接入 OpenTelemetry |
 
@@ -48,7 +48,7 @@ flowchart TB
 ```text
 apps/web/                 Web 应用与页面测试
 apps/desktop/             MyGo 入口、视图、本地存储与同步
-apps/mobile/              后续移动 App
+apps/android/             原生系统分享、本机草稿、在线工作区宿主
 server/cmd/api/           HTTP 入口
 server/cmd/worker/        后台任务入口
 server/internal/         identity、collections、projects、media、organization、search
