@@ -35,8 +35,8 @@
 | projects | id, user_id, name varchar(100), description varchar(2000), focus_points jsonb, state enum(active,paused,completed), version bigint, created_at, updated_at | 用户内名称可重复；关注点最多 20 项，每项 100 字；user_id/state/updated_at 索引 |
 | collections | id, user_id, document jsonb, plain_text text, intent text, original_url?, manual_title?, content_version bigint, resource_version bigint, decision_version bigint, read_at?, ai_excluded bool, ai_policy_version bigint, deleted_at?, purge_after?, purge_requested_at?, created_at, updated_at | user_id/created_at/id 降序索引；用户活动收藏及回收站部分索引 |
 | collection_revisions | id, user_id, collection_id, content_version, document, intent, original_url?, manual_title?, attachment_ids jsonb, created_at | UNIQUE(collection_id,content_version)；快照属于对应用户 |
-| uploads | id, user_id, staging_key, final_key?, provider_version?, filename, declared_size bigint, actual_size?, mime_type, sha256?, status enum(pending,verifying,ready,attached,rejected,expired), expires_at, created_at, updated_at | staging_key 唯一；用户/状态/到期索引 |
-| attachments | id, user_id, collection_id, upload_id, object_key, provider_version?, filename, mime_type, size_bytes bigint, sha256, position int, removed_at?, created_at | upload_id 唯一且同用户；有效附件在收藏内 position 唯一；object_key 唯一 |
+| uploads | id, user_id, staging_key, final_key?, provider_version?, filename, declared_size bigint, actual_size?, mime_type, sha256 bytea?, status enum(pending,verifying,ready,attached,rejected,expired), error_code?, expires_at, staging_cleaned_at?, created_at, updated_at | staging_key、final_key 分别唯一；ready、attached 须有最终键、与声明一致的大小及 32 字节 SHA-256；用户/状态/到期索引 |
+| attachments | id, user_id, collection_id, upload_id, object_key, provider_version?, filename, mime_type, size_bytes bigint, sha256, position int, removed_at?, created_at | upload_id 唯一且同用户；有效附件在收藏内 position 取 0 至 8 且唯一，同一语句可交换位置；object_key 唯一 |
 | tags | id, user_id, name varchar(24), normalized_name, parent_id?, created_at, updated_at | 用户内 UNIQUE(user_id,parent_id,normalized_name) 使用 NULLS NOT DISTINCT 或等效根节点约束；父标签同用户；校验循环 |
 | collection_tags | user_id, collection_id, tag_id, decision enum(manual,confirmed,auto,rejected), run_id?, created_at, updated_at | 复合主键(collection_id,tag_id)，两侧均同用户 |
 | collection_projects | user_id, collection_id, project_id, decision enum(manual,confirmed,auto,rejected,suggested), reason?, evidence jsonb, project_version?, run_id?, created_at, updated_at | 复合主键(collection_id,project_id)，两侧均同用户；user_id/project_id/decision 索引 |
@@ -51,12 +51,18 @@
 
 | 表 | 字段 | 约束与索引 |
 | --- | --- | --- |
-| extractions | id, user_id, collection_id, content_version, source_kind enum(url,image), source_id text, status, text?, source_title?, evidence_meta jsonb, error_code?, extractor_version, created_at, updated_at | UNIQUE(collection_id,content_version,source_kind,source_id,extractor_version) |
+| extractions | id, user_id, collection_id, content_version, source_kind enum(url,image), source_id text, attachment_id?, status, text?, source_title?, evidence_meta jsonb, error_code?, extractor_version, image_user_policy_version?, image_collection_policy_version?, created_at, updated_at | 在账号、收藏、内容版本和来源类型内使用来源 ID 与提取版本的固定大小摘要去重。保留并核对原始来源 ID。图片作业按账号、附件和提取版本唯一，引用同账号同收藏的附件。网址来源使用主要网址和内容版本 |
 | organization_runs | id, user_id, collection_id, content_version, user_policy_version, collection_policy_version, status, stages jsonb, model_id?, prompt_version, matching_policy_version, project_snapshot jsonb, result jsonb, error_code?, started_at?, completed_at?, created_at, updated_at | 同输入和策略仅一个活动运行，由部分唯一约束或任务唯一性配合事务保证 |
 | organization_current | user_id, collection_id, run_id, generated_title?, summary?, content_version, updated_at | 收藏唯一；仅用于当前版本的显示；过期结果可从运行历史诊断 |
-| usage_reservations | id, user_id, run_id, attempt_no, budget_day date, reserved_units bigint, actual_units?, state enum(reserved,settled,released,uncertain), created_at, updated_at | UNIQUE(run_id,attempt_no)；金额或额度采用整数最小单位 |
+| usage_reservations | id, user_id, run_id?, image_extraction_id?, attempt_no, budget_day date, reserved_units bigint, actual_units?, state enum(reserved,settled,released,uncertain), created_at, updated_at | UNIQUE(run_id,attempt_no)；图片作业由同账号提取 ID 关联，每作业一条。删除来源后清除外键并保留账务 |
 | daily_budgets | scope enum(platform,user), owner_key, budget_day, limit_units, reserved_units, settled_units | 复合主键(scope,owner_key,budget_day)；事务行锁校验限额 |
 | model_configs | id, version, enabled bool, provider, model_id, region, deployment_scope, secret_ref, timeout_seconds, limits jsonb, created_at | secret_ref 指向服务端秘密配置；管理员读取仅返回是否已配置 |
+
+网页提取写入锁定收藏并核对当前内容版本及删除状态；重复入队保留原结果，写回需匹配本次读取的 `updated_at`。网页结果使用 `source_title` 保存来源标题，`text` 保存有界正文，`evidence_meta` 保存 `site_name` 和 `summary`。同版本手动刷新后以新的提取 ID 标识当前结果。
+
+用户图片授权独立记录 `image_consent_version`、`image_consented_at` 和递增的 `image_policy_version`。图片作业捕获账户和收藏策略版本，派发前及写回时再核对权限、删除状态及附件有效性。附件的已确认身份保持不变时复用结果。图片的已识别文字写入 `text`，画面描述及输出截断标记写入 `evidence_meta`。
+
+图片与文字整理均使用 `daily_budgets` 的平台和用户两行锁，先写账务再外呼。图片作业派发事务同时持久化派发状态及待核对金额，获取可信用量后结算。发送失败、漏计量或进程中断时仍占用原预留，重复投递不会再次发送该图片作业。
 
 AI 处理状态见 ORGANIZATION，River 自有表由其官方迁移单独管理。调用费用日采用 Asia/Shanghai；达到额度暂停相应任务，用户仍能保存收藏。超时且供应商无法确认结果的调用记 uncertain，预算暂按预留计算，后续对账。
 
@@ -67,7 +73,7 @@ AI 处理状态见 ORGANIZATION，River 自有表由其官方迁移单独管理�
 | idempotency_keys | user_id, operation, key, request_digest, resource_id?, status enum(running,completed), response_status?, response_json?, expires_at, created_at | 主键(user_id,operation,key)，完成结果建议保留 7 天 |
 | user_change_counters | user_id, last_seq bigint | 每用户唯一，所有用户资源变更事务首先锁定 |
 | change_events | user_id, seq, resource_type, resource_id, resource_version, action enum(upsert,delete), created_at | 主键(user_id,seq)；首期保留 90 天用于未来同步和追踪 |
-| deletion_ledger | id, user_id, collection_id, object_keys jsonb, requested_at, replicated_at?, completed_at? | 永久删除意图复制到独立受限存储，用于恢复后重放；清理完毕后按政策缩减字段 |
+| deletion_ledger | id, user_id, collection_id, object_keys jsonb, object_cursor int, requested_at, replicated_at?, completed_at? | UNIQUE(user_id,collection_id)；记录包含已移除附件的暂存键与最终键；作为墓碑独立于收藏生命周期，复制到独立受限存储供恢复后重放 |
 | admin_audit | id, actor_id, action, target_type, target_id?, safe_metadata jsonb, created_at | 记录导入、禁用、用户状态和配置修改，保留 180 天作为建议值 |
 
 写入收藏事务同时写原始数据、幂等结果、变更事件和 River 任务。幂等键相同且请求摘要不同返回 409。任务重试遵循独立任务幂等逻辑。创建收藏使用客户端提供的 UUID，幂等记录过期后 UUID 冲突返回 409并指向已存在资源。永久删除后仍保留最小墓碑以防旧重试复活资源。
@@ -96,6 +102,6 @@ AI 处理状态见 ORGANIZATION，River 自有表由其官方迁移单独管理�
 
 软删除更新 deleted_at 和 purge_after，收藏及所有派生检索数据立即从普通查询排除。Worker 读取和写回都检查删除状态。恢复清除软删除字段，必要时补充最新版本整理任务。
 
-永久删除请求在同一事务设置 purge_requested_at、增加资源版本、写入删除变更、deletion_ledger 和清理任务，返回 202。此后详情、恢复、附件新授权和模型结果应用均拒绝该资源。清理按可重试步骤删除对象、提取结果、整理内容、版本快照和正文，保留最小墓碑。独立删除清单复制成功后才标记清理完成。临时上传 24 小时后回收。编辑移除附件只设置 removed_at，当前视图排除，历史版本和对应附件保留至收藏永久删除，存储用量包含这些对象。
+永久删除请求在同一事务设置 purge_requested_at、增加资源版本、写入删除变更、deletion_ledger 和清理任务，返回 202。此后详情、恢复、附件新授权和模型结果应用均拒绝该资源。清理先同步独立回执，再以单个事务清除正文、提取结果、修订、关联及缓存响应。仍在结算的模型请求保留原结算机会，遗留未确认的预留继续计作 uncertain。随后按回执逐个清理对象并持久化进度，暂存对象等上传授权窗口结束后删除。账本中的账号和收藏 ID 作为墓碑保留。重复请求按账号及收藏 ID 读取原删除操作，旧创建请求也以同一墓碑为准。数据库清理、对象删除和独立删除清单复制成功后才标记账本完成。临时上传 24 小时后回收；先将未绑定上传标记为 expired 并保留对象键，删除对象成功后才移除记录。已绑定上传继续清理暂存对象，成功后记录 staging_cleaned_at。运维可有界重入没有活动作业的到期记录。编辑移除附件只设置 removed_at，当前视图排除，历史版本和对应附件保留至收藏永久删除，存储用量包含这些对象。
 
-备份恢复先在隔离环境执行，再重放独立删除清单、撤销会话和到期授权、检查附件引用，最后开放流量。备份保留建议 30 天，删除清单至少覆盖最老可恢复备份及其校验窗口。
+备份恢复先在隔离环境执行，重放独立回执并完成恢复库及对象清理。撤销会话和旧授权、检查附件引用后开放流量。已登记但尚未复制的操作仍依赖原库中的账本和排队任务。 回执含对象且恢复库缺少对应账号时重放报错，恢复环境保持离线，直至解决备份配对和该回执所列对象。备份保留建议 30 天，删除清单至少覆盖最老可恢复备份及其校验窗口。

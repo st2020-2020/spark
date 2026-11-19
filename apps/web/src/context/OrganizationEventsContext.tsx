@@ -79,6 +79,10 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
     lastSyncAtRef.current = now;
     void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'active' });
     void queryClient.invalidateQueries({ queryKey: ['collection'], refetchType: 'active' });
+    void queryClient.invalidateQueries({
+      queryKey: ['collection-extractions'],
+      refetchType: 'active',
+    });
     void queryClient.invalidateQueries({ queryKey: ['project-collections'], refetchType: 'active' });
     void queryClient.invalidateQueries({ queryKey: ['me', 'usage'], refetchType: 'active' });
   }, [queryClient]);
@@ -173,6 +177,9 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
           .then((fresh) => {
             if (subscriptionGeneration.current !== generation) return;
             queryClient.setQueryData(['collection', event.collection_id], fresh);
+            const sortedAttachments = [...fresh.attachments].sort(
+              (a, b) => a.position - b.position,
+            );
             const patchItem = (item: CollectionSummary): CollectionSummary => ({
               ...item,
               display_title: fresh.display_title,
@@ -180,6 +187,9 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
               tags: fresh.tags,
               organization_status: fresh.organization.status,
               has_suggestion: fresh.has_suggestion,
+              original_url: fresh.original_url ?? undefined,
+              cover_attachment_id: sortedAttachments[0]?.id,
+              attachment_count: sortedAttachments.length,
               read_at: fresh.read_at,
               updated_at: fresh.updated_at,
               resource_version: fresh.resource_version,
@@ -215,6 +225,10 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
         void queryClient.invalidateQueries({ queryKey: ['collections', 'pending-suggestions'] });
       }
       void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
+      void queryClient.invalidateQueries({
+        queryKey: ['collection-extractions', event.collection_id],
+        refetchType: 'active',
+      });
 
       if (!event.has_suggestion) {
         return;

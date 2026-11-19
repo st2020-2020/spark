@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createRealApiClient } from '../api/client';
+import { createRealApiClient, UPLOAD_TRANSFER_TIMEOUT_MS } from '../api/client';
 import { ApiError } from '../api/errors';
 import { EMPTY_DOCUMENT } from '../lib/document';
 
@@ -300,5 +300,77 @@ describe('realApiClient', () => {
     });
 
     vi.unstubAllGlobals();
+  });
+
+  it('bounds XHR uploadFileBytes with timeout, does not auto-retry, and keeps AbortSignal cancel separate', async () => {
+    class MockXHR {
+      static instances: MockXHR[] = [];
+      method = '';
+      url = '';
+      headers: Record<string, string> = {};
+      timeout = 0;
+      aborted = false;
+      upload: { onprogress: ((e: ProgressEvent) => void) | null } = { onprogress: null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+
+      constructor() {
+        MockXHR.instances.push(this);
+      }
+      open(method: string, url: string) {
+        this.method = method;
+        this.url = url;
+      }
+      setRequestHeader(k: string, v: string) {
+        this.headers[k] = v;
+      }
+      abort() {
+        this.aborted = true;
+        this.onabort?.();
+      }
+      send(_body: unknown) {}
+    }
+
+    vi.stubGlobal('XMLHttpRequest', MockXHR);
+    try {
+      const client = createRealApiClient();
+      const grant = {
+        id: 'up-1',
+        method: 'PUT' as const,
+        url: 'https://oss.example.com/object',
+        headers: { 'Content-Type': 'image/png', 'Content-Length': '12' },
+        expires_at: '2030-01-01T00:00:00Z',
+      };
+      const file = new File(['hello-bytes!'], 'sample.png', { type: 'image/png' });
+
+      // Timeout case: sets bounded timeout, skips forbidden Content-Length, fails with upload_timeout and zero auto-retries
+      const timeoutPromise = client.uploadFileBytes(grant, file, undefined, undefined, 2500);
+      expect(MockXHR.instances).toHaveLength(1);
+      const xhr1 = MockXHR.instances[0];
+      expect(xhr1.timeout).toBe(2500);
+      expect(xhr1.headers).toEqual({ 'Content-Type': 'image/png' });
+      xhr1.ontimeout?.();
+      await expect(timeoutPromise).rejects.toMatchObject({
+        status: 0,
+        code: 'upload_timeout',
+        message: '图片上传超时，请检查网络后重试。',
+      } satisfies Partial<ApiError>);
+      expect(MockXHR.instances).toHaveLength(1);
+
+      // Default bounded timeout + AbortSignal cancellation keeps AbortError distinct
+      const ac = new AbortController();
+      const abortPromise = client.uploadFileBytes(grant, file, undefined, ac.signal);
+      expect(MockXHR.instances).toHaveLength(2);
+      const xhr2 = MockXHR.instances[1];
+      expect(xhr2.timeout).toBe(UPLOAD_TRANSFER_TIMEOUT_MS);
+      ac.abort();
+      expect(xhr2.aborted).toBe(true);
+      await expect(abortPromise).rejects.toMatchObject({ name: 'AbortError' });
+      expect(MockXHR.instances).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

@@ -5,8 +5,8 @@ import {
   ArrowLeft,
   Ban,
   Check,
-  ExternalLink,
   History,
+  ImagePlus,
   Loader2,
   Mail,
   MailOpen,
@@ -17,14 +17,28 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { Collection, SparkDocument } from '../api/types';
+import type {
+  Accepted,
+  Attachment,
+  Collection,
+  Extraction,
+  ExtractionList,
+  SparkDocument,
+} from '../api/types';
 import { ApiError, getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
-import { AttachmentImage } from '../components/AttachmentImage';
+import { AttachmentGallery } from '../components/AttachmentGallery';
+import {
+  formatExtractionSummaryText,
+  ImageAnalysisPanel,
+} from '../components/ImageAnalysisPanel';
+import { LinkPreviewCard } from '../components/LinkPreviewCard';
 import { Modal } from '../components/Modal';
+import { PurgeConfirmModal } from '../components/PurgeConfirmModal';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
 import { RichTextEditor } from '../components/RichTextEditor';
 import { SafeDocumentView } from '../components/SafeDocumentView';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
+import { UploadQueueTray } from '../components/UploadQueueTray';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -39,12 +53,14 @@ import { loadDraft, removeDraft, saveDraft, useBeforeUnloadWarning } from '../li
 import { formatDateTime, formatRemainingTrashDays } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { projectToneClass } from '../lib/projectTone';
+import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import {
   classifyOrganizationDisplay,
   isOrganizationActiveStatus,
   stageNameLabel,
   stageStatusLabel,
 } from '../lib/organization';
+import { purgeStatusLabel, resolvePurgeActionError } from '../lib/purge';
 
 interface EditDraft {
   baseContentVersion: number;
@@ -79,11 +95,24 @@ export function CollectionDetailPage() {
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
   const [orgActionError, setOrgActionError] = useState<string | null>(null);
+  const [urlRefreshError, setUrlRefreshError] = useState<string | null>(null);
+  const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false);
+  const [purgeError, setPurgeError] = useState<string | null>(null);
+  const [acceptedPurge, setAcceptedPurge] = useState<Accepted | null>(null);
+  const [checkingPurgeStatus, setCheckingPurgeStatus] = useState(false);
 
   const autoReadMarkedRef = useRef<string | null>(null);
   const autoEditOpenedRef = useRef<string | null>(null);
+  const editFileInputRef = useRef<HTMLInputElement | null>(null);
   const orgRetryKeyRef = useRef<string>(generateIdempotencyKey());
   const orgRetryContextRef = useRef<string>('');
+  const urlRetryKeyRef = useRef<string>(generateIdempotencyKey());
+  const urlRetryContextRef = useRef<string>('');
+  const purgeKeyRef = useRef<{ version: number; key: string } | null>(null);
+  const editUploader = useImageUploader(api, {
+    existingCount: editDraft?.keptAttachmentIds.length ?? 0,
+    accountKey: userId,
+  });
 
   const collectionQuery = useQuery({
     queryKey: ['collection', id],
@@ -91,10 +120,45 @@ export function CollectionDetailPage() {
     enabled: Boolean(id),
   });
 
+  const purgeStatusQuery = useQuery({
+    queryKey: ['collection-purge', id],
+    queryFn: () => api.getCollectionPurgeStatus(id),
+    enabled:
+      Boolean(id) &&
+      collectionQuery.isError &&
+      isApiErrorCode(collectionQuery.error, 'not_found') &&
+      !acceptedPurge,
+    retry: false,
+  });
+
+  useEffect(() => {
+    setAcceptedPurge(null);
+    setPurgeError(null);
+    setPurgeConfirmOpen(false);
+    setCheckingPurgeStatus(false);
+    purgeKeyRef.current = null;
+  }, [id]);
+
   const extractionsQuery = useQuery({
     queryKey: ['collection-extractions', id],
     queryFn: () => api.getExtractions(id),
-    enabled: secondaryExpanded && Boolean(id) && Boolean(collectionQuery.data),
+    enabled:
+      Boolean(id) &&
+      Boolean(collectionQuery.data) &&
+      (secondaryExpanded ||
+        (!collectionQuery.data?.deleted_at &&
+          (Boolean(collectionQuery.data?.original_url) ||
+            (collectionQuery.data?.attachments.length ?? 0) > 0))),
+  });
+
+  const imageAnalysisQuery = useQuery({
+    queryKey: ['me', 'image-analysis'],
+    queryFn: () => api.getImageAnalysisPreferences(),
+    enabled:
+      Boolean(userId) &&
+      Boolean(collectionQuery.data) &&
+      !collectionQuery.data?.deleted_at &&
+      (collectionQuery.data?.attachments.length ?? 0) > 0,
   });
 
   const projectsQuery = useQuery({
@@ -109,6 +173,28 @@ export function CollectionDetailPage() {
   });
 
   const collection = collectionQuery.data;
+
+  const matchedUrlExtraction = useMemo(() => {
+    if (!collection || collection.deleted_at || !collection.original_url) return null;
+    const items = extractionsQuery.data?.items ?? [];
+    return (
+      items.find(
+        (ext) =>
+          ext.source_kind === 'url' &&
+          ext.source_id === collection.original_url &&
+          ext.content_version === collection.content_version,
+      ) ?? null
+    );
+  }, [collection, extractionsQuery.data?.items]);
+
+  useEffect(() => {
+    const nextContext = `${id}:${collection?.content_version ?? ''}:${collection?.original_url ?? ''}:${matchedUrlExtraction?.id ?? ''}`;
+    if (urlRetryContextRef.current && urlRetryContextRef.current !== nextContext) {
+      urlRetryKeyRef.current = generateIdempotencyKey();
+      setUrlRefreshError(null);
+    }
+    urlRetryContextRef.current = nextContext;
+  }, [id, collection?.content_version, collection?.original_url, matchedUrlExtraction?.id]);
 
   useEffect(() => {
     if (!collection || collection.read_at || collection.deleted_at) return;
@@ -143,9 +229,15 @@ export function CollectionDetailPage() {
   }, [userId, editDraftScope, isEditing, editDraft]);
 
   const startEditing = (col: Collection) => {
+    editUploader.clearAll();
+    const sortedAttachments = [...col.attachments].sort((a, b) => a.position - b.position);
+    const validIds = new Set(sortedAttachments.map((a) => a.id));
     const restored = loadDraft<EditDraft>(userId, editDraftScope);
     if (restored.data && restored.data.baseContentVersion === col.content_version) {
-      setEditDraft(restored.data);
+      setEditDraft({
+        ...restored.data,
+        keptAttachmentIds: restored.data.keptAttachmentIds.filter((aid) => validIds.has(aid)),
+      });
     } else {
       setEditDraft({
         baseContentVersion: col.content_version,
@@ -153,7 +245,7 @@ export function CollectionDetailPage() {
         intent: col.intent,
         originalUrl: col.original_url ?? '',
         manualTitle: col.manual_title ?? '',
-        keptAttachmentIds: col.attachments.map((a) => a.id),
+        keptAttachmentIds: sortedAttachments.map((a) => a.id),
       });
     }
     setConflictServerDoc(null);
@@ -176,6 +268,7 @@ export function CollectionDetailPage() {
   }, [routeState?.edit, collection?.id]);
 
   const cancelEditing = () => {
+    editUploader.clearAll();
     setIsEditing(false);
     setEditDraft(null);
     setConflictServerDoc(null);
@@ -203,8 +296,25 @@ export function CollectionDetailPage() {
       }
       const docSupport = inspectSparkDocumentSupport(editDraft.document);
       const plain = derivePlainText(editDraft.document).trim();
-      if (!plain && !trimmedUrl && editDraft.keptAttachmentIds.length === 0) {
-        throw new Error('正文或有效网址至少保留一项');
+      if (editUploader.hasInFlight) {
+        throw new Error('请等待新增图片上传完成或取消后再保存。');
+      }
+      if (editUploader.hasFailed) {
+        throw new Error('存在上传失败的图片，请重试或移除后再保存。');
+      }
+      if (
+        !plain &&
+        !trimmedUrl &&
+        editDraft.keptAttachmentIds.length === 0 &&
+        editUploader.readyUploadIds.length === 0
+      ) {
+        throw new Error('正文、有效网址或图片附件至少保留一项');
+      }
+      if (
+        editDraft.keptAttachmentIds.length + editUploader.readyUploadIds.length >
+        MAX_ATTACHMENTS_PER_COLLECTION
+      ) {
+        throw new Error(`每条收藏最多只能包含 ${MAX_ATTACHMENTS_PER_COLLECTION} 张图片。`);
       }
 
       return api.updateCollection(collection.id, {
@@ -214,10 +324,11 @@ export function CollectionDetailPage() {
         original_url: trimmedUrl,
         manual_title: editDraft.manualTitle.trim(),
         attachment_ids: editDraft.keptAttachmentIds,
-        upload_ids: [],
+        upload_ids: editUploader.readyUploadIds,
       });
     },
     onSuccess: (updated) => {
+      editUploader.clearAll();
       queryClient.setQueryData(['collection', id], updated);
       setIsEditing(false);
       setEditDraft(null);
@@ -226,6 +337,7 @@ export function CollectionDetailPage() {
       removeDraft(userId, editDraftScope);
       pushToast({ message: '已保存修改' });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -263,6 +375,7 @@ export function CollectionDetailPage() {
       setDecisionError(null);
       queryClient.setQueryData(['collection', id], updated);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -283,6 +396,7 @@ export function CollectionDetailPage() {
     },
     onSuccess: (trashed) => {
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -310,15 +424,78 @@ export function CollectionDetailPage() {
       return api.restoreCollection(id, { base_resource_version: collection.resource_version });
     },
     onSuccess: (restored) => {
+      setPurgeError(null);
       queryClient.setQueryData(['collection', id], restored);
+      void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
       pushToast({ message: '已从回收站恢复' });
     },
-    onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
+    onError: (err) => {
+      const msg = getFriendlyErrorMessage(err);
+      setPurgeError(msg);
+      pushToast({ message: msg, tone: 'error' });
+      if (isApiErrorCode(err, 'resource_conflict') || isApiErrorCode(err, 'not_found')) {
+        void queryClient.invalidateQueries({ queryKey: ['collection', id] });
+      }
+    },
   });
+
+  const purgeMutation = useMutation({
+    mutationFn: () => {
+      if (!collection) throw new Error('收藏不存在');
+      if (!purgeKeyRef.current || purgeKeyRef.current.version !== collection.resource_version) {
+        purgeKeyRef.current = {
+          version: collection.resource_version,
+          key: generateIdempotencyKey(),
+        };
+      }
+      return api.purgeCollection(
+        id,
+        { base_resource_version: collection.resource_version },
+        purgeKeyRef.current.key,
+      );
+    },
+    onSuccess: (accepted) => {
+      purgeKeyRef.current = null;
+      setPurgeError(null);
+      setPurgeConfirmOpen(false);
+      setAcceptedPurge(accepted);
+      queryClient.setQueryData(['collection-purge', id], accepted);
+      void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
+      void queryClient.invalidateQueries({ queryKey: ['project'] });
+      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      pushToast({
+        message: accepted.status === 'completed' ? '已永久删除收藏' : '已受理永久删除，正在清理',
+      });
+    },
+    onError: (err) => {
+      const resolved = resolvePurgeActionError(err);
+      setPurgeError(resolved.message);
+      setPurgeConfirmOpen(false);
+      if (resolved.shouldRefresh) {
+        void queryClient.invalidateQueries({ queryKey: ['collection', id] });
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      }
+    },
+  });
+
+  async function handleRefreshDetailPurgeStatus() {
+    setCheckingPurgeStatus(true);
+    setPurgeError(null);
+    try {
+      const latest = await api.getCollectionPurgeStatus(id);
+      setAcceptedPurge(latest);
+      queryClient.setQueryData(['collection-purge', id], latest);
+    } catch (err) {
+      setPurgeError(getFriendlyErrorMessage(err));
+    } finally {
+      setCheckingPurgeStatus(false);
+    }
+  }
 
   const aiExclusionMutation = useMutation({
     mutationFn: (excluded: boolean) => api.setAIExclusion(id, { excluded }),
@@ -362,7 +539,104 @@ export function CollectionDetailPage() {
     },
   });
 
+  const refreshUrlMutation = useMutation({
+    mutationFn: () => api.refreshUrlExtraction(id, urlRetryKeyRef.current),
+    onSuccess: (ext: Extraction) => {
+      setUrlRefreshError(null);
+      urlRetryKeyRef.current = generateIdempotencyKey();
+      queryClient.setQueryData<ExtractionList>(['collection-extractions', id], (prev) => {
+        const rest = (prev?.items ?? []).filter((item) => item.id !== ext.id);
+        return { items: [ext, ...rest] };
+      });
+      if (ext.status === 'queued' || ext.status === 'running') {
+        pushToast({ message: '已加入网页信息获取队列' });
+      } else {
+        pushToast({ message: '已更新网页信息' });
+      }
+      void queryClient.invalidateQueries({
+        queryKey: ['collection-extractions', id],
+        refetchType: 'active',
+      });
+      void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+    },
+    onError: (err) => {
+      if (
+        isApiErrorCode(err, 'integration_not_configured') &&
+        (!err.message || err.message.trim() === '')
+      ) {
+        setUrlRefreshError('当前平台尚未开启网页抓取功能，已保留原链接。');
+        return;
+      }
+      setUrlRefreshError(getFriendlyErrorMessage(err));
+    },
+  });
+
+  const effectiveAcceptedPurge = acceptedPurge ?? purgeStatusQuery.data ?? null;
+
   if (collectionQuery.isLoading) return <LoadingState message="正在加载收藏…" />;
+  if (
+    collectionQuery.isError &&
+    isApiErrorCode(collectionQuery.error, 'not_found') &&
+    purgeStatusQuery.isLoading &&
+    !effectiveAcceptedPurge
+  ) {
+    return <LoadingState message="正在检查收藏状态…" />;
+  }
+  if (effectiveAcceptedPurge) {
+    return (
+      <div>
+        <div className="sp-detail-bar">
+          <Link to={backTo} className="sp-btn--quiet sp-back-link">
+            <ArrowLeft size={18} strokeWidth={2} aria-hidden="true" />
+            <span>返回</span>
+          </Link>
+        </div>
+
+        <section className="sp-card sp-detail-card sp-stack" aria-label="永久删除受理状态">
+          <div className="sp-row-between">
+            <div className="sp-row">
+              <strong>{purgeStatusLabel(effectiveAcceptedPurge.status)}</strong>
+              <span className="sp-pill sp-tabular">
+                操作 {effectiveAcceptedPurge.operation_id.slice(0, 8)}
+              </span>
+            </div>
+            <div className="sp-row">
+              {effectiveAcceptedPurge.status !== 'completed' && (
+                <button
+                  type="button"
+                  className="sp-btn sp-btn--sm"
+                  disabled={checkingPurgeStatus}
+                  onClick={() => void handleRefreshDetailPurgeStatus()}
+                >
+                  <RefreshCw
+                    size={14}
+                    strokeWidth={2}
+                    className={checkingPurgeStatus ? 'sp-spin' : undefined}
+                    aria-hidden="true"
+                  />
+                  <span>{checkingPurgeStatus ? '刷新中…' : '刷新状态'}</span>
+                </button>
+              )}
+              <Link to="/trash" className="sp-btn sp-btn--sm sp-btn--primary">
+                返回回收站
+              </Link>
+            </div>
+          </div>
+
+          <p className="sp-help">
+            该收藏已从回收站、列表与搜索中移除，恢复与新附件下载均已停止；后台完成物理清理后状态会变为已完成。
+          </p>
+
+          {purgeError && (
+            <div className="sp-banner sp-banner--error" role="alert">
+              <span>{purgeError}</span>
+            </div>
+          )}
+        </section>
+      </div>
+    );
+  }
   if (collectionQuery.isError) {
     return (
       <div>
@@ -445,23 +719,50 @@ export function CollectionDetailPage() {
       </div>
 
       {isInTrash && (
-        <div className="sp-banner sp-banner--warning sp-trash-notice" role="status">
-          <div>
-            <strong>此收藏位于回收站</strong>
-            <div className="sp-banner-detail">
-              删除于 {formatDateTime(collection.deleted_at!)} ·{' '}
-              {formatRemainingTrashDays(collection.purge_after)}
+        <div className="sp-stack sp-trash-notice">
+          <div className="sp-banner sp-banner--warning" role="status">
+            <div>
+              <strong>此收藏位于回收站</strong>
+              <div className="sp-banner-detail">
+                删除于 {formatDateTime(collection.deleted_at!)} ·{' '}
+                {collection.purge_after
+                  ? `到期时间 ${formatDateTime(collection.purge_after)}（${formatRemainingTrashDays(collection.purge_after)}）`
+                  : formatRemainingTrashDays(collection.purge_after)}
+              </div>
+            </div>
+            <div className="sp-row">
+              <button
+                type="button"
+                className="sp-btn sp-btn--sm sp-btn--primary"
+                disabled={
+                  restoreMutation.isPending || purgeMutation.isPending || purgeConfirmOpen
+                }
+                onClick={() => restoreMutation.mutate()}
+              >
+                <RotateCcw size={14} strokeWidth={2} aria-hidden="true" />
+                <span>{restoreMutation.isPending ? '恢复中…' : '恢复'}</span>
+              </button>
+              <button
+                type="button"
+                className="sp-btn sp-btn--sm sp-btn--danger"
+                disabled={
+                  restoreMutation.isPending || purgeMutation.isPending || purgeConfirmOpen
+                }
+                onClick={() => {
+                  setPurgeError(null);
+                  setPurgeConfirmOpen(true);
+                }}
+              >
+                <Trash2 size={14} strokeWidth={2} aria-hidden="true" />
+                <span>{purgeMutation.isPending ? '删除中…' : '永久删除'}</span>
+              </button>
             </div>
           </div>
-          <button
-            type="button"
-            className="sp-btn sp-btn--sm sp-btn--primary"
-            disabled={restoreMutation.isPending}
-            onClick={() => restoreMutation.mutate()}
-          >
-            <RotateCcw size={14} strokeWidth={2} aria-hidden="true" />
-            <span>恢复</span>
-          </button>
+          {purgeError && (
+            <div className="sp-banner sp-banner--error" role="alert">
+              <span>{purgeError}</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -483,15 +784,16 @@ export function CollectionDetailPage() {
             <SafeDocumentView document={collection.document} />
 
             {collection.original_url && (
-              <a
-                href={collection.original_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="sp-note-source"
-              >
-                <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
-                <span className="sp-break-anywhere">{collection.original_url}</span>
-              </a>
+              <LinkPreviewCard
+                originalUrl={collection.original_url}
+                preview={matchedUrlExtraction}
+                variant="detail"
+                isRefreshing={refreshUrlMutation.isPending}
+                isCheckingStatus={extractionsQuery.isFetching}
+                refreshError={urlRefreshError}
+                onRefresh={!isInTrash ? () => refreshUrlMutation.mutate() : undefined}
+                onCheckStatus={!isInTrash ? () => void extractionsQuery.refetch() : undefined}
+              />
             )}
           </div>
         ) : (
@@ -553,13 +855,16 @@ export function CollectionDetailPage() {
                       type="button"
                       className="sp-btn sp-btn--sm"
                       onClick={() => {
+                        editUploader.clearAll();
                         setEditDraft({
                           baseContentVersion: conflictServerDoc.content_version,
                           document: conflictServerDoc.document,
                           intent: conflictServerDoc.intent,
                           originalUrl: conflictServerDoc.original_url ?? '',
                           manualTitle: conflictServerDoc.manual_title ?? '',
-                          keptAttachmentIds: conflictServerDoc.attachments.map((a) => a.id),
+                          keptAttachmentIds: [...conflictServerDoc.attachments]
+                            .sort((a, b) => a.position - b.position)
+                            .map((a) => a.id),
                         });
                         setConflictServerDoc(null);
                         setEditError(null);
@@ -573,12 +878,88 @@ export function CollectionDetailPage() {
               )}
 
               <div className="sp-field">
-                <span className="sp-label">正文</span>
+                <span className="sp-label">正文与图片</span>
                 <div className="sp-detail-editor">
                   <RichTextEditor
                     value={editDraft.document}
                     onChange={(doc) => setEditDraft((d) => (d ? { ...d, document: doc } : d))}
+                    onFilesAdded={(files) => editUploader.addFiles(files)}
+                    disabled={saveEditMutation.isPending}
                     resetToken={editorResetToken}
+                    leadingTools={
+                      <>
+                        <input
+                          ref={editFileInputRef}
+                          type="file"
+                          multiple
+                          accept="image/jpeg,image/png,image/gif,image/webp"
+                          className="sp-sr-file-input"
+                          aria-label="选择新增图片"
+                          tabIndex={-1}
+                          onChange={(e) => {
+                            const picked = e.target.files ? Array.from(e.target.files) : [];
+                            e.target.value = '';
+                            if (picked.length > 0) editUploader.addFiles(picked);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="sp-tool-btn"
+                          aria-label="添加图片"
+                          data-tooltip="添加图片"
+                          disabled={
+                            saveEditMutation.isPending ||
+                            editDraft.keptAttachmentIds.length + editUploader.items.length >=
+                              MAX_ATTACHMENTS_PER_COLLECTION
+                          }
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => editFileInputRef.current?.click()}
+                        >
+                          <ImagePlus size={18} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                      </>
+                    }
+                    betweenEditorAndToolbar={
+                      <UploadQueueTray
+                        keptAttachments={editDraft.keptAttachmentIds
+                          .map((aid) => collection.attachments.find((a) => a.id === aid))
+                          .filter((a): a is Attachment => Boolean(a))}
+                        pendingItems={editUploader.items}
+                        validationError={editUploader.validationError}
+                        onDismissValidationError={editUploader.clearValidationError}
+                        onCancelPending={editUploader.cancelItem}
+                        onRetryPending={editUploader.retryItem}
+                        onRemovePending={editUploader.removeItem}
+                        onMovePending={editUploader.moveItem}
+                        onRemoveKept={(attachmentId) =>
+                          setEditDraft((d) =>
+                            d
+                              ? {
+                                  ...d,
+                                  keptAttachmentIds: d.keptAttachmentIds.filter(
+                                    (aid) => aid !== attachmentId,
+                                  ),
+                                }
+                              : d,
+                          )
+                        }
+                        onMoveKept={(attachmentId, direction) =>
+                          setEditDraft((d) => {
+                            if (!d) return d;
+                            const idx = d.keptAttachmentIds.indexOf(attachmentId);
+                            const nextIdx = idx + direction;
+                            if (idx < 0 || nextIdx < 0 || nextIdx >= d.keptAttachmentIds.length) {
+                              return d;
+                            }
+                            const nextIds = [...d.keptAttachmentIds];
+                            const [moved] = nextIds.splice(idx, 1);
+                            nextIds.splice(nextIdx, 0, moved);
+                            return { ...d, keptAttachmentIds: nextIds };
+                          })
+                        }
+                        disabled={saveEditMutation.isPending}
+                      />
+                    }
                   />
                 </div>
               </div>
@@ -639,7 +1020,11 @@ export function CollectionDetailPage() {
                   <button
                     type="button"
                     className="sp-btn sp-btn--primary"
-                    disabled={saveEditMutation.isPending}
+                    disabled={
+                      saveEditMutation.isPending ||
+                      editUploader.hasInFlight ||
+                      editUploader.hasFailed
+                    }
                     onClick={() => saveEditMutation.mutate(undefined)}
                   >
                     {saveEditMutation.isPending ? '保存中…' : '保存修改'}
@@ -650,17 +1035,24 @@ export function CollectionDetailPage() {
           )
         )}
 
-        {/* Existing attachments (kept for read protection) */}
-        {collection.attachments.length > 0 && (
+        {/* Attachments in read mode (single large image or 9-grid + lightbox zoom) */}
+        {!isEditing && collection.attachments.length > 0 && (
           <section className="sp-section">
             <div className="sp-section-head">
               <h2 className="sp-section-title">图片附件 ({collection.attachments.length})</h2>
             </div>
-            <div className="sp-attachment-grid">
-              {collection.attachments.map((att) => (
-                <AttachmentImage key={att.id} attachment={att} />
-              ))}
-            </div>
+            <AttachmentGallery attachments={collection.attachments} />
+            <ImageAnalysisPanel
+              attachments={collection.attachments}
+              extractions={extractionsQuery.data?.items ?? []}
+              isInTrash={isInTrash}
+              aiExcluded={collection.ai_excluded}
+              imagePreferences={imageAnalysisQuery.data}
+              isLoading={extractionsQuery.isLoading}
+              isFetching={extractionsQuery.isFetching}
+              isError={extractionsQuery.isError}
+              onRefreshStatus={() => void extractionsQuery.refetch()}
+            />
           </section>
         )}
 
@@ -964,8 +1356,9 @@ export function CollectionDetailPage() {
               {extractionsQuery.isSuccess && extractionsQuery.data.items.length > 0 && (
                 <div className="sp-stack sp-stack--tight">
                   {extractionsQuery.data.items.map((ext) => (
-                    <div key={ext.id} className="sp-help">
-                      {ext.source_kind === 'url' ? '网页正文' : '图片文字'}：{ext.text || ext.status}
+                    <div key={ext.id} className="sp-help sp-break-anywhere">
+                      {ext.source_kind === 'url' ? '网页正文' : '图片理解'}：
+                      {formatExtractionSummaryText(ext)}
                     </div>
                   ))}
                 </div>
@@ -1013,6 +1406,18 @@ export function CollectionDetailPage() {
           ))}
         </div>
       </Modal>
+
+      <PurgeConfirmModal
+        open={purgeConfirmOpen}
+        targetSummary={collection.display_title}
+        isSubmitting={purgeMutation.isPending}
+        onCancel={() => setPurgeConfirmOpen(false)}
+        onConfirm={() => {
+          if (!restoreMutation.isPending && !purgeMutation.isPending) {
+            purgeMutation.mutate();
+          }
+        }}
+      />
     </div>
   );
 }

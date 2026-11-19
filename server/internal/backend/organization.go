@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -180,7 +181,7 @@ func (s *Server) setAIExclusion(c *gin.Context) (any, error) {
 	return row.Collection, nil
 }
 func (s *Server) restartOrganization(c *gin.Context) (any, error) {
-	return s.idempotent(c, nil, 202, func(tx pgx.Tx) (any, error) {
+	return s.idempotentWithReplay(c, nil, 202, func(tx pgx.Tx) (any, error) {
 		uid, id := current(c).User.ID, c.Param("id")
 		_, reason, err := s.Organizer.Enqueue(c.Request.Context(), tx, uid, id, true)
 		if err != nil {
@@ -205,5 +206,8 @@ func (s *Server) restartOrganization(c *gin.Context) (any, error) {
 		}
 		row, err := s.loadCollection(c.Request.Context(), tx, uid, id)
 		return row.Organization, err
+	}, func(tx pgx.Tx, response json.RawMessage) (any, error) {
+		_, err := s.loadCollection(c.Request.Context(), tx, current(c).User.ID, c.Param("id"))
+		return response, err
 	})
 }

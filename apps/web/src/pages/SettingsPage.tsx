@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
 import { AIConsentModal } from '../components/AIConsentModal';
+import { ImageAnalysisSettingsCard } from '../components/ImageAnalysisSettingsCard';
 import { DataExport } from '../components/DataExport';
 import { PageHeader } from '../components/PageHeader';
 import { useApi } from '../context/ApiContext';
@@ -137,6 +138,8 @@ export function SettingsPage() {
             ))}
           </div>
         </section>
+
+        <ImageAnalysisSettingsCard />
 
         <section className="sp-card" aria-label="平台 AI 自动整理">
           <h2 className="sp-card-title">AI 自动整理</h2>

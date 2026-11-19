@@ -21,7 +21,7 @@ func main() {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: spark migrate | admin EMAIL | dev-mail CHALLENGE_ID | maintenance")
+		return errors.New("usage: spark migrate | admin EMAIL | dev-mail CHALLENGE_ID | maintenance | retry-upload-cleanup | replay-deletions")
 	}
 	if os.Args[1] == "healthcheck" && len(os.Args) == 2 {
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -35,6 +35,9 @@ func run() error {
 		}
 		return nil
 	}
+	if len(os.Args) == 2 && os.Args[1] == "replay-deletions" {
+		return runDeletionReplay()
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	pool, err := backend.OpenPool(ctx, os.Getenv("DATABASE_URL"))
@@ -47,6 +50,20 @@ func run() error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 		fmt.Printf("schema version %d ready\n", db.Version)
+		return nil
+	}
+	if os.Args[1] == "retry-upload-cleanup" {
+		if len(os.Args) != 2 {
+			return errors.New("usage: spark retry-upload-cleanup")
+		}
+		if err := db.Ready(ctx, pool); err != nil {
+			return err
+		}
+		count, err := backend.RequeueUploadCleanup(ctx, pool)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("queued %d upload cleanup jobs\n", count)
 		return nil
 	}
 	cfg, err := backend.LoadConfig()

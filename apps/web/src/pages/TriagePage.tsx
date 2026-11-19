@@ -7,7 +7,6 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
-  ExternalLink,
   Layers,
   RotateCcw,
   SkipForward,
@@ -24,7 +23,9 @@ import type {
   ProjectUndoReceipt,
 } from '../api/types';
 import { ApiError, getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
+import { AttachmentGallery } from '../components/AttachmentGallery';
 import { JarScene } from '../components/Illustrations';
+import { LinkPreviewCard } from '../components/LinkPreviewCard';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
 import { ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
@@ -1311,15 +1312,12 @@ export function TriagePage() {
               )}
 
               {originalUrl && (
-                <a
-                  href={originalUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="sp-url-chip"
-                >
-                  <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
-                  <span className="sp-break-anywhere">{originalUrl}</span>
-                </a>
+                <LinkPreviewCard
+                  originalUrl={originalUrl}
+                  preview={currentSummary.link_preview}
+                  variant="card"
+                  fallbackClassName="sp-url-chip"
+                />
               )}
 
               {intentText && (
@@ -1327,6 +1325,14 @@ export function TriagePage() {
                   <span className="sp-triage-intent-label">用途说明：</span>
                   <span>{intentText}</span>
                 </div>
+              )}
+
+              {currentDetail && currentDetail.attachments.length > 0 && (
+                <AttachmentGallery
+                  attachments={currentDetail.attachments}
+                  compact
+                  className="sp-triage-gallery"
+                />
               )}
 
               {suggestedAssociations.length > 0 && (

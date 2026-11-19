@@ -1,8 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Link2, Mail, MailOpen, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
-import type { CollectionSummary, SearchHit } from '../api/types';
+import {
+  ChevronRight,
+  Image as ImageIcon,
+  Link2,
+  Mail,
+  MailOpen,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
+import type { Attachment, CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
 import { useToast } from '../context/ToastContext';
@@ -15,6 +24,8 @@ import {
 import { formatClock, isJustCreated } from '../lib/journal';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
 import { projectToneClass } from '../lib/projectTone';
+import { AttachmentGallery } from './AttachmentGallery';
+import { LinkPreviewCard } from './LinkPreviewCard';
 import { HighlightText } from './StateBlocks';
 
 function shouldShowDistinctTitle(collection: CollectionSummary): boolean {
@@ -28,11 +39,13 @@ function shouldShowDistinctTitle(collection: CollectionSummary): boolean {
 
 export function CollectionCard({
   collection,
+  attachments,
   snippets,
   searchQuery = '',
   timeStyle = 'relative',
 }: {
   collection: CollectionSummary;
+  attachments?: Attachment[];
   snippets?: SearchHit['snippets'];
   searchQuery?: string;
   /** "clock" inside day-grouped lists, where the day is already shown by the group stamp. */
@@ -124,6 +137,7 @@ export function CollectionCard({
 
   const detailState = { from: `${location.pathname}${location.search}` };
   const hasUrl = collection.content_types.includes('url');
+  const hasImage = collection.content_types.includes('image');
 
   return (
     <article className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
@@ -136,6 +150,11 @@ export function CollectionCard({
         {hasUrl && (
           <span className="sp-note-kind" role="img" aria-label="含网址" title="含网址">
             <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
+          </span>
+        )}
+        {hasImage && (
+          <span className="sp-note-kind" role="img" aria-label="含图片" title="含图片">
+            <ImageIcon size={13} strokeWidth={2.2} aria-hidden="true" />
           </span>
         )}
         {isUnread && <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />}
@@ -255,7 +274,7 @@ export function CollectionCard({
 
       {snippets && snippets.length > 0 && (
         <div className="sp-note-snippets">
-          {snippets.slice(0, 3).map((snip, idx) => (
+          {snippets.slice(0, 4).map((snip, idx) => (
             <div key={idx} className="sp-break-anywhere">
               <span className="sp-note-snippet-field">{searchFieldLabel(snip.field)}</span>
               <HighlightText text={snip.text} query={searchQuery} />
@@ -263,6 +282,47 @@ export function CollectionCard({
           ))}
         </div>
       )}
+
+      {collection.original_url && (
+        <LinkPreviewCard
+          originalUrl={collection.original_url}
+          preview={collection.link_preview}
+          variant="card"
+        />
+      )}
+
+      {(() => {
+        const effectiveAttachments: Attachment[] =
+          attachments && attachments.length > 0
+            ? attachments
+            : collection.cover_attachment_id
+              ? [
+                  {
+                    id: collection.cover_attachment_id,
+                    filename: collection.display_title
+                      ? `${collection.display_title} 封面`
+                      : '图片附件',
+                    mime_type: 'image/png',
+                    size_bytes: 0,
+                    position: 0,
+                  },
+                ]
+              : [];
+        if (effectiveAttachments.length === 0) return null;
+        const hasMoreCoverImages = !attachments && (collection.attachment_count ?? 0) > 1;
+        return (
+          <div className="sp-note-cover">
+            <AttachmentGallery
+              attachments={effectiveAttachments}
+              compact
+              className="sp-note-gallery"
+            />
+            {hasMoreCoverImages && (
+              <span className="sp-note-cover-count">共 {collection.attachment_count} 张</span>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="sp-note-footer">
         {effectiveProjects.map((p) => (

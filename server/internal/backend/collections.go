@@ -3,35 +3,54 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"slices"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"spark/server/internal/contract"
+	"spark/server/internal/store"
 )
 
 type collectionRow struct {
 	contract.Collection
 	UserID             string                 `json:"user_id"`
 	PlainText          string                 `json:"plain_text"`
+	URLSearchText      string                 `json:"url_search_text"`
+	ImageSearchText    string                 `json:"image_search_text"`
+	ImageDescription   string                 `json:"image_search_description"`
+	LinkPreview        *contract.LinkPreview  `json:"link_preview"`
 	StoredOrganization *contract.Organization `json:"stored_organization"`
 	UserAIEnabled      bool                   `json:"user_ai_enabled"`
 	GeneratedTitle     *string                `json:"generated_title"`
 	GeneratedSummary   *string                `json:"generated_summary"`
 }
 
-const collectionSelect = `SELECT to_jsonb(c)||jsonb_build_object(
+const collectionJSON = `to_jsonb(c)||jsonb_build_object(
  'user_ai_enabled',(SELECT ai_enabled FROM users WHERE id=c.user_id),
  'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,'stages',r.stages,'error_code',r.error_code,'updated_at',r.updated_at)) FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
  'generated_title',(SELECT generated_title FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'generated_summary',(SELECT summary FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
+ 'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'filename',a.filename,'mime_type',a.mime_type,
+ 'position',a.position,'size_bytes',a.size_bytes) ORDER BY a.position) FROM attachments a
+ WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL),'[]'::jsonb),
+ 'link_preview',(SELECT jsonb_strip_nulls(jsonb_build_object(
+ 'status',e.status,'source_title',e.source_title,'site_name',e.evidence_meta->>'site_name','summary',e.evidence_meta->>'summary'))
+ FROM extractions e
+ WHERE (e.user_id,e.collection_id,e.content_version,e.source_id)=(c.user_id,c.id,c.content_version,c.original_url)
+   AND c.deleted_at IS NULL AND e.source_kind='url' AND e.extractor_version='` + urlExtractorVersion + `'),
  'has_suggestion',EXISTS (SELECT 1 FROM organization_pending_suggestions sp WHERE (sp.user_id,sp.collection_id)=(c.user_id,c.id)),
  'projects',COALESCE(
  (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision,'reason',cp.reason,'evidence',cp.evidence,'project_version',cp.project_version,'suggestion_run_id',CASE WHEN cp.decision='suggested' THEN cp.run_id END)) ORDER BY p.id)
  FROM collection_projects cp JOIN projects p ON p.user_id=cp.user_id AND p.id=cp.project_id
  WHERE cp.user_id=c.user_id AND cp.collection_id=c.id
  AND (cp.decision <> 'suggested' OR EXISTS (SELECT 1 FROM organization_pending_suggestions sp
- WHERE (sp.user_id,sp.collection_id,sp.project_id)=(cp.user_id,cp.collection_id,cp.project_id)))),'[]'::jsonb)) FROM collections c `
+ WHERE (sp.user_id,sp.collection_id,sp.project_id)=(cp.user_id,cp.collection_id,cp.project_id)))), '[]'::jsonb))`
+
+const collectionSelect = `SELECT ` + collectionJSON + ` FROM collections c `
 
 func scanCollection(row pgx.Row) (collectionRow, error) {
 	var b []byte
@@ -50,7 +69,12 @@ func scanCollection(row pgx.Row) (collectionRow, error) {
 		out.ContentTypes = append(out.ContentTypes, "url")
 	}
 	out.DisplayTitle = titleFor(out.PlainText, value(out.ManualTitle), value(out.OriginalUrl))
-	out.Attachments = []contract.Attachment{}
+	if len(out.Attachments) > 0 {
+		out.ContentTypes = append(out.ContentTypes, "image")
+		if out.DisplayTitle == "" || value(out.ManualTitle) == "" && strings.TrimSpace(out.PlainText) == "" && value(out.OriginalUrl) == "" {
+			out.DisplayTitle = out.Attachments[0].Filename
+		}
+	}
 	out.Tags = []contract.TagAssociation{}
 	code := "integration_not_configured"
 	if !out.UserAIEnabled {
@@ -72,7 +96,7 @@ func scanCollection(row pgx.Row) (collectionRow, error) {
 	return out, nil
 }
 func (s *Server) loadCollection(ctx context.Context, q querier, uid, id string) (collectionRow, error) {
-	row, err := scanCollection(q.QueryRow(ctx, collectionSelect+`WHERE c.user_id=$1 AND c.id=$2`, uid, id))
+	row, err := scanCollection(q.QueryRow(ctx, collectionSelect+`WHERE c.user_id=$1 AND c.id=$2 AND c.purge_requested_at IS NULL`, uid, id))
 	return s.collectionView(row), err
 }
 func (s *Server) getCollection(c *gin.Context) (any, error) {
@@ -84,7 +108,11 @@ func (s *Server) getOrganization(c *gin.Context) (any, error) {
 	return row.Organization, err
 }
 func snapshot(ctx context.Context, tx pgx.Tx, uid, id string) error {
-	_, err := tx.Exec(ctx, `INSERT INTO collection_revisions(user_id,collection_id,content_version,document,intent,original_url,manual_title) SELECT user_id,id,content_version,document,intent,original_url,manual_title FROM collections WHERE user_id=$1 AND id=$2`, uid, id)
+	_, err := tx.Exec(ctx, `INSERT INTO collection_revisions(user_id,collection_id,content_version,document,intent,original_url,manual_title,attachment_ids)
+		SELECT c.user_id,c.id,c.content_version,c.document,c.intent,c.original_url,c.manual_title,
+		       COALESCE((SELECT jsonb_agg(a.id ORDER BY a.position) FROM attachments a
+		                 WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL),'[]'::jsonb)
+		FROM collections c WHERE c.user_id=$1 AND c.id=$2`, uid, id)
 	return err
 }
 func checkActive(row collectionRow) error {
@@ -98,20 +126,31 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(req.UploadIds) > 0 {
-		return nil, problem(422, "invalid_attachment", "本批次尚未开放附件上传。")
-	}
 	if len(req.TagIds) > 0 {
 		return nil, problem(422, "validation_failed", "本批次尚未开放标签。")
 	}
-	plain, originalURL, err := validateContent(req.Document, req.Intent, value(req.OriginalUrl))
+	plain, originalURL, err := validateContent(req.Document, req.Intent, value(req.OriginalUrl), len(req.UploadIds) > 0)
 	if err != nil {
 		return nil, err
 	}
-	return s.idempotent(c, req, 201, func(tx pgx.Tx) (any, error) {
-		uid := current(c).User.ID
-		id := req.Id.String()
-		ctx := c.Request.Context()
+	uid, id, ctx := current(c).User.ID, req.Id.String(), c.Request.Context()
+	checkTombstone := func(tx pgx.Tx) error {
+		_, err := store.New(tx).GetCollectionDeletion(ctx, store.GetCollectionDeletionParams{UserID: idPG(uid), CollectionID: idPG(id)})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return problem(409, "duplicate_resource", "收藏已永久删除。")
+	}
+	return s.idempotentWithReplay(c, req, 201, func(tx pgx.Tx) (any, error) {
+		if err := checkTombstone(tx); err != nil {
+			return nil, err
+		}
+		if len(req.UploadIds) > 0 && s.Assets == nil {
+			return nil, uploadsUnavailable
+		}
 		for _, pid := range req.ProjectIds {
 			var exists bool
 			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2)`, uid, pid.String()).Scan(&exists); err != nil {
@@ -129,6 +168,13 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 				return nil, err
 			}
 		}
+		attachments, err := attachUploads(ctx, store.New(tx), uid, id, 0, req.UploadIds)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.enqueueImageAnalysis(ctx, tx, uid, id, attachments); err != nil {
+			return nil, err
+		}
 		if err = snapshot(ctx, tx, uid, id); err != nil {
 			return nil, err
 		}
@@ -138,8 +184,16 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 		if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
 			return nil, err
 		}
+		if _, err = s.enqueueURLExtraction(ctx, tx, uid, id, false); err != nil {
+			return nil, err
+		}
 		row, err := s.loadCollection(ctx, tx, uid, id)
 		return row.Collection, err
+	}, func(tx pgx.Tx, response json.RawMessage) (any, error) {
+		if err := checkTombstone(tx); err != nil {
+			return nil, err
+		}
+		return response, nil
 	})
 }
 func (s *Server) updateCollection(c *gin.Context) (any, error) {
@@ -147,8 +201,9 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if req.UploadIds != nil && len(*req.UploadIds) > 0 || req.AttachmentIds != nil && len(*req.AttachmentIds) > 0 {
-		return nil, problem(422, "invalid_attachment", "本批次尚未开放附件。")
+	uploads := value(req.UploadIds)
+	if len(uploads) > 0 && s.Assets == nil {
+		return nil, uploadsUnavailable
 	}
 	ctx := c.Request.Context()
 	tx, err := s.userTx(c)
@@ -180,13 +235,49 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 	if req.ManualTitle != nil {
 		row.ManualTitle = req.ManualTitle
 	}
-	plain, rawURL, err := validateContent(row.Document, row.Intent, value(row.OriginalUrl))
+	currentAttachments := make([]uuid.UUID, 0, len(row.Attachments))
+	for _, a := range row.Attachments {
+		currentAttachments = append(currentAttachments, a.Id)
+	}
+	kept := currentAttachments
+	if req.AttachmentIds != nil {
+		kept = *req.AttachmentIds
+	}
+	totalAttachments := len(kept) + len(uploads)
+	if totalAttachments > 9 {
+		return nil, problem(422, "invalid_attachment", "每条收藏最多保留 9 张图片。")
+	}
+	plain, rawURL, err := validateContent(row.Document, row.Intent, value(row.OriginalUrl), totalAttachments > 0)
 	if err != nil {
 		return nil, err
 	}
 	row.OriginalUrl = &rawURL
-	if !equalJSON(before, row.Collection) {
+	reordered := !slices.Equal(currentAttachments, kept)
+	if reordered || len(uploads) > 0 || !equalJSON(before, row.Collection) {
+		q := store.New(tx)
+		if reordered {
+			ids := make([]pgtype.UUID, len(kept))
+			for i, id := range kept {
+				ids[i] = pgtype.UUID{Bytes: id, Valid: true}
+			}
+			_, err := q.SetCollectionAttachmentOrder(ctx, store.SetCollectionAttachmentOrderParams{
+				UserID: idPG(uid), CollectionID: idPG(id), AttachmentIds: ids,
+			})
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, invalidAttachment
+			}
+			if err != nil {
+				return nil, err
+			}
+		}
+		attachments, err := attachUploads(ctx, q, uid, id, len(kept), uploads)
+		if err != nil {
+			return nil, err
+		}
 		if _, err = tx.Exec(ctx, `UPDATE collections SET document=$3,plain_text=$4,intent=$5,original_url=$6,manual_title=$7,content_version=content_version+1,resource_version=resource_version+1,updated_at=now() WHERE user_id=$1 AND id=$2`, uid, id, jsonBytes(row.Document), plain, row.Intent, rawURL, value(row.ManualTitle)); err != nil {
+			return nil, err
+		}
+		if err := s.enqueueImageAnalysis(ctx, tx, uid, id, attachments); err != nil {
 			return nil, err
 		}
 		if err = snapshot(ctx, tx, uid, id); err != nil {
@@ -196,6 +287,9 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 			return nil, err
 		}
 		if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
+			return nil, err
+		}
+		if _, err = s.enqueueURLExtraction(ctx, tx, uid, id, false); err != nil {
 			return nil, err
 		}
 	}
@@ -208,6 +302,25 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 	}
 	return row.Collection, nil
 }
+func attachUploads(ctx context.Context, q *store.Queries, uid, collectionID string, start int, uploads []uuid.UUID) ([]uuid.UUID, error) {
+	ids := make([]uuid.UUID, 0, len(uploads))
+	for index, upload := range uploads {
+		id := uuid.New()
+		_, err := q.AttachUpload(ctx, store.AttachUploadParams{
+			ID: pgtype.UUID{Bytes: id, Valid: true}, UserID: idPG(uid), CollectionID: idPG(collectionID),
+			UploadID: pgtype.UUID{Bytes: upload, Valid: true}, Position: int32(start + index),
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, invalidAttachment
+		}
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 func (s *Server) readState(c *gin.Context) (any, error) {
 	req, err := bind[contract.ReadUpdate](s, c)
 	if err != nil {
@@ -280,6 +393,9 @@ func (s *Server) setTrash(c *gin.Context, trash bool) (any, error) {
 			if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
 				return nil, err
 			}
+			if _, err = s.enqueueURLExtraction(ctx, tx, uid, id, false); err != nil {
+				return nil, err
+			}
 		}
 	}
 	row, err = s.loadCollection(ctx, tx, uid, id)
@@ -296,10 +412,28 @@ func summary(row collectionRow) contract.CollectionSummary {
 	for _, t := range row.ContentTypes {
 		types = append(types, contract.CollectionSummaryContentTypes(t))
 	}
-	return contract.CollectionSummary{Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200), ContentTypes: types, Projects: row.Projects, Tags: row.Tags, OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status), HasSuggestion: row.HasSuggestion, ReadAt: row.ReadAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion}
+	result := contract.CollectionSummary{
+		Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200),
+		ContentTypes: types, Projects: row.Projects, Tags: row.Tags,
+		OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status),
+		HasSuggestion:      row.HasSuggestion, ReadAt: row.ReadAt, CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion, LinkPreview: row.LinkPreview,
+	}
+	if value(row.OriginalUrl) != "" {
+		result.OriginalUrl = row.OriginalUrl
+	}
+	if count := len(row.Attachments); count > 0 {
+		result.AttachmentCount = &count
+		result.CoverAttachmentId = &row.Attachments[0].Id
+	}
+	return result
 }
 
 func (s *Server) collectionView(row collectionRow) collectionRow {
+	if preview := row.LinkPreview; preview != nil && !s.Config.URLExtractEnabled &&
+		(preview.Status == "queued" || preview.Status == "running") {
+		row.LinkPreview = &contract.LinkPreview{Status: "skipped"}
+	}
 	if row.StoredOrganization == nil {
 		if !s.Organizer.Enabled {
 			code := "integration_not_configured"

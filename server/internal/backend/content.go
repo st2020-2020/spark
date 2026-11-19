@@ -102,7 +102,7 @@ func documentText(doc contract.Document) (string, string, error) {
 	}
 	return strings.TrimSuffix(text.String(), "\n"), firstURL, nil
 }
-func validateContent(doc contract.Document, intent, originalURL string) (string, string, error) {
+func validateContent(doc contract.Document, intent, originalURL string, hasAttachments bool) (string, string, error) {
 	plain, derived, err := documentText(doc)
 	if err != nil {
 		return "", "", err
@@ -116,8 +116,8 @@ func validateContent(doc contract.Document, intent, originalURL string) (string,
 	if originalURL == "" {
 		originalURL = derived
 	}
-	if strings.TrimSpace(plain) == "" && originalURL == "" {
-		return "", "", problem(422, "validation_failed", "请填写文字或有效网址。")
+	if strings.TrimSpace(plain) == "" && originalURL == "" && !hasAttachments {
+		return "", "", problem(422, "validation_failed", "请填写文字、有效网址或添加图片。")
 	}
 	return plain, originalURL, nil
 }

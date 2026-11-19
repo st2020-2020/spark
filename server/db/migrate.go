@@ -4,17 +4,28 @@ import (
 	"context"
 	"embed"
 	"fmt"
+	"time"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
-	"time"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-const Version = 3
+const Version = 7
+
+var migrationNames = [...]string{
+	"001_initial.sql",
+	"002_text_organization.sql",
+	"003_organization_events.sql",
+	"004_attachments_extractions.sql",
+	"005_purge_progress.sql",
+	"006_image_analysis.sql",
+	"007_extraction_keys_upload_cleanup.sql",
+}
 
 func RiverSchema(pool *pgxpool.Pool) string {
 	if s := pool.Config().ConnConfig.RuntimeParams["search_path"]; s != "" {
@@ -59,9 +70,8 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	if version > Version {
 		return fmt.Errorf("database schema %d is newer than supported %d", version, Version)
 	}
-	names := []string{"001_initial.sql", "002_text_organization.sql", "003_organization_events.sql"}
 	for v := version + 1; v <= Version; v++ {
-		sql, err := migrations.ReadFile("migrations/" + names[v-1])
+		sql, err := migrations.ReadFile("migrations/" + migrationNames[v-1])
 		if err != nil {
 			return err
 		}

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, Check, Folder, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
+import { ArrowUp, Check, Folder, ImagePlus, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
 import type { SparkDocument } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
@@ -23,8 +23,10 @@ import {
   type CollectionDraft,
 } from '../lib/drafts';
 import { generateIdempotencyKey, generateUuid } from '../lib/idempotency';
+import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import { AIConsentModal } from './AIConsentModal';
 import { RichTextEditor } from './RichTextEditor';
+import { UploadQueueTray } from './UploadQueueTray';
 
 export function CollectionComposer({
   defaultProjectId,
@@ -77,6 +79,12 @@ export function CollectionComposer({
   const [projectIds, setProjectIds] = useState<string[]>(initialDraft.projectIds);
   const [aiExcluded, setAiExcluded] = useState(Boolean(initialDraft.aiExcluded));
 
+  const imageAnalysisQuery = useQuery({
+    queryKey: ['me', 'image-analysis'],
+    queryFn: () => api.getImageAnalysisPreferences(),
+    enabled: Boolean(user),
+  });
+
   const [showIntentField, setShowIntentField] = useState(Boolean(initialDraft.intent));
   const [showUrlField, setShowUrlField] = useState(Boolean(initialDraft.originalUrl));
   const [showTitleField, setShowTitleField] = useState(Boolean(initialDraft.manualTitle));
@@ -109,7 +117,9 @@ export function CollectionComposer({
   const projectTriggerRef = useRef<HTMLButtonElement | null>(null);
   const projectSearchInputRef = useRef<HTMLInputElement | null>(null);
   const saveBtnRef = useRef<HTMLButtonElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingCollapseAfterSaveRef = useRef(false);
+  const uploader = useImageUploader(api, { accountKey: userId });
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -183,10 +193,12 @@ export function CollectionComposer({
   const hasContent =
     plainText.trim().length > 0 ||
     originalUrl.trim().length > 0 ||
-    Boolean(inferredUrl);
+    Boolean(inferredUrl) ||
+    uploader.readyUploadIds.length > 0;
 
   const isDirty =
     hasContent ||
+    uploader.items.length > 0 ||
     intent.trim().length > 0 ||
     manualTitle.trim().length > 0;
 
@@ -241,9 +253,10 @@ export function CollectionComposer({
     setProjectPickerOpen(false);
     setProjectSearch('');
     setSubmitError(null);
+    uploader.clearAll();
     removeDraft(userId, draftScope);
     setResetToken((n) => n + 1);
-  }, [defaultProjectId, draftScope, userId]);
+  }, [defaultProjectId, draftScope, uploader, userId]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -257,8 +270,14 @@ export function CollectionComposer({
       if (trimmedUrl && !isValidHttpUrl(trimmedUrl)) {
         throw new Error('来源网址仅支持无凭据的 http:// 或 https:// 地址。');
       }
+      if (uploader.hasInFlight) {
+        throw new Error('请等待图片上传完成或取消后再保存。');
+      }
+      if (uploader.hasFailed) {
+        throw new Error('存在上传失败的图片，请重试或移除后再保存。');
+      }
       if (!hasContent) {
-        throw new Error('请填写文字或有效网址后再保存。');
+        throw new Error('请填写文字、有效网址或上传图片后再保存。');
       }
 
       return api.createCollection(
@@ -268,7 +287,7 @@ export function CollectionComposer({
           intent: intent.trim(),
           original_url: trimmedUrl || undefined,
           manual_title: manualTitle.trim() || undefined,
-          upload_ids: [],
+          upload_ids: uploader.readyUploadIds,
           project_ids: projectIds,
           tag_ids: [],
           ai_excluded: aiExcluded,
@@ -310,9 +329,17 @@ export function CollectionComposer({
 
   const handleSubmit = useCallback(() => {
     if (saveMutation.isPending) return;
+    if (uploader.hasInFlight) {
+      setSubmitError('请等待图片上传完成或取消后再保存。');
+      return;
+    }
+    if (uploader.hasFailed) {
+      setSubmitError('存在上传失败的图片，请重试或移除后再保存。');
+      return;
+    }
     setSubmitError(null);
     saveMutation.mutate();
-  }, [saveMutation]);
+  }, [saveMutation, uploader.hasFailed, uploader.hasInFlight]);
 
   const toggleProject = (pid: string) => {
     setProjectIds((prev) => (prev.includes(pid) ? prev.filter((id) => id !== pid) : [...prev, pid]));
@@ -345,6 +372,7 @@ export function CollectionComposer({
   const effectiveActivated =
     isActivated ||
     isDirty ||
+    Boolean(uploader.validationError) ||
     showIntentField ||
     showUrlField ||
     showTitleField ||
@@ -352,7 +380,11 @@ export function CollectionComposer({
     projectPickerOpen;
 
   const saveDisabled =
-    saveMutation.isPending || !hasContent || totalChars > MAX_TEXT_AND_INTENT_CHARS;
+    saveMutation.isPending ||
+    !hasContent ||
+    uploader.hasInFlight ||
+    uploader.hasFailed ||
+    totalChars > MAX_TEXT_AND_INTENT_CHARS;
   const showCharCounter = totalChars > 0;
   const isNearLimit = totalChars > MAX_TEXT_AND_INTENT_CHARS - 5000;
 
@@ -387,82 +419,134 @@ export function CollectionComposer({
           if (focused) activateComposer();
         }}
         onToolbarInteract={activateComposer}
+        onFilesAdded={(files) => {
+          activateComposer();
+          uploader.addFiles(files);
+        }}
         autoFocus={autoFocus}
         disabled={saveMutation.isPending}
         resetToken={resetToken}
         externalMenuOpen={projectPickerOpen}
         onCloseExternalMenus={() => setProjectPickerOpen(false)}
         leadingTools={
-          <div className="sp-popover-anchor sp-popover-anchor--mobile-span" ref={projectPickerRef}>
+          <>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/jpeg,image/png,image/gif,image/webp"
+              className="sp-sr-file-input"
+              aria-label="选择图片文件"
+              tabIndex={-1}
+              onChange={(e) => {
+                const picked = e.target.files ? Array.from(e.target.files) : [];
+                e.target.value = '';
+                if (picked.length > 0) {
+                  activateComposer();
+                  uploader.addFiles(picked);
+                }
+              }}
+            />
             <button
-              ref={projectTriggerRef}
               type="button"
               className="sp-tool-btn"
-              aria-label="添加项目"
-              data-tooltip="添加项目"
-              aria-haspopup="dialog"
-              aria-expanded={projectPickerOpen}
-              aria-pressed={projectIds.length > 0}
-              disabled={saveMutation.isPending}
+              aria-label="添加图片"
+              data-tooltip="添加图片"
+              aria-pressed={uploader.items.length > 0}
+              disabled={
+                saveMutation.isPending || uploader.items.length >= MAX_ATTACHMENTS_PER_COLLECTION
+              }
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 activateComposer();
-                setProjectPickerOpen((v) => !v);
+                fileInputRef.current?.click();
               }}
             >
-              <Folder size={18} strokeWidth={2} aria-hidden="true" />
+              <ImagePlus size={18} strokeWidth={2} aria-hidden="true" />
             </button>
 
-            {projectPickerOpen && (
-              <div className="sp-popover sp-popover--above" role="dialog" aria-label="选择关联项目">
-                <div className="sp-stack sp-stack--tight">
-                  <input
-                    ref={projectSearchInputRef}
-                    type="search"
-                    aria-label="筛选已有项目"
-                    className="sp-input sp-picker-search"
-                    placeholder="搜索项目…"
-                    value={projectSearch}
-                    onChange={(e) => setProjectSearch(e.target.value)}
-                  />
-                  {filteredProjects.length === 0 ? (
-                    <span className="sp-picker-empty">
-                      {allProjects.length === 0 ? '暂无项目，保存后可在待归类查看' : '没有匹配的项目'}
-                    </span>
-                  ) : (
-                    <div className="sp-picker-list">
-                      {filteredProjects.map((proj) => {
-                        const checked = projectIds.includes(proj.id);
-                        return (
-                          <button
-                            key={proj.id}
-                            type="button"
-                            className="sp-menu-item"
-                            aria-pressed={checked}
-                            onClick={() => toggleProject(proj.id)}
-                          >
-                            <Folder size={16} strokeWidth={2} aria-hidden="true" />
-                            <span className="sp-truncate">{proj.name}</span>
-                            {checked && (
-                              <Check
-                                size={16}
-                                strokeWidth={2.4}
-                                className="sp-picker-check"
-                                aria-hidden="true"
-                              />
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
+            <div className="sp-popover-anchor sp-popover-anchor--mobile-span" ref={projectPickerRef}>
+              <button
+                ref={projectTriggerRef}
+                type="button"
+                className="sp-tool-btn"
+                aria-label="添加项目"
+                data-tooltip="添加项目"
+                aria-haspopup="dialog"
+                aria-expanded={projectPickerOpen}
+                aria-pressed={projectIds.length > 0}
+                disabled={saveMutation.isPending}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  activateComposer();
+                  setProjectPickerOpen((v) => !v);
+                }}
+              >
+                <Folder size={18} strokeWidth={2} aria-hidden="true" />
+              </button>
+
+              {projectPickerOpen && (
+                <div className="sp-popover sp-popover--above" role="dialog" aria-label="选择关联项目">
+                  <div className="sp-stack sp-stack--tight">
+                    <input
+                      ref={projectSearchInputRef}
+                      type="search"
+                      aria-label="筛选已有项目"
+                      className="sp-input sp-picker-search"
+                      placeholder="搜索项目…"
+                      value={projectSearch}
+                      onChange={(e) => setProjectSearch(e.target.value)}
+                    />
+                    {filteredProjects.length === 0 ? (
+                      <span className="sp-picker-empty">
+                        {allProjects.length === 0 ? '暂无项目，保存后可在待归类查看' : '没有匹配的项目'}
+                      </span>
+                    ) : (
+                      <div className="sp-picker-list">
+                        {filteredProjects.map((proj) => {
+                          const checked = projectIds.includes(proj.id);
+                          return (
+                            <button
+                              key={proj.id}
+                              type="button"
+                              className="sp-menu-item"
+                              aria-pressed={checked}
+                              onClick={() => toggleProject(proj.id)}
+                            >
+                              <Folder size={16} strokeWidth={2} aria-hidden="true" />
+                              <span className="sp-truncate">{proj.name}</span>
+                              {checked && (
+                                <Check
+                                  size={16}
+                                  strokeWidth={2.4}
+                                  className="sp-picker-check"
+                                  aria-hidden="true"
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          </>
         }
         betweenEditorAndToolbar={
           <>
+            <UploadQueueTray
+              pendingItems={uploader.items}
+              validationError={uploader.validationError}
+              onDismissValidationError={uploader.clearValidationError}
+              onCancelPending={uploader.cancelItem}
+              onRetryPending={uploader.retryItem}
+              onRemovePending={uploader.removeItem}
+              onMovePending={uploader.moveItem}
+              disabled={saveMutation.isPending}
+            />
+
             {(selectedProjects.length > 0 || aiExcluded) && (
               <div className="sp-composer-chips">
                 {selectedProjects.map((proj) => (
@@ -623,7 +707,7 @@ export function CollectionComposer({
             >
               可选标题
             </button>
-            {(user?.ai_enabled || aiExcluded) && (
+            {(user?.ai_enabled || imageAnalysisQuery.data?.enabled || aiExcluded) && (
               <>
                 <div className="sp-menu-divider" role="separator" />
                 <button

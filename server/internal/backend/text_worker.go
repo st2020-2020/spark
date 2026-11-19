@@ -374,7 +374,7 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	if err != nil {
 		return false, err
 	}
-	if err = settleBudget(ctx, tx, r.UID, reservation, route, out); err != nil {
+	if err = settleBudget(ctx, tx, r.UID, reservation, route, out, "reserved"); err != nil {
 		return false, err
 	}
 	if out.ErrorCode == "provider_auth_failed" {

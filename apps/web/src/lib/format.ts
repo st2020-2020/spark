@@ -92,6 +92,8 @@ export function searchFieldLabel(field: string): string {
     intent: '用途说明',
     url: '网址',
     extraction: '提取内容',
+    image_text: '图中文字',
+    image_description: 'AI 画面描述',
     tag: '标签',
   };
   return labels[field] ?? field;
