@@ -69,6 +69,7 @@ services:
 
   worker:
     image: spark-api:prod
+    restart: unless-stopped
     build:
       context: ../server
       target: runtime
