@@ -27,7 +27,7 @@ const collectionSelect = `SELECT to_jsonb(c)||jsonb_build_object(
  'generated_summary',(SELECT summary FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'has_suggestion',EXISTS (SELECT 1 FROM organization_pending_suggestions sp WHERE (sp.user_id,sp.collection_id)=(c.user_id,c.id)),
  'projects',COALESCE(
- (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision,'reason',cp.reason,'evidence',cp.evidence,'project_version',cp.project_version)) ORDER BY p.id)
+ (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision,'reason',cp.reason,'evidence',cp.evidence,'project_version',cp.project_version,'suggestion_run_id',CASE WHEN cp.decision='suggested' THEN cp.run_id END)) ORDER BY p.id)
  FROM collection_projects cp JOIN projects p ON p.user_id=cp.user_id AND p.id=cp.project_id
  WHERE cp.user_id=c.user_id AND cp.collection_id=c.id
  AND (cp.decision <> 'suggested' OR EXISTS (SELECT 1 FROM organization_pending_suggestions sp
@@ -196,89 +196,6 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 			return nil, err
 		}
 		if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
-			return nil, err
-		}
-	}
-	row, err = s.loadCollection(ctx, tx, uid, id)
-	if err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	return row.Collection, nil
-}
-func (s *Server) projectDecisions(c *gin.Context) (any, error) {
-	req, err := bind[contract.AssociationUpdate](s, c)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[string]bool{}
-	for _, op := range req.Operations {
-		if seen[op.Id.String()] {
-			return nil, problem(422, "validation_failed", "一次操作不能重复指定同一项目。")
-		}
-		seen[op.Id.String()] = true
-	}
-	ctx := c.Request.Context()
-	tx, err := s.userTx(c)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-	uid, id := current(c).User.ID, c.Param("id")
-	row, err := s.loadCollection(ctx, tx, uid, id)
-	if err != nil {
-		return nil, err
-	}
-	if err = checkActive(row); err != nil {
-		return nil, err
-	}
-	if row.DecisionVersion != req.BaseDecisionVersion {
-		return nil, conflict("decision_conflict", "current_decision_version", int64(row.DecisionVersion))
-	}
-	existing := map[string]string{}
-	for _, p := range row.Projects {
-		existing[p.ProjectId.String()] = string(p.Decision)
-	}
-	changed := false
-	for _, op := range req.Operations {
-		var exists bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2)`, uid, op.Id.String()).Scan(&exists); err != nil {
-			return nil, err
-		}
-		if !exists {
-			return nil, notFound
-		}
-		decision := "manual"
-		if op.Action == "exclude" {
-			decision = "rejected"
-		}
-		if op.Action == "include" && (existing[op.Id.String()] == "auto" || existing[op.Id.String()] == "suggested" || existing[op.Id.String()] == "confirmed") {
-			decision = "confirmed"
-		}
-		if op.Action == "reset" {
-			if existing[op.Id.String()] == "manual" || existing[op.Id.String()] == "confirmed" || existing[op.Id.String()] == "rejected" {
-				if _, err = tx.Exec(ctx, `DELETE FROM collection_projects WHERE user_id=$1 AND collection_id=$2 AND project_id=$3`, uid, id, op.Id.String()); err != nil {
-					return nil, err
-				}
-				changed = true
-			}
-			continue
-		}
-		if existing[op.Id.String()] == decision {
-			continue
-		}
-		if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision) VALUES($1,$2,$3,$4) ON CONFLICT(collection_id,project_id) DO UPDATE SET decision=excluded.decision,updated_at=now()`, uid, id, op.Id.String(), decision); err != nil {
-			return nil, err
-		}
-		changed = true
-	}
-	if changed {
-		if _, err = tx.Exec(ctx, `UPDATE collections SET decision_version=decision_version+1,resource_version=resource_version+1,updated_at=now() WHERE user_id=$1 AND id=$2`, uid, id); err != nil {
-			return nil, err
-		}
-		if err = record(ctx, tx, uid, "collection", id, int64(row.ResourceVersion+1)); err != nil {
 			return nil, err
 		}
 	}

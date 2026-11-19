@@ -119,6 +119,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.GET("/collections/:id", s.handle(s.getCollection))
 	secured.PATCH("/collections/:id", s.handle(s.updateCollection))
 	secured.PATCH("/collections/:id/projects", s.handle(s.projectDecisions))
+	secured.POST("/collections/:id/projects/undo", s.handle(s.undoProjectDecisions))
 	secured.PUT("/collections/:id/read", s.handle(s.readState))
 	secured.DELETE("/collections/:id", s.handle(s.trashCollection))
 	secured.POST("/collections/:id/restore", s.handle(s.restoreCollection))
