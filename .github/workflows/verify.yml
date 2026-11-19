@@ -85,6 +85,8 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache: false
+      - name: Check operator release entrypoint
+        run: bash -n ../deploy/release-prod.sh && ../deploy/release-prod.sh --help >/dev/null
       - run: go test ./... -count=1
       - run: go build ./...
       - run: go vet ./...
