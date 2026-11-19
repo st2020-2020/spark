@@ -203,9 +203,13 @@ func (s *Server) listenOrganizationEvents(ctx context.Context) error {
 	}
 }
 
-func (s *Server) organizationEvents(c *gin.Context) (any, error) {
+func (s *Server) crossOriginRead(c *gin.Context) bool {
 	origin, site := c.GetHeader("Origin"), c.GetHeader("Sec-Fetch-Site")
-	if (origin != "" && origin != s.Config.Origin) || site == "cross-site" || site == "same-site" {
+	return (origin != "" && origin != s.Config.Origin) || site == "cross-site" || site == "same-site"
+}
+
+func (s *Server) organizationEvents(c *gin.Context) (any, error) {
+	if s.crossOriginRead(c) {
 		return nil, problem(403, "forbidden", "实时更新仅支持同源连接。")
 	}
 	session := current(c)

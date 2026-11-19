@@ -76,7 +76,12 @@ func (s *Server) Router() *gin.Engine {
 		c.Header("Cache-Control", "no-store")
 		c.Header("X-Content-Type-Options", "nosniff")
 		if c.Request.Method != http.MethodGet || c.FullPath() != organizationEventsPath {
-			ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+			timeout := 15 * time.Second
+			if c.Request.Method == http.MethodGet && c.FullPath() == exportPath {
+				timeout = exportTimeout
+				c.Header("Cache-Control", "private, no-store")
+			}
+			ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 			defer cancel()
 			c.Request = c.Request.WithContext(ctx)
 		}
@@ -85,6 +90,9 @@ func (s *Server) Router() *gin.Engine {
 		slog.Info("request completed", "request_id", id, "operation", c.Request.Method+" "+c.FullPath(), "status", c.Writer.Status(), "duration_ms", time.Since(started).Milliseconds())
 	})
 	r.Use(gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, p any) {
+		if p == http.ErrAbortHandler {
+			panic(p) // net/http must terminate the incomplete response.
+		}
 		slog.Error("handler panic", "request_id", c.GetString("request_id"), "panic_type", fmt.Sprintf("%T", p), "stack", string(debug.Stack()))
 		s.fail(c, problem(500, "internal_error", "服务发生错误。"))
 	}))
@@ -106,6 +114,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.Use(s.authenticate, s.origin, s.csrf)
 	secured.PATCH("/me/preferences", s.handle(s.updatePreferences))
 	secured.GET("/me/usage", s.handle(s.getUsage))
+	secured.GET("/me/export", s.handle(s.exportMyData))
 	secured.GET("/auth/session", s.handle(s.currentSession))
 	secured.POST("/auth/logout", s.handle(s.logout))
 	secured.GET("/sessions", s.handle(s.listSessions))
@@ -197,7 +206,7 @@ func (s *Server) fail(c *gin.Context, err error) {
 			a = problem(503, "service_unavailable", "服务暂不可用，请稍后重试。")
 		}
 	}
-	if a.Status == 429 || a.Code == "operation_in_progress" {
+	if (a.Status == 429 || a.Code == "operation_in_progress") && c.Writer.Header().Get("Retry-After") == "" {
 		c.Header("Retry-After", "60")
 	}
 	detail := gin.H{"code": a.Code, "message": a.Message, "request_id": c.GetString("request_id")}
