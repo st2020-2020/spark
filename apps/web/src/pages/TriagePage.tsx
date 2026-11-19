@@ -18,6 +18,7 @@ import type {
   AssociationUpdate,
   Collection,
   CollectionSummary,
+  ExpectedProjectSuggestion,
   Project,
   ProjectAssociation,
   ProjectUndoReceipt,
@@ -33,13 +34,18 @@ import { useToast } from '../context/ToastContext';
 import { derivePlainText } from '../lib/document';
 import { extractDomain, formatRelativeTime } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
-import { buildTriageAssociationUpdate } from '../lib/organization';
+import {
+  buildTriageAssociationUpdate,
+  buildTriageAssociationUpdateFromSnapshot,
+  getExpectedProjectSuggestion,
+} from '../lib/organization';
 import { projectToneClass } from '../lib/projectTone';
 
 const QUEUE_PAGE_SIZE = 30;
 const PROJECT_PAGE_SIZE = 50;
 const PREFETCH_THRESHOLD = 5;
 const INITIAL_VISIBLE_PROJECTS = 6;
+const MAX_TRIAGE_MULTI_SELECT = 50;
 const SWIPE_ACTIVATE_PX = 14;
 const SWIPE_COMMIT_PX = 84;
 
@@ -64,6 +70,19 @@ interface PendingRetryState {
   payload: AssociationUpdate;
   idempotencyKey: string;
   summary: CollectionSummary;
+  backgroundDetected?: boolean;
+}
+
+interface FrozenSelectionItem {
+  projectId: string;
+  wasSuggested: boolean;
+  expectedSuggestion?: ExpectedProjectSuggestion;
+}
+
+interface FrozenSelectionSnapshot {
+  collectionId: string;
+  decisionVersion: number;
+  items: FrozenSelectionItem[];
 }
 
 interface CandidateProjectItem {
@@ -111,20 +130,57 @@ function collectionToSummary(col: Collection): CollectionSummary {
   };
 }
 
-function deduplicateQueueItems(
+function insertPageUnseenBeforeSkippedTail(
   base: CollectionSummary[],
   incoming: CollectionSummary[],
   handledIds: Set<string>,
+  skippedIds: Set<string>,
 ): CollectionSummary[] {
   const seen = new Set(base.map((item) => item.id));
-  const next = [...base];
+  const freshItems: CollectionSummary[] = [];
   for (const item of incoming) {
     if (!seen.has(item.id) && !handledIds.has(item.id)) {
       seen.add(item.id);
-      next.push(item);
+      freshItems.push(item);
     }
   }
-  return next;
+  if (freshItems.length === 0) return base;
+  if (base.length === 0) return freshItems;
+
+  const firstSkippedIndex = base.findIndex((item) => skippedIds.has(item.id));
+  if (firstSkippedIndex === -1) {
+    return [...base, ...freshItems];
+  }
+  // If user is currently viewing an already-skipped head card while page 2 arrives,
+  // keep base[0] stable on screen and place fresh unseen items right next at index 1.
+  const insertAt = firstSkippedIndex === 0 ? 1 : firstSkippedIndex;
+  return [...base.slice(0, insertAt), ...freshItems, ...base.slice(insertAt)];
+}
+
+function hasSelectionTargetChanged(
+  detail: Collection,
+  snapshot: FrozenSelectionSnapshot,
+): boolean {
+  if (detail.deleted_at) return true;
+  if (detail.decision_version !== snapshot.decisionVersion) return true;
+
+  for (const item of snapshot.items) {
+    const freshAssoc = detail.projects.find((p) => p.project_id === item.projectId);
+    if (item.wasSuggested) {
+      if (!freshAssoc || freshAssoc.decision !== 'suggested') {
+        return true;
+      }
+      if (item.expectedSuggestion) {
+        if (
+          freshAssoc.suggestion_run_id !== item.expectedSuggestion.run_id ||
+          freshAssoc.project_version !== item.expectedSuggestion.project_version
+        ) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function usePrefersReducedMotion(): boolean {
@@ -169,11 +225,10 @@ export function TriagePage() {
   const [roundFinishedEarly, setRoundFinishedEarly] = useState(false);
   const [moreProjectsOpen, setMoreProjectsOpen] = useState(false);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
-  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [frozenSelection, setFrozenSelection] = useState<FrozenSelectionSnapshot | null>(null);
   const [lastUndo, setLastUndo] = useState<UndoEntry | null>(null);
   const [pendingRetry, setPendingRetry] = useState<PendingRetryState | null>(null);
   const [skippedIds, setSkippedIds] = useState<Set<string>>(() => new Set());
-  const [allSkippedCycleNotice, setAllSkippedCycleNotice] = useState(false);
   const [actionNotice, setActionNotice] = useState<{
     tone: 'warning' | 'error' | 'info';
     text: string;
@@ -185,10 +240,14 @@ export function TriagePage() {
   const [isDraggingHorizontal, setIsDraggingHorizontal] = useState(false);
 
   const handledIdsRef = useRef<Set<string>>(new Set());
+  const countedIdsRef = useRef<Set<string>>(new Set());
+  const skippedIdsRef = useRef<Set<string>>(new Set());
   const pickerRef = useRef<HTMLDivElement>(null);
+  const pendingFocusTapeRef = useRef(false);
   const mountedRef = useRef(true);
   const sessionEpochRef = useRef(0);
   const userIdRef = useRef<string | null>(currentUserId);
+  const currentSummaryIdRef = useRef<string | undefined>(undefined);
   const queueAbortRef = useRef<AbortController | null>(null);
   const pointerStateRef = useRef<{
     pointerId: number;
@@ -197,6 +256,8 @@ export function TriagePage() {
     active: boolean;
     horizontal: boolean;
   } | null>(null);
+
+  skippedIdsRef.current = skippedIds;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -266,8 +327,18 @@ export function TriagePage() {
         setNextCursor(res.next_cursor);
         setQueue((prev) =>
           reset
-            ? deduplicateQueueItems([], res.items, handledIdsRef.current)
-            : deduplicateQueueItems(prev, res.items, handledIdsRef.current),
+            ? insertPageUnseenBeforeSkippedTail(
+                [],
+                res.items,
+                handledIdsRef.current,
+                skippedIdsRef.current,
+              )
+            : insertPageUnseenBeforeSkippedTail(
+                prev,
+                res.items,
+                handledIdsRef.current,
+                skippedIdsRef.current,
+              ),
         );
         setQueueInitialized(true);
       } catch (err) {
@@ -296,6 +367,7 @@ export function TriagePage() {
     sessionEpochRef.current += 1;
     queueAbortRef.current?.abort();
     handledIdsRef.current = new Set();
+    countedIdsRef.current = new Set();
 
     setQueue([]);
     setQueueInitialized(false);
@@ -306,11 +378,10 @@ export function TriagePage() {
     setRoundFinishedEarly(false);
     setMoreProjectsOpen(false);
     setMultiSelectMode(false);
-    setSelectedProjectIds([]);
+    setFrozenSelection(null);
     setLastUndo(null);
     setPendingRetry(null);
     setSkippedIds(new Set());
-    setAllSkippedCycleNotice(false);
     setActionNotice(null);
     setIsSubmitting(false);
 
@@ -319,7 +390,12 @@ export function TriagePage() {
     }
   }, [currentUserId, loadQueuePage]);
 
-  // Auto-prefetch next cursor page only when previous prefetch did not fail.
+  const unseenCount = useMemo(
+    () => queue.filter((item) => !skippedIds.has(item.id)).length,
+    [queue, skippedIds],
+  );
+
+  // Drive pagination by unseen count so skipping 30 items in a 31-item backlog still fetches #31.
   useEffect(() => {
     if (
       queueInitialized &&
@@ -327,7 +403,7 @@ export function TriagePage() {
       !isFetchingMore &&
       !isLoadingQueue &&
       !fetchMoreFailed &&
-      queue.length <= PREFETCH_THRESHOLD
+      unseenCount <= PREFETCH_THRESHOLD
     ) {
       void loadQueuePage(nextCursor, false);
     }
@@ -337,34 +413,75 @@ export function TriagePage() {
     isLoadingQueue,
     loadQueuePage,
     nextCursor,
-    queue.length,
     queueInitialized,
+    unseenCount,
   ]);
 
   const currentSummary = !roundFinishedEarly ? queue[0] : undefined;
   const nextSummary = !roundFinishedEarly ? queue[1] : undefined;
+  currentSummaryIdRef.current = currentSummary?.id;
 
+  // Use the shared ['collection', id] cache key so OrganizationEventsContext SSE updates align automatically.
   const detailQuery = useQuery({
-    queryKey: ['collection', currentSummary?.id, currentUserId],
+    queryKey: ['collection', currentSummary?.id],
     queryFn: () => api.getCollection(currentSummary!.id),
     enabled: Boolean(currentSummary?.id) && Boolean(currentUserId),
   });
 
   const currentDetail = detailQuery.data?.id === currentSummary?.id ? detailQuery.data : undefined;
   const isDecisionReady = Boolean(currentDetail) && !detailQuery.isError;
+  const hasLockedPendingRetry = Boolean(
+    pendingRetry && pendingRetry.collectionId === currentSummary?.id,
+  );
+
+  const selectedProjectIds = useMemo(
+    () =>
+      frozenSelection && frozenSelection.collectionId === currentSummary?.id
+        ? frozenSelection.items.map((i) => i.projectId)
+        : [],
+    [currentSummary?.id, frozenSelection],
+  );
+
+  // Invalidate frozen multi-select choices when refreshed detail alters decision_version or suggested target.
+  useEffect(() => {
+    if (!currentDetail || !frozenSelection) return;
+    if (frozenSelection.collectionId !== currentDetail.id || frozenSelection.items.length === 0) {
+      return;
+    }
+    if (hasSelectionTargetChanged(currentDetail, frozenSelection)) {
+      setFrozenSelection(null);
+      setActionNotice({
+        tone: 'warning',
+        text: '当前收藏的推荐状态或版本已更新，请重新选择项目。',
+      });
+    }
+  }, [currentDetail, frozenSelection]);
 
   // Keep queue in sync if the front card was deleted or classified in another tab.
+  // If background refetch observes a decision while frozen retry is active for the same card,
+  // move the card out so it cannot be re-submitted, while preserving pendingRetry for receipt recovery.
   useEffect(() => {
     if (!currentSummary || !currentDetail) return;
     if (currentDetail.deleted_at || hasActiveClassification(currentDetail.projects)) {
       const removedId = currentDetail.id;
       handledIdsRef.current.add(removedId);
       setQueue((prev) => prev.filter((item) => item.id !== removedId));
-      setSelectedProjectIds([]);
-      setPendingRetry((prev) => (prev?.collectionId === removedId ? null : prev));
-      setActionNotice({ tone: 'info', text: '这条建议已在其他地方处理' });
+      setFrozenSelection((prev) => (prev?.collectionId === removedId ? null : prev));
+
+      const keepRetryForReceipt = Boolean(
+        !currentDetail.deleted_at && pendingRetry && pendingRetry.collectionId === removedId,
+      );
+      if (keepRetryForReceipt) {
+        setPendingRetry((prev) =>
+          prev && prev.collectionId === removedId ? { ...prev, backgroundDetected: true } : prev,
+        );
+        setActionNotice(null);
+      } else {
+        setPendingRetry((prev) => (prev?.collectionId === removedId ? null : prev));
+        setActionNotice({ tone: 'info', text: '这条建议已在其他地方处理' });
+      }
     }
-  }, [currentDetail, currentSummary]);
+  }, [currentDetail, currentSummary, pendingRetry]);
 
   const currentProjectsSource = currentDetail?.projects ?? currentSummary?.projects ?? [];
 
@@ -433,6 +550,19 @@ export function TriagePage() {
     return orderedCandidateProjects.slice(0, minCount);
   }, [moreProjectsOpen, orderedCandidateProjects, suggestedAssociations.length]);
 
+  useEffect(() => {
+    if (
+      pendingFocusTapeRef.current &&
+      moreProjectsOpen &&
+      !allProjectsQuery.isLoading &&
+      visibleCandidates.length > 0
+    ) {
+      pendingFocusTapeRef.current = false;
+      const firstBtn = pickerRef.current?.querySelector<HTMLButtonElement>('button[data-triage-tape]');
+      firstBtn?.focus();
+    }
+  }, [allProjectsQuery.isLoading, moreProjectsOpen, visibleCandidates.length]);
+
   const suggestedAssocByProjectId = useMemo(() => {
     const map = new Map<string, ProjectAssociation>();
     for (const assoc of suggestedAssociations) {
@@ -461,12 +591,11 @@ export function TriagePage() {
 
         markSuggestionPromptHandled(updated.id);
         queryClient.setQueryData(['collection', updated.id], updated);
-        queryClient.setQueryData(['collection', updated.id, capturedUserId], updated);
         void queryClient.invalidateQueries({ queryKey: ['collections'] });
         void queryClient.invalidateQueries({ queryKey: ['projects'] });
 
         handledIdsRef.current.add(updated.id);
-        setPendingRetry(null);
+        setPendingRetry((prev) => (prev?.collectionId === updated.id ? null : prev));
         setQueue((prev) => prev.filter((item) => item.id !== updated.id));
         setSkippedIds((prev) => {
           if (!prev.has(updated.id)) return prev;
@@ -474,10 +603,14 @@ export function TriagePage() {
           next.delete(updated.id);
           return next;
         });
-        setAllSkippedCycleNotice(false);
-        setProcessedCount((n) => n + 1);
-        setSelectedProjectIds([]);
-        setPickerHighlighted(false);
+        if (!countedIdsRef.current.has(updated.id)) {
+          countedIdsRef.current.add(updated.id);
+          setProcessedCount((n) => n + 1);
+        }
+        setFrozenSelection((prev) => (prev?.collectionId === updated.id ? null : prev));
+        if (currentSummaryIdRef.current === updated.id) {
+          setPickerHighlighted(false);
+        }
         setLastUndo({
           kind: 'server',
           collectionId: updated.id,
@@ -487,20 +620,22 @@ export function TriagePage() {
         if (!isContextCurrent(capturedEpoch, capturedUserId)) return;
 
         if (isUncertainCommitOutcome(err)) {
-          setPendingRetry({
+          setPendingRetry((prev) => ({
             collectionId,
             payload,
             idempotencyKey,
             summary: capturedSummary,
-          });
+            backgroundDetected:
+              prev?.collectionId === collectionId ? prev.backgroundDetected : false,
+          }));
           setActionNotice({
             tone: 'error',
-            text: `${getFriendlyErrorMessage(err)}（已保留当前提交键值，可点击「重试提交」核对结果并取回撤销回执）`,
+            text: getFriendlyErrorMessage(err),
           });
           return;
         }
 
-        setPendingRetry(null);
+        setPendingRetry((prev) => (prev?.collectionId === collectionId ? null : prev));
         const isConflictOrStale =
           isApiErrorCode(err, 'decision_conflict') ||
           isApiErrorCode(err, 'suggestion_conflict') ||
@@ -508,12 +643,11 @@ export function TriagePage() {
 
         if (isConflictOrStale) {
           setActionNotice({ tone: 'warning', text: '这条建议已在其他地方处理' });
-          setSelectedProjectIds([]);
+          setFrozenSelection((prev) => (prev?.collectionId === capturedSummary.id ? null : prev));
           try {
             const fresh = await api.getCollection(capturedSummary.id);
             if (!isContextCurrent(capturedEpoch, capturedUserId)) return;
             queryClient.setQueryData(['collection', fresh.id], fresh);
-            queryClient.setQueryData(['collection', fresh.id, capturedUserId], fresh);
             if (fresh.deleted_at || hasActiveClassification(fresh.projects)) {
               handledIdsRef.current.add(fresh.id);
               setQueue((prev) => prev.filter((item) => item.id !== fresh.id));
@@ -542,40 +676,72 @@ export function TriagePage() {
     [api, isContextCurrent, isSubmitting, markSuggestionPromptHandled, queryClient],
   );
 
-  const commitSelection = useCallback(
-    async (projectIds: string[]) => {
-      if (!currentSummary || !currentDetail || isSubmitting || projectIds.length === 0) return;
-
-      // If user retries the same selection for the frozen uncertain submission, reuse frozen payload + key.
+  const commitSingleProject = useCallback(
+    async (projectId: string) => {
+      if (!currentSummary || !currentDetail || isSubmitting) return;
       if (pendingRetry && pendingRetry.collectionId === currentSummary.id) {
-        const retryIds = pendingRetry.payload.operations.map((op) => op.id).sort();
-        const reqIds = Array.from(new Set(projectIds)).sort();
-        if (
-          retryIds.length === reqIds.length &&
-          retryIds.every((id, index) => id === reqIds[index])
-        ) {
+        const retryIds = pendingRetry.payload.operations.map((op) => op.id);
+        if (retryIds.length === 1 && retryIds[0] === projectId) {
           await executeFrozenPatch(
             pendingRetry.collectionId,
             pendingRetry.payload,
             pendingRetry.idempotencyKey,
             pendingRetry.summary,
           );
-          return;
         }
+        return;
       }
 
-      const frozenPayload = buildTriageAssociationUpdate(currentDetail, projectIds);
+      const frozenPayload = buildTriageAssociationUpdate(currentDetail, [projectId]);
       const frozenKey = generateIdempotencyKey();
       await executeFrozenPatch(currentSummary.id, frozenPayload, frozenKey, currentSummary);
     },
     [currentDetail, currentSummary, executeFrozenPatch, isSubmitting, pendingRetry],
   );
 
+  const commitFrozenMultiSelect = useCallback(async () => {
+    if (!currentSummary || !frozenSelection || frozenSelection.collectionId !== currentSummary.id) {
+      return;
+    }
+    if (frozenSelection.items.length === 0 || isSubmitting) return;
+    if (frozenSelection.items.length > MAX_TRIAGE_MULTI_SELECT) {
+      setActionNotice({
+        tone: 'warning',
+        text: `单次多选最多选择 ${MAX_TRIAGE_MULTI_SELECT} 个项目，请取消部分后再选。`,
+      });
+      return;
+    }
+
+    if (pendingRetry && pendingRetry.collectionId === currentSummary.id) {
+      const retryIds = pendingRetry.payload.operations.map((op) => op.id).sort();
+      const reqIds = frozenSelection.items.map((i) => i.projectId).sort();
+      if (
+        retryIds.length === reqIds.length &&
+        retryIds.every((id, index) => id === reqIds[index])
+      ) {
+        await executeFrozenPatch(
+          pendingRetry.collectionId,
+          pendingRetry.payload,
+          pendingRetry.idempotencyKey,
+          pendingRetry.summary,
+        );
+      }
+      return;
+    }
+
+    // Use the frozen version & expected suggestions captured when boxes were checked.
+    const frozenPayload = buildTriageAssociationUpdateFromSnapshot(
+      frozenSelection.decisionVersion,
+      frozenSelection.items,
+    );
+    const frozenKey = generateIdempotencyKey();
+    await executeFrozenPatch(currentSummary.id, frozenPayload, frozenKey, currentSummary);
+  }, [currentSummary, executeFrozenPatch, frozenSelection, isSubmitting, pendingRetry]);
+
   const handleSkip = useCallback(() => {
-    if (!currentSummary || isSubmitting) return;
+    if (!currentSummary || isSubmitting || hasLockedPendingRetry) return;
     setActionNotice(null);
-    setPendingRetry(null);
-    setSelectedProjectIds([]);
+    setFrozenSelection(null);
     setPickerHighlighted(false);
 
     const nextSkipped = new Set(skippedIds);
@@ -585,15 +751,13 @@ export function TriagePage() {
     const reordered =
       queue.length > 1 ? [...queue.slice(1), currentSummary] : [currentSummary];
     setQueue(reordered);
-    setAllSkippedCycleNotice(reordered.every((item) => nextSkipped.has(item.id)));
     setLastUndo({ kind: 'skip', collectionId: currentSummary.id });
-  }, [currentSummary, isSubmitting, queue, skippedIds]);
+  }, [currentSummary, hasLockedPendingRetry, isSubmitting, queue, skippedIds]);
 
   const handleIgnoreForRound = useCallback(() => {
-    if (!currentSummary || isSubmitting) return;
+    if (!currentSummary || isSubmitting || hasLockedPendingRetry) return;
     setActionNotice(null);
-    setPendingRetry(null);
-    setSelectedProjectIds([]);
+    setFrozenSelection(null);
     setPickerHighlighted(false);
 
     const target = currentSummary;
@@ -605,22 +769,22 @@ export function TriagePage() {
       next.delete(target.id);
       return next;
     });
-    setAllSkippedCycleNotice(false);
-    setProcessedCount((n) => n + 1);
+    if (!countedIdsRef.current.has(target.id)) {
+      countedIdsRef.current.add(target.id);
+      setProcessedCount((n) => n + 1);
+    }
     setLastUndo({ kind: 'ignore', collectionId: target.id, summary: target });
-  }, [currentSummary, isSubmitting]);
+  }, [currentSummary, hasLockedPendingRetry, isSubmitting]);
 
   const handleUndo = useCallback(async () => {
     if (isSubmitting || !lastUndo) return;
     const targetUndo = lastUndo;
     setActionNotice(null);
-    setPendingRetry(null);
-    setSelectedProjectIds([]);
+    setFrozenSelection(null);
     setRoundFinishedEarly(false);
 
     if (targetUndo.kind === 'skip') {
       setLastUndo(null);
-      setAllSkippedCycleNotice(false);
       setSkippedIds((prev) => {
         if (!prev.has(targetUndo.collectionId)) return prev;
         const next = new Set(prev);
@@ -638,8 +802,9 @@ export function TriagePage() {
     if (targetUndo.kind === 'ignore') {
       setLastUndo(null);
       handledIdsRef.current.delete(targetUndo.collectionId);
-      setAllSkippedCycleNotice(false);
-      setProcessedCount((n) => Math.max(0, n - 1));
+      if (countedIdsRef.current.delete(targetUndo.collectionId)) {
+        setProcessedCount((n) => Math.max(0, n - 1));
+      }
       setQueue((prev) => [
         targetUndo.summary,
         ...prev.filter((item) => item.id !== targetUndo.collectionId),
@@ -671,7 +836,6 @@ export function TriagePage() {
       if (!isContextCurrent(capturedEpoch, capturedUserId)) return;
 
       queryClient.setQueryData(['collection', restored.id], restored);
-      queryClient.setQueryData(['collection', restored.id, capturedUserId], restored);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
 
@@ -679,8 +843,9 @@ export function TriagePage() {
       const restoredSummary = collectionToSummary(restored);
 
       setLastUndo(null);
-      setAllSkippedCycleNotice(false);
-      setProcessedCount((n) => Math.max(0, n - 1));
+      if (countedIdsRef.current.delete(restored.id)) {
+        setProcessedCount((n) => Math.max(0, n - 1));
+      }
       setQueue((prev) => [
         restoredSummary,
         ...prev.filter((item) => item.id !== restoredSummary.id),
@@ -710,26 +875,74 @@ export function TriagePage() {
 
   const handleToggleProjectSelection = useCallback(
     (projectId: string) => {
-      if (!isDecisionReady || isSubmitting) return;
-      setSelectedProjectIds((prev) =>
-        prev.includes(projectId) ? prev.filter((id) => id !== projectId) : [...prev, projectId],
-      );
+      if (!isDecisionReady || !currentDetail || isSubmitting || hasLockedPendingRetry) return;
+
+      const isActiveForCurrent = frozenSelection?.collectionId === currentDetail.id;
+      const existingItems = isActiveForCurrent ? frozenSelection.items : [];
+      const alreadySelected = existingItems.some((item) => item.projectId === projectId);
+
+      if (alreadySelected) {
+        const remaining = existingItems.filter((item) => item.projectId !== projectId);
+        setFrozenSelection(
+          remaining.length > 0 && frozenSelection
+            ? { ...frozenSelection, items: remaining }
+            : null,
+        );
+        return;
+      }
+
+      if (existingItems.length >= MAX_TRIAGE_MULTI_SELECT) {
+        setActionNotice({
+          tone: 'warning',
+          text: `单次多选最多选择 ${MAX_TRIAGE_MULTI_SELECT} 个项目，请取消部分后再选。`,
+        });
+        return;
+      }
+
+      const assoc = currentDetail.projects.find((p) => p.project_id === projectId);
+      const newItem: FrozenSelectionItem = {
+        projectId,
+        wasSuggested: assoc?.decision === 'suggested',
+        expectedSuggestion: getExpectedProjectSuggestion(currentDetail, projectId),
+      };
+
+      if (isActiveForCurrent && frozenSelection) {
+        if (frozenSelection.decisionVersion !== currentDetail.decision_version) {
+          setFrozenSelection(null);
+          setActionNotice({
+            tone: 'warning',
+            text: '当前收藏的推荐状态或版本已更新，请重新选择项目。',
+          });
+          return;
+        }
+        setFrozenSelection({
+          ...frozenSelection,
+          items: [...frozenSelection.items, newItem],
+        });
+      } else {
+        setFrozenSelection({
+          collectionId: currentDetail.id,
+          decisionVersion: currentDetail.decision_version,
+          items: [newItem],
+        });
+      }
     },
-    [isDecisionReady, isSubmitting],
+    [currentDetail, frozenSelection, hasLockedPendingRetry, isDecisionReady, isSubmitting],
   );
 
   const handleTapeClick = useCallback(
     (projectId: string) => {
-      if (!isDecisionReady || isSubmitting) return;
+      if (!isDecisionReady || isSubmitting || hasLockedPendingRetry) return;
       if (multiSelectMode || selectedProjectIds.length > 0) {
         handleToggleProjectSelection(projectId);
       } else {
-        void commitSelection([projectId]);
+        void commitSingleProject(projectId);
       }
     },
     [
-      commitSelection,
+      commitSingleProject,
       handleToggleProjectSelection,
+      hasLockedPendingRetry,
       isDecisionReady,
       isSubmitting,
       multiSelectMode,
@@ -738,10 +951,18 @@ export function TriagePage() {
   );
 
   const handleFocusPicker = useCallback(() => {
+    if (isSubmitting || hasLockedPendingRetry) return;
+    setMoreProjectsOpen(true);
     setPickerHighlighted(true);
+    pendingFocusTapeRef.current = true;
     const firstBtn = pickerRef.current?.querySelector<HTMLButtonElement>('button[data-triage-tape]');
-    firstBtn?.focus();
-  }, []);
+    if (firstBtn) {
+      firstBtn.focus();
+      if (!allProjectsQuery.isLoading) {
+        pendingFocusTapeRef.current = false;
+      }
+    }
+  }, [allProjectsQuery.isLoading, hasLockedPendingRetry, isSubmitting]);
 
   // Keyboard shortcuts: 1-9 select project, Enter confirm, S skip, Z undo, Esc exit.
   useEffect(() => {
@@ -774,7 +995,7 @@ export function TriagePage() {
         return;
       }
 
-      if (!currentSummary || roundFinishedEarly || isSubmitting) return;
+      if (!currentSummary || roundFinishedEarly || isSubmitting || hasLockedPendingRetry) return;
 
       if (event.key >= '1' && event.key <= '9') {
         if (!isDecisionReady) return;
@@ -795,7 +1016,7 @@ export function TriagePage() {
           return;
         }
         event.preventDefault();
-        void commitSelection(selectedProjectIds);
+        void commitFrozenMultiSelect();
         return;
       }
 
@@ -808,22 +1029,23 @@ export function TriagePage() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [
-    commitSelection,
+    commitFrozenMultiSelect,
     currentSummary,
     handleSkip,
     handleToggleProjectSelection,
     handleUndo,
+    hasLockedPendingRetry,
     isDecisionReady,
     isSubmitting,
     lastUndo,
     navigate,
     roundFinishedEarly,
-    selectedProjectIds,
+    selectedProjectIds.length,
     visibleCandidates,
   ]);
 
   const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    if (isSubmitting) return;
+    if (isSubmitting || hasLockedPendingRetry) return;
     if (event.pointerType === 'mouse' && event.button !== 0) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest('button, a, input, textarea, select')) return;
@@ -905,8 +1127,14 @@ export function TriagePage() {
     displayTitle !== domain &&
     !bodyText.startsWith(displayTitle);
 
+  const hasPendingServerQueue = Boolean(nextCursor || isFetchingMore || fetchMoreFailed);
   const isCompleted =
-    queueInitialized && !isLoadingQueue && !queueError && (!currentSummary || roundFinishedEarly);
+    queueInitialized &&
+    !isLoadingQueue &&
+    !queueError &&
+    (roundFinishedEarly || (queue.length === 0 && !hasPendingServerQueue));
+  const showAllSkippedCycleNotice =
+    !isCompleted && queue.length > 0 && unseenCount === 0 && !hasPendingServerQueue;
 
   const dragTransform =
     !reducedMotion && isDraggingHorizontal
@@ -958,27 +1186,35 @@ export function TriagePage() {
           role={actionNotice.tone === 'error' ? 'alert' : 'status'}
         >
           <span>{actionNotice.text}</span>
-          {pendingRetry && pendingRetry.collectionId === currentSummary?.id && (
-            <button
-              type="button"
-              className="sp-btn sp-btn--primary sp-btn--sm"
-              disabled={isSubmitting}
-              onClick={() =>
-                void executeFrozenPatch(
-                  pendingRetry.collectionId,
-                  pendingRetry.payload,
-                  pendingRetry.idempotencyKey,
-                  pendingRetry.summary,
-                )
-              }
-            >
-              <span>重试提交</span>
-            </button>
-          )}
         </div>
       )}
 
-      {fetchMoreFailed && nextCursor && !isCompleted && (
+      {pendingRetry && (
+        <div className="sp-banner sp-banner--warning sp-spaced" role="status">
+          <span>
+            {pendingRetry.backgroundDetected
+              ? '检测到该收藏已保存分类决定，可点击「重试提交」按原提交键取回撤销回执。'
+              : '已保留当前提交键值，可点击「重试提交」核对结果并取回撤销回执。'}
+          </span>
+          <button
+            type="button"
+            className="sp-btn sp-btn--primary sp-btn--sm"
+            disabled={isSubmitting}
+            onClick={() =>
+              void executeFrozenPatch(
+                pendingRetry.collectionId,
+                pendingRetry.payload,
+                pendingRetry.idempotencyKey,
+                pendingRetry.summary,
+              )
+            }
+          >
+            <span>重试提交</span>
+          </button>
+        </div>
+      )}
+
+      {fetchMoreFailed && nextCursor && !roundFinishedEarly && (
         <div className="sp-banner sp-banner--warning sp-spaced" role="status">
           <span>后续待归类列表加载失败，点击可手动继续加载。</span>
           <button
@@ -992,7 +1228,7 @@ export function TriagePage() {
         </div>
       )}
 
-      {allSkippedCycleNotice && !isCompleted && (
+      {showAllSkippedCycleNotice && (
         <div className="sp-banner sp-banner--info sp-spaced" role="status">
           <span>剩余收藏已全部跳过一轮，可继续逐条处理或先结束本轮整理。</span>
           <button
@@ -1000,12 +1236,15 @@ export function TriagePage() {
             className="sp-btn sp-btn--sm"
             onClick={() => setRoundFinishedEarly(true)}
           >
-            结束本轮整理
+            <span>结束本轮整理</span>
           </button>
         </div>
       )}
 
-      {isLoadingQueue && !queueInitialized && <LoadingState message="正在准备待归类卡片…" />}
+      {(isLoadingQueue && !queueInitialized) ||
+      (queueInitialized && queue.length === 0 && isFetchingMore && !roundFinishedEarly) ? (
+        <LoadingState message="正在准备待归类卡片…" />
+      ) : null}
       {queueError !== null && !queueInitialized && (
         <ErrorBanner error={queueError} onRetry={() => void loadQueuePage(undefined, true)} />
       )}
@@ -1139,11 +1378,11 @@ export function TriagePage() {
                 type="button"
                 className="sp-btn sp-btn--sm"
                 aria-pressed={multiSelectMode}
-                disabled={!isDecisionReady || isSubmitting}
+                disabled={!isDecisionReady || isSubmitting || hasLockedPendingRetry}
                 onClick={() => {
                   setMultiSelectMode((prev) => {
                     const next = !prev;
-                    if (!next) setSelectedProjectIds([]);
+                    if (!next) setFrozenSelection(null);
                     return next;
                   });
                 }}
@@ -1189,8 +1428,10 @@ export function TriagePage() {
                       key={proj.id}
                       type="button"
                       data-triage-tape={proj.id}
-                      disabled={!isDecisionReady || isSubmitting}
-                      aria-pressed={multiSelectMode || selectedProjectIds.length > 0 ? isSelected : undefined}
+                      disabled={!isDecisionReady || isSubmitting || hasLockedPendingRetry}
+                      aria-pressed={
+                        multiSelectMode || selectedProjectIds.length > 0 ? isSelected : undefined
+                      }
                       className={`sp-tape sp-triage-tape ${projectToneClass(proj.id)} ${
                         isSelected ? 'is-selected' : ''
                       }`}
@@ -1251,8 +1492,8 @@ export function TriagePage() {
                 <button
                   type="button"
                   className="sp-btn sp-btn--primary sp-btn--sm"
-                  disabled={!isDecisionReady || isSubmitting}
-                  onClick={() => void commitSelection(selectedProjectIds)}
+                  disabled={!isDecisionReady || isSubmitting || hasLockedPendingRetry}
+                  onClick={() => void commitFrozenMultiSelect()}
                 >
                   <Check size={14} strokeWidth={2.2} aria-hidden="true" />
                   <span>确认归入（{selectedProjectIds.length}）</span>
@@ -1265,7 +1506,7 @@ export function TriagePage() {
             <button
               type="button"
               className="sp-btn"
-              disabled={isSubmitting}
+              disabled={isSubmitting || hasLockedPendingRetry}
               onClick={handleSkip}
             >
               <SkipForward size={15} strokeWidth={2} aria-hidden="true" />
@@ -1274,7 +1515,7 @@ export function TriagePage() {
             <button
               type="button"
               className="sp-btn"
-              disabled={isSubmitting}
+              disabled={isSubmitting || hasLockedPendingRetry}
               onClick={handleFocusPicker}
             >
               <Layers size={15} strokeWidth={2} aria-hidden="true" />
@@ -1283,7 +1524,7 @@ export function TriagePage() {
             <button
               type="button"
               className="sp-btn"
-              disabled={isSubmitting}
+              disabled={isSubmitting || hasLockedPendingRetry}
               onClick={handleIgnoreForRound}
             >
               <X size={15} strokeWidth={2} aria-hidden="true" />

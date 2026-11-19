@@ -317,9 +317,9 @@ export function createTestAdapter(): TestAdapter {
       id: c.id,
       display_title: c.display_title,
       excerpt: derivePlainText(c.document).trim().slice(0, 180) || c.original_url || c.intent || '（图片收藏）',
-      content_types: c.content_types,
-      projects: c.projects,
-      tags: c.tags,
+      content_types: [...c.content_types],
+      projects: structuredClone(c.projects),
+      tags: structuredClone(c.tags),
       organization_status: c.organization.status,
       has_suggestion: collectionHasActiveSuggestion(c),
       read_at: c.read_at,
@@ -387,7 +387,7 @@ export function createTestAdapter(): TestAdapter {
   function toPublicCollection(c: StoredCollection): Collection {
     const { user_id: _u, extractions: _e, revisions: _r, ...rest } = c;
     return {
-      ...rest,
+      ...structuredClone(rest),
       has_suggestion: collectionHasActiveSuggestion(c),
     };
   }

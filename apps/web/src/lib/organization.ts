@@ -387,24 +387,52 @@ export async function decideCollectionProjectSafely(
   });
 }
 
+export interface FrozenTriageSelectionItem {
+  projectId: string;
+  expectedSuggestion?: ExpectedProjectSuggestion;
+}
+
+export function buildTriageAssociationUpdateFromSnapshot(
+  baseDecisionVersion: number,
+  items: FrozenTriageSelectionItem[],
+): AssociationUpdate {
+  const deduped: FrozenTriageSelectionItem[] = [];
+  const seen = new Set<string>();
+  for (const item of items) {
+    if (seen.has(item.projectId)) continue;
+    seen.add(item.projectId);
+    deduped.push(item);
+  }
+  if (deduped.length === 0) {
+    throw new Error('请选择至少一个目标项目');
+  }
+  return {
+    base_decision_version: baseDecisionVersion,
+    operations: deduped.map((item) => ({
+      id: item.projectId,
+      action: 'include',
+      ...(item.expectedSuggestion ? { expected_suggestion: item.expectedSuggestion } : {}),
+    })),
+  };
+}
+
+export function getExpectedProjectSuggestion(
+  collection: Collection,
+  projectId: string,
+): ExpectedProjectSuggestion | undefined {
+  const assoc = collection.projects.find((p) => p.project_id === projectId);
+  return toExpectedSuggestion(assoc);
+}
+
 export function buildTriageAssociationUpdate(
   collection: Collection,
   projectIds: string[],
 ): AssociationUpdate {
-  const uniqueProjectIds = Array.from(new Set(projectIds));
-  if (uniqueProjectIds.length === 0) {
-    throw new Error('请选择至少一个目标项目');
-  }
-  return {
-    base_decision_version: collection.decision_version,
-    operations: uniqueProjectIds.map((projectId) => {
-      const assoc = collection.projects.find((p) => p.project_id === projectId);
-      const expected = toExpectedSuggestion(assoc);
-      return {
-        id: projectId,
-        action: 'include',
-        ...(expected ? { expected_suggestion: expected } : {}),
-      };
-    }),
-  };
+  return buildTriageAssociationUpdateFromSnapshot(
+    collection.decision_version,
+    projectIds.map((projectId) => ({
+      projectId,
+      expectedSuggestion: getExpectedProjectSuggestion(collection, projectId),
+    })),
+  );
 }

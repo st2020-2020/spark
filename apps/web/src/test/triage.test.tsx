@@ -343,9 +343,80 @@ describe('Triage mode (/unclassified/triage)', () => {
     expect(updateSpy.mock.calls[1][2]).toBe(updateSpy.mock.calls[0][2]);
 
     await screen.findByRole('heading', { name: '本轮整理完成' });
-    // Recovered undo_receipt from replay lets user undo successfully
+    // Recover undo_receipt from replay lets user undo successfully without duplicate count
+    await screen.findByText('本轮已处理 1 条');
     await user.click(screen.getByRole('button', { name: '撤销上一步' }));
     await screen.findByText('不确定网络结果的卡片');
+    await screen.findByText('本轮已处理 0 条');
+  });
+
+  it('preserves pendingRetry receipt recovery button across background auto-move without duplicate operation or count', async () => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+
+    await seedAdminProject(adapter, '后台重查项目', 'proj-bg-retry-1');
+    const colA = await seedAdminCollection(adapter, {
+      id: '31000000-0000-4000-8000-000000000001',
+      text: '已后台落库但响应丢失的卡片 A',
+    });
+    const colB = await seedAdminCollection(adapter, {
+      id: '31000000-0000-4000-8000-000000000002',
+      text: '下一张正常卡片 B',
+    });
+
+    const user = userEvent.setup();
+    renderWithAdapter(['/unclassified/triage'], adapter);
+
+    // Wait for front card (newest is B) & initial SSE ready + detail_version ready
+    await screen.findByText('下一张正常卡片 B');
+    const frontTape = within(
+      screen.getByRole('group', { name: '候选项目纸胶带' }),
+    ).getByRole('button', { name: /后台重查项目/ });
+    await waitFor(() => expect(frontTape).toBeEnabled());
+    // Let initial onReady compensation settle before mocking uncertain PATCH failure
+    await new Promise((r) => setTimeout(r, 40));
+
+    const origUpdate = adapter.updateProjectDecisions.bind(adapter);
+    const updateSpy = vi
+      .spyOn(adapter, 'updateProjectDecisions')
+      .mockImplementationOnce(async (id, body, key) => {
+        await origUpdate(id, body, key);
+        throw new ApiError({ status: 0, code: 'network_error', message: '连接超时' });
+      });
+
+    // First uncertain PATCH leaves pendingRetry active & locks re-operation on current card (B)
+    await user.click(frontTape);
+    await screen.findByRole('button', { name: '重试提交' });
+    expect(screen.getByText('下一张正常卡片 B')).toBeInTheDocument();
+    expect(frontTape).toBeDisabled();
+    expect(screen.getByRole('button', { name: '跳过' })).toBeDisabled();
+
+    // Simulate background refetch discovering the same committed decision via SSE ready compensation
+    adapter.emitMockOrganizationReady();
+
+    // Auto-move shifts queue cleanly to 卡片 A, while pendingRetry & 「重试提交」 stay visible!
+    await screen.findByText('已后台落库但响应丢失的卡片 A');
+    const retryAfterMove = await screen.findByRole('button', { name: '重试提交' });
+    expect(screen.getByText('本轮已处理 0 条')).toBeInTheDocument();
+
+    // Clicking 重试提交 replays the exact frozen key/payload for B to recover undo_receipt cleanly and counts once
+    await user.click(retryAfterMove);
+    expect(updateSpy).toHaveBeenCalledTimes(2);
+    expect(updateSpy.mock.calls[0][0]).toBe(colB.id);
+    expect(updateSpy.mock.calls[1][0]).toBe(colB.id);
+    expect(updateSpy.mock.calls[1][1]).toEqual(updateSpy.mock.calls[0][1]);
+    expect(updateSpy.mock.calls[1][2]).toBe(updateSpy.mock.calls[0][2]);
+
+    await screen.findByText('本轮已处理 1 条');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: '重试提交' })).not.toBeInTheDocument(),
+    );
+
+    // Undo restores 卡片 B cleanly with count back to 0
+    await user.click(screen.getByRole('button', { name: '撤销上一步' }));
+    await screen.findByText('下一张正常卡片 B');
+    await screen.findByText('本轮已处理 0 条');
+    expect(colA.id).toBeTruthy();
   });
 
   it('prevents infinite cursor prefetch loop on error and preserves queue under StrictMode', async () => {
@@ -518,7 +589,7 @@ describe('Triage mode (/unclassified/triage)', () => {
     expect(proj.id).toBeTruthy();
   });
 
-  it('reaches paused and paginated projects via 更多项目 without hiding them when active projects are scarce', async () => {
+  it('reaches paused projects via 选择项目 button and right swipe even when no active projects exist', async () => {
     const adapter = createTestAdapter();
     await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
     const pausedProj = await seedAdminProject(adapter, '暂停参考库', 'proj-paused-1');
@@ -528,19 +599,216 @@ describe('Triage mode (/unclassified/triage)', () => {
     });
     await seedAdminCollection(adapter, {
       id: '60000000-0000-4000-8000-000000000001',
-      text: '需放入暂停项目的资料',
+      text: '需放入暂停项目的资料 1',
+    });
+    await seedAdminCollection(adapter, {
+      id: '60000000-0000-4000-8000-000000000002',
+      text: '需放入暂停项目的资料 2',
     });
 
     const user = userEvent.setup();
     renderWithAdapter(['/unclassified/triage'], adapter);
 
-    await screen.findByText('需放入暂停项目的资料');
-    const expandBtn = await screen.findByRole('button', { name: '更多项目' });
-    await user.click(expandBtn);
+    // 1. Click "选择项目" button -> truly expands 更多项目 and focuses paused project tape
+    await screen.findByText('需放入暂停项目的资料 2');
+    expect(screen.queryByRole('button', { name: /暂停参考库/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '选择项目' }));
 
     const pausedBtn = await screen.findByRole('button', { name: /暂停参考库/ });
+    await waitFor(() => expect(pausedBtn).toHaveFocus());
     await user.click(pausedBtn);
+
+    // Collapse 更多项目 to test right swipe on the next card
+    await screen.findByText('需放入暂停项目的资料 1');
+    await user.click(screen.getByRole('button', { name: '收起更多项目' }));
+    expect(screen.queryByRole('button', { name: /暂停参考库/ })).not.toBeInTheDocument();
+
+    // 2. Right swipe on card -> truly expands 更多项目 and focuses paused project tape
+    const card = screen.getByRole('article', { name: '当前待归类收藏' });
+    const evDown = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, clientX: 60, clientY: 100 });
+    Object.assign(evDown, { pointerId: 11, pointerType: 'touch' });
+    fireEvent(card, evDown);
+    const evMove = new MouseEvent('pointermove', { bubbles: true, cancelable: true, clientX: 200, clientY: 102 });
+    Object.assign(evMove, { pointerId: 11, pointerType: 'touch' });
+    fireEvent(card, evMove);
+    const evUp = new MouseEvent('pointerup', { bubbles: true, cancelable: true, clientX: 200, clientY: 102 });
+    Object.assign(evUp, { pointerId: 11, pointerType: 'touch' });
+    fireEvent(card, evUp);
+
+    const pausedBtnAfterSwipe = await screen.findByRole('button', { name: /暂停参考库/ });
+    await waitFor(() => expect(pausedBtnAfterSwipe).toHaveFocus());
+    await user.click(pausedBtnAfterSwipe);
     await screen.findByRole('heading', { name: '本轮整理完成' });
+  });
+
+  it('freezes multi-select decision_version and suggestion versions, requires reselect when refreshed target changes, and enforces 50-item limit', async () => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({ ai_enabled: true });
+
+    const projS = await seedAdminProject(adapter, '建议项目 S', 'proj-freeze-s');
+    await seedAdminProject(adapter, '手动项目 M', 'proj-freeze-m');
+    const col = await seedAdminCollection(adapter, {
+      id: '61000000-0000-4000-8000-000000000001',
+      text: '多选冻结测试卡片：建议项目 S',
+    });
+
+    await waitFor(async () => {
+      const fresh = await adapter.getCollection(col.id);
+      expect(fresh.organization.status).toBe('succeeded');
+      expect(fresh.projects.some((p) => p.project_id === projS.id && p.decision === 'suggested')).toBe(true);
+    });
+
+    const user = userEvent.setup();
+    renderWithAdapter(['/unclassified/triage'], adapter);
+
+    await screen.findByText('建议归入：建议项目 S');
+    await user.click(screen.getByRole('button', { name: '多选项目' }));
+    const tapes = screen.getByRole('group', { name: '候选项目纸胶带' });
+    const tapeS = within(tapes).getByRole('button', { name: /建议项目 S/ });
+    const tapeM = within(tapes).getByRole('button', { name: /手动项目 M/ });
+    await waitFor(() => expect(tapeS).toBeEnabled());
+
+    // Select S & M while seeing current decision_version & suggestion_run_id
+    await user.click(tapeS);
+    await user.click(tapeM);
+    expect(screen.getByRole('button', { name: '确认归入（2）' })).toBeInTheDocument();
+
+    // Another tab rejects S (bumping decision_version and changing S from suggested -> rejected), then SSE ready triggers refresh
+    const latestBeforeEdit = await adapter.getCollection(col.id);
+    await adapter.updateProjectDecisions(col.id, {
+      base_decision_version: latestBeforeEdit.decision_version,
+      operations: [{ id: projS.id, action: 'exclude' }],
+    });
+    adapter.emitMockOrganizationReady();
+
+    // Must require re-selection instead of silently adopting the new decision_version
+    await screen.findByText('当前收藏的推荐状态或版本已更新，请重新选择项目。');
+    expect(screen.queryByRole('button', { name: /确认归入/ })).not.toBeInTheDocument();
+    expect(tapeS).toHaveAttribute('aria-pressed', 'false');
+    expect(tapeM).toHaveAttribute('aria-pressed', 'false');
+
+    // Also verify max 50 multi-select limit: seed 51 total active projects
+    const extraProjects: string[] = [];
+    for (let i = 1; i <= 49; i += 1) {
+      const p = await seedAdminProject(adapter, `批量项目 ${i}`, `proj-cap-${i}`);
+      extraProjects.push(p.id);
+    }
+    expect(extraProjects).toHaveLength(49);
+    // Refresh projects query & expand 更多项目 to expose all 51 projects
+    adapter.emitMockOrganizationReady();
+    await user.click(await screen.findByRole('button', { name: '更多项目' }));
+
+    const allTapeBtns = await waitFor(() => {
+      const btns = within(screen.getByRole('group', { name: '候选项目纸胶带' })).getAllByRole('button');
+      expect(btns.length).toBe(51);
+      return btns;
+    });
+
+    for (let i = 0; i < 50; i += 1) {
+      fireEvent.click(allTapeBtns[i]);
+    }
+    expect(screen.getByRole('button', { name: '确认归入（50）' })).toBeInTheDocument();
+
+    fireEvent.click(allTapeBtns[50]);
+    await screen.findByText('单次多选最多选择 50 个项目，请取消部分后再选。');
+    expect(allTapeBtns[50]).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: '确认归入（50）' })).toBeInTheDocument();
+  });
+
+  it('fetches page 2 via unseen count when skipping all 30 items of page 1, keeps #31 before skipped tail, and never shows completed while cursor/failure remains', async () => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await seedAdminProject(adapter, '分页测试项目', 'proj-31-1');
+
+    const now = new Date().toISOString();
+    const page1Items = Array.from({ length: 30 }, (_, idx) => ({
+      id: `80000000-0000-4000-8000-${String(idx + 1).padStart(12, '0')}`,
+      display_title: `第${idx + 1}条`,
+      excerpt: `三十一条队列条目 ${idx + 1}`,
+      content_types: ['text' as const],
+      projects: [],
+      tags: [],
+      organization_status: 'skipped' as const,
+      created_at: now,
+      updated_at: now,
+      resource_version: 1,
+    }));
+    const item31 = {
+      id: '80000000-0000-4000-8000-000000000031',
+      display_title: '第31条',
+      excerpt: '压轴第 31 条未见卡片',
+      content_types: ['text' as const],
+      projects: [],
+      tags: [],
+      organization_status: 'skipped' as const,
+      created_at: now,
+      updated_at: now,
+      resource_version: 1,
+    };
+
+    let page2Attempt = 0;
+    const origList = adapter.listCollections.bind(adapter);
+    vi.spyOn(adapter, 'listCollections').mockImplementation(async (query, signal) => {
+      if (query?.scope !== 'unclassified') return origList(query, signal);
+      if (!query.cursor) {
+        return { items: page1Items, next_cursor: 'cursor-31' };
+      }
+      page2Attempt += 1;
+      if (page2Attempt === 1) {
+        throw new ApiError({ status: 503, code: 'service_unavailable', message: '第 2 页加载失败' });
+      }
+      return { items: [item31] };
+    });
+
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id) => {
+      const match = [...page1Items, item31].find((item) => item.id === id) ?? page1Items[0];
+      return {
+        id: match.id,
+        document: makeTextDoc(match.excerpt),
+        intent: '',
+        display_title: match.display_title,
+        content_types: ['text'],
+        content_version: 1,
+        resource_version: 1,
+        decision_version: 1,
+        attachments: [],
+        projects: [],
+        tags: [],
+        organization: { content_version: 1, status: 'skipped', stages: [], updated_at: now },
+        ai_excluded: false,
+        created_at: now,
+        updated_at: now,
+      };
+    });
+
+    const user = userEvent.setup();
+    renderWithAdapter(['/unclassified/triage'], adapter);
+
+    await screen.findByText('三十一条队列条目 1');
+
+    // Skip first 25 -> unseen drops to 5 -> auto-prefetch runs and fails once (shows retry banner)
+    for (let i = 0; i < 25; i += 1) {
+      fireEvent.click(screen.getByRole('button', { name: '跳过' }));
+    }
+    expect(await screen.findByRole('button', { name: '继续加载更多' })).toBeInTheDocument();
+
+    // Skip remaining 5 items -> all 30 loaded cards are skipped, but cursor still failed:
+    // MUST NOT show "本轮整理完成" or "结束本轮整理" or hide "继续加载更多"!
+    for (let i = 0; i < 5; i += 1) {
+      fireEvent.click(screen.getByRole('button', { name: '跳过' }));
+    }
+    expect(screen.queryByRole('heading', { name: '本轮整理完成' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '结束本轮整理' })).not.toBeInTheDocument();
+    const retryMoreBtn = screen.getByRole('button', { name: '继续加载更多' });
+
+    // Retry loading page 2 -> item #31 is queued right next after current skipped card 1
+    await user.click(retryMoreBtn);
+    await waitFor(() => expect(page2Attempt).toBe(2));
+
+    // One skip moves card 1 back to tail and immediately reveals unseen card #31!
+    await user.click(screen.getByRole('button', { name: '跳过' }));
+    await screen.findByText('压轴第 31 条未见卡片');
   });
 
   it('discards stale in-flight triage responses across unmount/account switch', async () => {
