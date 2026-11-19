@@ -16,6 +16,7 @@ Spark 帮助个人收集网上的文字、网址和图片，自动提取内容�
 | 6 | [自动整理设计](design/ORGANIZATION.md)、[模型结果 Schema](../contracts/organization-result.schema.json) | 提取、模型输出、项目匹配、重试与人工决定 |
 | 7 | [Web 交互设计](design/WEB.md) | 页面、字段、状态、操作反馈及手机行为 |
 | 8 | [交付与验收](design/DELIVERY.md)、[开发计划](ROADMAP.md) | 任务依赖、验证、部署与恢复 |
+| 9 | [产品迭代规划](ITERATION.md) | 候选需求池、优先级、验收标准与待决策事项（未排期） |
 
 产品范围以 PRODUCT 为准。接口字段和枚举以 OpenAPI 为准，正文结构以 JSON Schema 为准，数据库及事务语义以 DATA 为准。修改同一行为时同步更新引用它的文档与契约。冲突项应先收敛到一个设计，再实施。
 
