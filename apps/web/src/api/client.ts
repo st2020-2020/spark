@@ -162,6 +162,14 @@ function buildQuery(params?: Record<string, string | number | boolean | undefine
   return encoded ? `?${encoded}` : '';
 }
 
+interface RequestOptions {
+  body?: unknown;
+  requiresCsrf?: boolean;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+  notifyUnauthorized?: boolean;
+}
+
 export function createRealApiClient(): SparkApi {
   let csrfToken: string | null = null;
   let unauthorizedHandler: (() => void) | null = null;
@@ -169,13 +177,7 @@ export function createRealApiClient(): SparkApi {
   async function fetchResponse(
     method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
-    options?: {
-      body?: unknown;
-      requiresCsrf?: boolean;
-      idempotencyKey?: string;
-      signal?: AbortSignal;
-      notifyUnauthorized?: boolean;
-    },
+    options?: RequestOptions,
   ): Promise<Response> {
     const requestSession = csrfToken;
     const headers: Record<string, string> = {};
@@ -232,13 +234,7 @@ export function createRealApiClient(): SparkApi {
   async function request<T>(
     method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
-    options?: {
-      body?: unknown;
-      requiresCsrf?: boolean;
-      idempotencyKey?: string;
-      signal?: AbortSignal;
-      notifyUnauthorized?: boolean;
-    },
+    options?: RequestOptions,
   ): Promise<T> {
     const response = await fetchResponse(method, path, options);
 

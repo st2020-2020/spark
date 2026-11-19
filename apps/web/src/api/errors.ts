@@ -77,37 +77,6 @@ export function isApiErrorCode(err: unknown, code: string): err is ApiError {
   return err instanceof ApiError && err.code === code;
 }
 
-export function parseRetryAfterSeconds(retryAfter: string | null | undefined): number | null {
-  if (!retryAfter) return null;
-  const trimmed = retryAfter.trim();
-  if (!trimmed) return null;
-  if (/^\d+$/.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }
-  const timestamp = Date.parse(trimmed);
-  if (!Number.isNaN(timestamp)) {
-    const diffSeconds = Math.ceil((timestamp - Date.now()) / 1000);
-    return diffSeconds > 0 ? diffSeconds : 1;
-  }
-  return null;
-}
-
-export function formatRetryAfterDuration(seconds: number): string {
-  const safe = Math.max(1, Math.ceil(seconds));
-  if (safe < 60) {
-    return `${safe} 秒`;
-  }
-  if (safe < 3600) {
-    const mins = Math.floor(safe / 60);
-    const rem = safe % 60;
-    return rem > 0 ? `${mins} 分 ${rem} 秒` : `${mins} 分钟`;
-  }
-  const hours = Math.floor(safe / 3600);
-  const mins = Math.ceil((safe % 3600) / 60);
-  return mins > 0 ? `${hours} 小时 ${mins} 分钟` : `${hours} 小时`;
-}
-
 export async function parseApiErrorResponse(response: Response): Promise<ApiError> {
   const retryAfter = response.headers.get('Retry-After');
   const contentType = response.headers.get('content-type') ?? '';
