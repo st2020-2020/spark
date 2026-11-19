@@ -10,6 +10,7 @@ import type {
   Organization,
   OrganizationEvent,
   Project,
+  ProjectAssociation,
   Revision,
   SearchHit,
   Session,
@@ -111,6 +112,21 @@ export function createTestAdapter(): TestAdapter {
   let attachments: Map<string, StoredAttachmentMeta> = new Map();
   let collections: StoredCollection[] = [];
   let idempotencyStore: Map<string, { digest: string; result: unknown }> = new Map();
+  let projectUndoStore: Map<
+    string,
+    {
+      userId: string;
+      collectionId: string;
+      operationKey: string;
+      resultingDecisionVersion: number;
+      contentVersion: number;
+      previousProjects: ProjectAssociation[];
+      expiresAtMs: number;
+      used: boolean;
+      replayBaseVersion?: number;
+      cachedUndoResult?: Collection;
+    }
+  > = new Map();
   let mockOrganizationMode: MockOrganizationMode = 'succeed';
   let mockAiTrialEligible = true;
   let mockAiPlatformEnabled = true;
@@ -193,6 +209,7 @@ export function createTestAdapter(): TestAdapter {
     attachments = new Map();
     collections = [];
     idempotencyStore = new Map();
+    projectUndoStore = new Map();
     mockOrganizationMode = 'succeed';
     mockAiTrialEligible = true;
     mockAiPlatformEnabled = true;
@@ -553,6 +570,8 @@ export function createTestAdapter(): TestAdapter {
       ? `核心内容围绕「${plain.slice(0, 48)}」${intentText ? `，用途为${intentText.slice(0, 36)}` : ''}。`
       : `用途记录：${intentText.slice(0, 60)}。`;
 
+    const orgRunId = col.organization.run_id ?? generateUuid();
+
     if (mockOrganizationMode !== 'succeed_no_project') {
       const activeProjects = projects.filter(
         (p) => p.user_id === user.id && p.state === 'active',
@@ -577,6 +596,7 @@ export function createTestAdapter(): TestAdapter {
             decision: 'suggested',
             reason: `内容与项目「${matchedProject.name}」的关注方向相符`,
             project_version: matchedProject.version,
+            suggestion_run_id: orgRunId,
             evidence: [
               {
                 source_id: evidenceSource,
@@ -590,7 +610,7 @@ export function createTestAdapter(): TestAdapter {
     }
 
     col.organization = {
-      run_id: col.organization.run_id ?? generateUuid(),
+      run_id: orgRunId,
       content_version: col.content_version,
       status: 'succeeded',
       stages: [
@@ -645,6 +665,7 @@ export function createTestAdapter(): TestAdapter {
       if (opts.ai_trial_eligible !== undefined) mockAiTrialEligible = opts.ai_trial_eligible;
       if (opts.ai_platform_enabled !== undefined) mockAiPlatformEnabled = opts.ai_platform_enabled;
     },
+
 
     emitMockOrganizationReady() {
       const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
@@ -884,6 +905,11 @@ export function createTestAdapter(): TestAdapter {
         settled_units: 0,
         blocked: false,
       };
+    },
+
+    async exportMyData() {
+      requireUser(false);
+      throw new ApiError({ status: 503, code: 'service_unavailable', message: '数据导出需要连接真实服务。' });
     },
 
     async listSessions() {
@@ -1196,11 +1222,12 @@ export function createTestAdapter(): TestAdapter {
       if (boundAttachments.length > 0) contentTypes.push('image');
 
       const now = new Date().toISOString();
+      const normalizedIntent = body.intent ?? '';
       const org = buildInitialOrganization(
         {
           content_version: 1,
           document: body.document,
-          intent: body.intent,
+          intent: normalizedIntent,
           ai_excluded: Boolean(body.ai_excluded),
         },
         user,
@@ -1210,7 +1237,7 @@ export function createTestAdapter(): TestAdapter {
         id: body.id,
         user_id: user.id,
         document: body.document,
-        intent: body.intent,
+        intent: normalizedIntent,
         original_url: detectedUrl,
         manual_title: body.manual_title?.trim() || undefined,
         display_title: '',
@@ -1497,8 +1524,18 @@ export function createTestAdapter(): TestAdapter {
       return toPublicCollection(col);
     },
 
-    async updateProjectDecisions(id, body) {
+    async updateProjectDecisions(id, body, idempotencyKey) {
       const user = requireUser(true);
+      if (idempotencyKey) {
+        const cached = checkIdempotency<Collection>(
+          user.id,
+          `patch-projects:${id}`,
+          idempotencyKey,
+          body,
+        );
+        if (cached) return cached;
+      }
+
       const col = collections.find((c) => c.id === id && c.user_id === user.id);
       if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
       if (col.deleted_at) {
@@ -1515,38 +1552,209 @@ export function createTestAdapter(): TestAdapter {
           message: '关联版本已更新，请刷新后重试',
         });
       }
+
+      // Validate all operations and expected suggestions before mutating
       for (const op of body.operations) {
         const proj = projects.find((p) => p.id === op.id && p.user_id === user.id);
         if (!proj) throw new ApiError({ status: 404, code: 'not_found', message: '项目不存在' });
+        if (op.expected_suggestion) {
+          const currentAssoc = col.projects.find((p) => p.project_id === op.id);
+          const versionMatches =
+            currentAssoc?.project_version === undefined ||
+            currentAssoc.project_version === op.expected_suggestion.project_version;
+          const runMatches =
+            !currentAssoc?.suggestion_run_id ||
+            currentAssoc.suggestion_run_id === op.expected_suggestion.run_id;
+          const projectStillActiveAndMatched =
+            proj.state === 'active' && proj.version === op.expected_suggestion.project_version;
+          if (
+            !currentAssoc ||
+            currentAssoc.decision !== 'suggested' ||
+            !versionMatches ||
+            !runMatches ||
+            !projectStillActiveAndMatched
+          ) {
+            throw new ApiError({
+              status: 409,
+              code: 'suggestion_conflict',
+              message: '这条建议已在其他地方处理，请刷新后重试',
+            });
+          }
+        }
+      }
+
+      const previousProjects: ProjectAssociation[] = col.projects.map((p) => ({
+        ...p,
+        evidence: p.evidence ? p.evidence.map((e) => ({ ...e })) : undefined,
+      }));
+
+      let changed = false;
+      for (const op of body.operations) {
+        const proj = projects.find((p) => p.id === op.id && p.user_id === user.id)!;
         const idx = col.projects.findIndex((p) => p.project_id === op.id);
         if (op.action === 'reset') {
-          if (idx !== -1) col.projects.splice(idx, 1);
+          if (idx !== -1) {
+            col.projects.splice(idx, 1);
+            changed = true;
+          }
         } else if (op.action === 'include') {
-          const entry = {
-            project_id: proj.id,
-            name: proj.name,
-            decision: 'confirmed' as const,
-            project_version: proj.version,
-          };
-          if (idx !== -1) col.projects[idx] = { ...col.projects[idx], decision: 'confirmed' };
-          else col.projects.push({ ...entry, decision: 'manual' });
+          if (idx !== -1) {
+            const cur = col.projects[idx];
+            if (cur.decision === 'suggested') {
+              col.projects[idx] = { ...cur, decision: 'confirmed' };
+              changed = true;
+            } else if (cur.decision === 'rejected') {
+              col.projects[idx] = { ...cur, decision: 'manual' };
+              changed = true;
+            }
+          } else {
+            col.projects.push({
+              project_id: proj.id,
+              name: proj.name,
+              decision: 'manual',
+              project_version: proj.version,
+            });
+            changed = true;
+          }
         } else if (op.action === 'exclude') {
-          if (idx !== -1) col.projects[idx] = { ...col.projects[idx], decision: 'rejected' };
-          else {
+          if (idx !== -1) {
+            if (col.projects[idx].decision !== 'rejected') {
+              col.projects[idx] = { ...col.projects[idx], decision: 'rejected' };
+              changed = true;
+            }
+          } else {
             col.projects.push({
               project_id: proj.id,
               name: proj.name,
               decision: 'rejected',
               project_version: proj.version,
             });
+            changed = true;
           }
         }
       }
+
+      let result: Collection;
+      if (changed) {
+        col.decision_version += 1;
+        col.resource_version += 1;
+        col.updated_at = new Date().toISOString();
+        refreshProjectCounts(user.id);
+        result = toPublicCollection(col);
+        if (idempotencyKey && idempotencyKey.length >= 16) {
+          const receipt = {
+            operation_key: idempotencyKey,
+            decision_version: col.decision_version,
+            expires_at: new Date(Date.now() + 10 * 60_000).toISOString(),
+          };
+          projectUndoStore.set(`${user.id}:${id}:${idempotencyKey}`, {
+            userId: user.id,
+            collectionId: id,
+            operationKey: idempotencyKey,
+            resultingDecisionVersion: col.decision_version,
+            contentVersion: col.content_version,
+            previousProjects,
+            expiresAtMs: Date.now() + 10 * 60_000,
+            used: false,
+          });
+          result = { ...result, undo_receipt: receipt };
+        }
+      } else {
+        result = toPublicCollection(col);
+      }
+
+      if (idempotencyKey) {
+        saveIdempotency(user.id, `patch-projects:${id}`, idempotencyKey, body, result);
+      }
+      return result;
+    },
+
+    async undoProjectDecisions(id, body) {
+      const user = requireUser(true);
+      const col = collections.find((c) => c.id === id && c.user_id === user.id);
+      if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+
+      const entry = projectUndoStore.get(`${user.id}:${id}:${body.operation_key}`);
+      if (!entry || entry.userId !== user.id || entry.collectionId !== id) {
+        throw new ApiError({
+          status: 409,
+          code: 'undo_unavailable',
+          message: '撤销回执不可用或已过期',
+        });
+      }
+      if (entry.used) {
+        if (entry.replayBaseVersion === body.base_decision_version && entry.cachedUndoResult) {
+          return entry.cachedUndoResult;
+        }
+        throw new ApiError({
+          status: 409,
+          code: 'undo_unavailable',
+          message: '该次操作已撤销，无法重复使用回执',
+        });
+      }
+      if (Date.now() > entry.expiresAtMs) {
+        throw new ApiError({
+          status: 409,
+          code: 'undo_unavailable',
+          message: '撤销回执已过期，无法撤销',
+        });
+      }
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，无法撤销项目决定',
+        });
+      }
+      if (
+        col.decision_version !== body.base_decision_version ||
+        col.decision_version !== entry.resultingDecisionVersion
+      ) {
+        throw new ApiError({
+          status: 409,
+          code: 'decision_conflict',
+          message: '关联版本已更新，无法撤销上一步操作',
+        });
+      }
+
+      for (const prevAssoc of entry.previousProjects) {
+        if (prevAssoc.decision === 'suggested') {
+          if (col.content_version !== entry.contentVersion) {
+            throw new ApiError({
+              status: 409,
+              code: 'suggestion_conflict',
+              message: '正文版本已变更，原有 AI 建议已失效',
+            });
+          }
+          const proj = projects.find((p) => p.id === prevAssoc.project_id && p.user_id === user.id);
+          if (
+            !proj ||
+            proj.state !== 'active' ||
+            (prevAssoc.project_version !== undefined && proj.version !== prevAssoc.project_version)
+          ) {
+            throw new ApiError({
+              status: 409,
+              code: 'suggestion_conflict',
+              message: '建议关联的项目状态或版本已变更，无法恢复原建议',
+            });
+          }
+        }
+      }
+
+      col.projects = entry.previousProjects.map((p) => ({
+        ...p,
+        evidence: p.evidence ? p.evidence.map((e) => ({ ...e })) : undefined,
+      }));
       col.decision_version += 1;
       col.resource_version += 1;
       col.updated_at = new Date().toISOString();
       refreshProjectCounts(user.id);
-      return toPublicCollection(col);
+
+      const restored = toPublicCollection(col);
+      entry.used = true;
+      entry.replayBaseVersion = body.base_decision_version;
+      entry.cachedUndoResult = restored;
+      return restored;
     },
 
     async updateTagDecisions(id, body) {
@@ -1696,9 +1904,9 @@ export function createTestAdapter(): TestAdapter {
         const tagText = c.tags.map((t) => t.path).join(' ');
         const extText = c.extractions.map((e) => e.text ?? '').join('\n');
         const fields: Array<{ field: 'title' | 'text' | 'intent' | 'url' | 'extraction' | 'tag'; value: string }> = [
-          { field: 'title', value: c.display_title },
+          { field: 'title', value: c.display_title ?? '' },
           { field: 'text', value: plain },
-          { field: 'intent', value: c.intent },
+          { field: 'intent', value: c.intent ?? '' },
           { field: 'url', value: c.original_url ?? '' },
           { field: 'extraction', value: extText },
           { field: 'tag', value: tagText },

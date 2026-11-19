@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, FolderPlus, X } from 'lucide-react';
+import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
 import type { CollectionSummary } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
@@ -174,10 +174,16 @@ export function UnclassifiedPage() {
       <PageHeader
         title="待归类"
         actions={
-          <Link to="/projects" className="sp-btn--quiet">
-            <FolderPlus size={16} strokeWidth={2} aria-hidden="true" />
-            <span>管理项目</span>
-          </Link>
+          <div className="sp-row">
+            <Link to="/unclassified/triage" className="sp-btn sp-btn--primary sp-btn--sm">
+              <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
+              <span>开始整理</span>
+            </Link>
+            <Link to="/projects" className="sp-btn--quiet">
+              <FolderPlus size={16} strokeWidth={2} aria-hidden="true" />
+              <span>管理项目</span>
+            </Link>
+          </div>
         }
       />
 

@@ -39,6 +39,8 @@ const DEFAULT_CODE_MESSAGES: Record<string, string> = {
   not_found: '目标内容不存在或无权访问。',
   content_conflict: '内容已被其他操作更新，请对比后重新保存。',
   decision_conflict: '关联决定已被更新，请刷新当前状态后再操作。',
+  suggestion_conflict: '这条建议已在其他地方处理，请刷新当前状态后再操作。',
+  undo_unavailable: '撤销回执不可用或已过期，无法撤销当前更改。',
   resource_conflict: '资源版本已变更，请刷新后重试。',
   idempotency_mismatch: '同一提交键对应的请求内容不一致，请重新发起操作。',
   operation_in_progress: '相同操作正在处理中，请稍候片刻再试。',
@@ -73,6 +75,37 @@ export function getFriendlyErrorMessage(err: unknown): string {
 
 export function isApiErrorCode(err: unknown, code: string): err is ApiError {
   return err instanceof ApiError && err.code === code;
+}
+
+export function parseRetryAfterSeconds(retryAfter: string | null | undefined): number | null {
+  if (!retryAfter) return null;
+  const trimmed = retryAfter.trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) {
+    const parsed = Number.parseInt(trimmed, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+  }
+  const timestamp = Date.parse(trimmed);
+  if (!Number.isNaN(timestamp)) {
+    const diffSeconds = Math.ceil((timestamp - Date.now()) / 1000);
+    return diffSeconds > 0 ? diffSeconds : 1;
+  }
+  return null;
+}
+
+export function formatRetryAfterDuration(seconds: number): string {
+  const safe = Math.max(1, Math.ceil(seconds));
+  if (safe < 60) {
+    return `${safe} 秒`;
+  }
+  if (safe < 3600) {
+    const mins = Math.floor(safe / 60);
+    const rem = safe % 60;
+    return rem > 0 ? `${mins} 分 ${rem} 秒` : `${mins} 分钟`;
+  }
+  const hours = Math.floor(safe / 3600);
+  const mins = Math.ceil((safe % 3600) / 60);
+  return mins > 0 ? `${hours} 小时 ${mins} 分钟` : `${hours} 小时`;
 }
 
 export async function parseApiErrorResponse(response: Response): Promise<ApiError> {

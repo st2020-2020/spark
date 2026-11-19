@@ -41,7 +41,10 @@ export type DownloadGrant = components['schemas']['DownloadGrant'];
 export type CollectionCreate = components['schemas']['CollectionCreate'];
 export type CollectionUpdate = components['schemas']['CollectionUpdate'];
 export type ProjectEvidence = components['schemas']['ProjectEvidence'];
+export type ExpectedProjectSuggestion = components['schemas']['ExpectedProjectSuggestion'];
 export type ProjectAssociation = components['schemas']['ProjectAssociation'];
+export type ProjectUndoReceipt = components['schemas']['ProjectUndoReceipt'];
+export type UndoProjectDecision = components['schemas']['UndoProjectDecision'];
 export type TagAssociation = components['schemas']['TagAssociation'];
 export type AssociationUpdate = components['schemas']['AssociationUpdate'];
 export type Stage = components['schemas']['Stage'];
@@ -84,6 +87,11 @@ export type ListProjectsQuery = operations['listProjects']['parameters']['query'
 export type ListCollectionsQuery = operations['listCollections']['parameters']['query'];
 export type SearchCollectionsQuery = operations['searchCollections']['parameters']['query'];
 export type ListTagsQuery = operations['listTags']['parameters']['query'];
+export type ExportFormat = operations['exportMyData']['parameters']['query']['format'];
+export interface ExportDownloadResult {
+  blob: Blob;
+  filename: string;
+}
 export type CollectionScope = NonNullable<ListCollectionsQuery>['scope'];
 export type CollectionType = NonNullable<ListCollectionsQuery>['type'];
 export type ProjectState = Project['state'];

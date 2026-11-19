@@ -21,7 +21,7 @@ import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/for
 
 export function SettingsPage() {
   const api = useApi();
-  const { user, setUser, logout, refreshSession, aiTrialEligible, aiPlatformEnabled } = useAuth();
+  const { user, setUser, logout, aiTrialEligible, aiPlatformEnabled } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -209,7 +209,7 @@ export function SettingsPage() {
           </div>
         </section>
 
-        <DataExport key={user?.id} preview={api.isTestAdapter} onSessionExpired={() => void refreshSession()} />
+        <DataExport key={user?.id} />
 
         <section className="sp-card" aria-label="活跃设备会话">
           <h2 className="sp-card-title">活跃设备会话</h2>

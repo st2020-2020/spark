@@ -1,6 +1,14 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { ApiProvider } from '../context/ApiContext';
+import { createRealApiClient } from '../api/client';
 import { DataExport } from '../components/DataExport';
+
+function signedInApi() {
+  const api = createRealApiClient();
+  api.setCsrfToken('test-export');
+  return api;
+}
 
 afterEach(() => {
   cleanup();
@@ -20,13 +28,13 @@ it('downloads the selected format once and releases the private URL when the acc
   }
   vi.stubGlobal('URL', TestURL);
   const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-  const { unmount } = render(<DataExport preview={false} onSessionExpired={vi.fn()} />);
+  const { unmount } = render(<ApiProvider api={signedInApi()}><DataExport /></ApiProvider>);
   fireEvent.click(screen.getByRole('button', { name: 'JSON' }));
   fireEvent.click(screen.getByRole('button', { name: '下载 ZIP' }));
   const link = await screen.findByRole('link', { name: '再次下载此文件' });
   expect(link).toHaveAttribute('download', 'spark-export-20261118.zip');
   expect(fetchFile).toHaveBeenCalledExactlyOnceWith('/api/v1/me/export?format=json', expect.objectContaining({
-    credentials: 'same-origin', cache: 'no-store',
+    method: 'GET', headers: { 'X-CSRF-Token': 'test-export' }, redirect: 'error',
   }));
   expect(click).toHaveBeenCalledOnce();
   unmount();
@@ -37,7 +45,7 @@ it('honors the server retry time for both export formats', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 429, headers: { 'Retry-After': '17' } })));
   const now = Date.now();
   vi.spyOn(Date, 'now').mockReturnValue(now);
-  render(<DataExport preview={false} onSessionExpired={vi.fn()} />);
+  render(<ApiProvider api={signedInApi()}><DataExport /></ApiProvider>);
   fireEvent.click(screen.getByRole('button', { name: '下载 ZIP' }));
   const availableAt = new Date(now + 17000).toLocaleTimeString('zh-CN', { hour12: false });
   expect(await screen.findByRole('status')).toHaveTextContent(availableAt);
@@ -50,9 +58,12 @@ it('aborts a pending request on unmount and refreshes the session for an expired
   const fetchFile = vi.fn().mockResolvedValueOnce(new Response(null, { status: 401 }))
     .mockImplementationOnce(() => new Promise(() => {}));
   vi.stubGlobal('fetch', fetchFile);
-  const { unmount } = render(<DataExport preview={false} onSessionExpired={expired} />);
+  const api = signedInApi();
+  api.setUnauthorizedHandler(expired);
+  const { unmount } = render(<ApiProvider api={api}><DataExport /></ApiProvider>);
   fireEvent.click(screen.getByRole('button', { name: '下载 ZIP' }));
   await waitFor(() => expect(expired).toHaveBeenCalledOnce());
+  api.setCsrfToken('renewed-test-session');
   fireEvent.click(screen.getByRole('button', { name: '下载 ZIP' }));
   expect(screen.getByRole('button', { name: '正在准备下载…' })).toBeDisabled();
   const signal = fetchFile.mock.calls[1][1].signal as AbortSignal;

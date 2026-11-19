@@ -4483,3 +4483,328 @@ a.sp-pill:hover {
     flex-wrap: wrap;
   }
 }
+
+/* ==========================================================================
+   Triage mode (快速整理) & Inbox hint
+   ========================================================================== */
+
+.sp-triage-hint-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.sp-triage-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid var(--sp-border);
+  background: var(--sp-accent);
+  color: var(--sp-accent-fg);
+  font-size: var(--sp-text-xs);
+  font-weight: 550;
+  text-decoration: none;
+  transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+.sp-triage-hint:hover {
+  text-decoration: none;
+  border-color: var(--sp-primary);
+}
+
+.sp-triage-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.sp-triage-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sp-triage-topbar-left,
+.sp-triage-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sp-triage-title {
+  margin: 0;
+  font-family: var(--sp-font-round);
+  font-size: var(--sp-text-lg);
+  font-weight: 650;
+  color: var(--sp-fg);
+}
+
+.sp-triage-progress {
+  font-size: var(--sp-text-sm);
+  font-variant-numeric: tabular-nums;
+  color: var(--sp-muted);
+}
+
+.sp-triage-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sp-triage-deck {
+  position: relative;
+  padding-bottom: 10px;
+}
+
+.sp-triage-card {
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-panel);
+  background: var(--sp-surface);
+  box-shadow: var(--sp-shadow-composer-active);
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  touch-action: pan-y;
+  transition: transform 200ms var(--sp-ease-out), box-shadow 180ms ease;
+}
+
+.sp-triage-card--front {
+  position: relative;
+  z-index: 2;
+}
+
+.sp-triage-card--front.is-dragging {
+  transition: none;
+  cursor: grabbing;
+}
+
+.sp-triage-card--peek {
+  position: absolute;
+  inset: 10px 10px 0 10px;
+  z-index: 1;
+  background: color-mix(in srgb, var(--sp-surface) 78%, var(--sp-bg));
+  box-shadow: var(--sp-shadow-composer-rest);
+  transform: rotate(-1.1deg);
+  pointer-events: none;
+}
+
+.sp-triage-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
+}
+
+.sp-triage-remaining {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.sp-triage-card-title {
+  margin: 0;
+  font-family: var(--sp-font-round);
+  font-size: var(--sp-text-xl);
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  color: var(--sp-fg);
+}
+
+.sp-triage-card-body {
+  margin: 0;
+  font-size: var(--sp-text-body);
+  line-height: var(--sp-leading-body);
+  color: var(--sp-fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.sp-triage-intent {
+  padding: 10px 12px;
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-surface-muted);
+  font-size: var(--sp-text-sm);
+  color: var(--sp-fg);
+}
+
+.sp-triage-intent-label {
+  color: var(--sp-muted);
+  font-weight: 600;
+}
+
+.sp-triage-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--sp-border);
+}
+
+.sp-triage-suggestion-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sp-triage-card-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.sp-triage-picker {
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-card);
+  background: var(--sp-surface);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sp-triage-picker.is-highlighted {
+  border-color: var(--sp-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sp-primary) 18%, transparent);
+}
+
+.sp-triage-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sp-triage-tapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+}
+
+.sp-triage-tape {
+  border: none;
+  cursor: pointer;
+  min-height: 32px;
+  padding: 4px 14px;
+  gap: 6px;
+  font-size: var(--sp-text-sm);
+}
+
+.sp-triage-tape:hover:not(:disabled) {
+  transform: rotate(0deg) translateY(-1px);
+  filter: saturate(1.15);
+}
+
+.sp-triage-tape.is-selected {
+  outline: 2px solid var(--sp-primary);
+  outline-offset: 2px;
+  transform: rotate(0deg);
+}
+
+.sp-triage-key {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: var(--sp-radius-xs);
+  background: rgba(var(--sp-shadow-rgb), 0.12);
+  font-family: var(--sp-font-mono);
+  font-size: var(--sp-text-xs);
+  font-weight: 650;
+}
+
+.sp-triage-suggested-tag,
+.sp-triage-state-tag {
+  font-size: var(--sp-text-xs);
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--sp-radius-pill);
+  background: color-mix(in srgb, var(--sp-surface) 60%, transparent);
+}
+
+.sp-triage-picker-subactions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sp-triage-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sp-triage-shortcuts-hint {
+  text-align: center;
+  margin: 0;
+}
+
+.sp-triage-done {
+  padding: 36px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+.sp-triage-done-title {
+  margin: 0;
+  font-family: var(--sp-font-round);
+  font-size: var(--sp-text-xl);
+  font-weight: 650;
+}
+
+.sp-triage-done-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+@media (max-width: 767px) {
+  .sp-triage-card {
+    padding: 16px;
+    border-radius: var(--sp-radius-card);
+  }
+
+  .sp-triage-actions > button {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
+  .sp-triage-shortcuts-hint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sp-triage-card,
+  .sp-triage-tape,
+  .sp-triage-hint {
+    transition: none;
+  }
+
+  .sp-triage-card--peek {
+    transform: translateY(6px);
+  }
+}

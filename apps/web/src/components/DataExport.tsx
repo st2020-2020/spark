@@ -1,16 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
-import { ApiError, parseApiErrorResponse } from '../api/errors';
+import { ApiError } from '../api/errors';
+import { useApi } from '../context/ApiContext';
+import type { ExportFormat } from '../api/types';
 import { ErrorBanner } from './StateBlocks';
 
-type Format = 'markdown' | 'json';
 type DownloadFile = { href: string; name: string };
 
-export function DataExport({ preview, onSessionExpired }: {
-  preview: boolean;
-  onSessionExpired: () => void;
-}) {
-  const [format, setFormat] = useState<Format>('markdown');
+export function DataExport() {
+  const api = useApi();
+  const [format, setFormat] = useState<ExportFormat>('markdown');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [retryAt, setRetryAt] = useState<number | null>(null);
@@ -36,24 +35,15 @@ export function DataExport({ preview, onSessionExpired }: {
   }
 
   async function download() {
-    if (request.current || retryAt !== null || preview) return;
+    if (api.isTestAdapter || request.current || retryAt !== null) return;
     const controller = new AbortController();
     request.current = controller;
     clearDownload();
     setError(null);
     setPending(true);
     try {
-      const response = await fetch(`/api/v1/me/export?format=${format}`, {
-        credentials: 'same-origin', mode: 'same-origin', cache: 'no-store', redirect: 'error',
-        headers: { Accept: 'application/zip' }, signal: controller.signal,
-      });
-      if (!response.ok) throw await parseApiErrorResponse(response);
-      if (response.headers.get('Content-Type')?.split(';')[0].trim() !== 'application/zip') {
-        throw new Error('导出服务返回了意外的文件格式，请稍后重试。');
-      }
-      const blob = await response.blob();
+      const { blob, filename: name } = await api.exportMyData(format, controller.signal);
       if (controller.signal.aborted) return;
-      const name = response.headers.get('Content-Disposition')?.match(/filename="(spark-export-\d{8}\.zip)"/i)?.[1] ?? 'spark-export.zip';
       const href = URL.createObjectURL(blob);
       objectUrl.current = href;
       setFile({ href, name });
@@ -66,7 +56,6 @@ export function DataExport({ preview, onSessionExpired }: {
     } catch (cause) {
       if (controller.signal.aborted) return;
       if (cause instanceof ApiError) {
-        if (cause.status === 401) onSessionExpired();
         const seconds = Number(cause.retryAfter);
         if (cause.status === 429 && Number.isInteger(seconds) && seconds > 0 && seconds <= 600) {
           setRetryAt(Date.now() + seconds * 1000);
@@ -95,12 +84,12 @@ export function DataExport({ preview, onSessionExpired }: {
                 }}>{value === 'markdown' ? 'Markdown' : 'JSON'}</button>
             ))}
           </div>
-          <button type="button" className="sp-btn" disabled={pending || retryAt !== null || preview}
+          <button type="button" className="sp-btn" disabled={api.isTestAdapter || pending || retryAt !== null}
             onClick={() => void download()}>
             <Download size={16} aria-hidden="true" />{pending ? '正在准备下载…' : '下载 ZIP'}
           </button>
         </div>
-        {preview && <p className="sp-help">请在已登录的正式账号中导出数据。</p>}
+        {api.isTestAdapter && <p className="sp-help">连接真实服务后可导出账号数据。</p>}
         {retryAt !== null && <p className="sp-help" role="status">
           可在 {new Date(retryAt).toLocaleTimeString('zh-CN', { hour12: false })} 再次导出。
         </p>}

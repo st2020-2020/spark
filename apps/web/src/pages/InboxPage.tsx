@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
-import { SlidersHorizontal } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ArrowRight, SlidersHorizontal, Sparkles } from 'lucide-react';
 import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
 import { CollectionComposer } from '../components/CollectionComposer';
@@ -41,6 +41,16 @@ export function InboxPage() {
   });
 
   const items = collectionsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const hasUnclassifiedInLoaded = useMemo(
+    () =>
+      items.some(
+        (c) =>
+          !c.projects.some(
+            (p) => p.decision === 'manual' || p.decision === 'confirmed' || p.decision === 'auto',
+          ),
+      ),
+    [items],
+  );
   const dayGroups = useMemo(() => groupByDay(items, (c) => c.created_at), [items]);
   const headerLine = `${greeting()}，${todayLine()}`;
 
@@ -120,6 +130,16 @@ export function InboxPage() {
               清除
             </button>
           )}
+        </div>
+      )}
+
+      {!collectionsQuery.isLoading && !collectionsQuery.isError && hasUnclassifiedInLoaded && (
+        <div className="sp-triage-hint-bar">
+          <Link to="/unclassified/triage" className="sp-triage-hint">
+            <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
+            <span>有待归类的收藏，开始整理</span>
+            <ArrowRight size={14} strokeWidth={2} aria-hidden="true" />
+          </Link>
         </div>
       )}
 

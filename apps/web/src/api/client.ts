@@ -12,6 +12,8 @@ import type {
   CollectionPage,
   CollectionUpdate,
   DownloadGrant,
+  ExportDownloadResult,
+  ExportFormat,
   ExtractionList,
   FailureList,
   Health,
@@ -47,6 +49,7 @@ import type {
   TagCreate,
   TagPage,
   TagRename,
+  UndoProjectDecision,
   Upload,
   UploadGrant,
   UploadRequest,
@@ -81,6 +84,7 @@ export interface SparkApi {
   currentSession(): Promise<SessionResult>;
   updatePreferences(body: Preferences): Promise<User>;
   getUsage(): Promise<Usage>;
+  exportMyData(format: ExportFormat, signal?: AbortSignal): Promise<ExportDownloadResult>;
   listSessions(): Promise<SessionList>;
   revokeSession(id: string): Promise<void>;
 
@@ -113,7 +117,12 @@ export interface SparkApi {
   purgeCollection(id: string, body: ResourceCondition, idempotencyKey: string): Promise<Accepted>;
   setReadState(id: string, body: ReadUpdate): Promise<Collection>;
   setAIExclusion(id: string, body: AIExclusion): Promise<Collection>;
-  updateProjectDecisions(id: string, body: AssociationUpdate): Promise<Collection>;
+  updateProjectDecisions(
+    id: string,
+    body: AssociationUpdate,
+    idempotencyKey?: string,
+  ): Promise<Collection>;
+  undoProjectDecisions(id: string, body: UndoProjectDecision): Promise<Collection>;
   updateTagDecisions(id: string, body: AssociationUpdate): Promise<Collection>;
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
@@ -157,7 +166,7 @@ export function createRealApiClient(): SparkApi {
   let csrfToken: string | null = null;
   let unauthorizedHandler: (() => void) | null = null;
 
-  async function request<T>(
+  async function fetchResponse(
     method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     options?: {
@@ -167,7 +176,7 @@ export function createRealApiClient(): SparkApi {
       signal?: AbortSignal;
       notifyUnauthorized?: boolean;
     },
-  ): Promise<T> {
+  ): Promise<Response> {
     const headers: Record<string, string> = {};
     if (options?.body !== undefined) {
       headers['Content-Type'] = 'application/json';
@@ -191,6 +200,7 @@ export function createRealApiClient(): SparkApi {
       response = await fetch(`${API_BASE}${path}`, {
         method,
         credentials: 'include',
+        redirect: 'error',
         headers,
         body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
         signal: options?.signal,
@@ -214,6 +224,22 @@ export function createRealApiClient(): SparkApi {
       }
       throw apiErr;
     }
+
+    return response;
+  }
+
+  async function request<T>(
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
+    path: string,
+    options?: {
+      body?: unknown;
+      requiresCsrf?: boolean;
+      idempotencyKey?: string;
+      signal?: AbortSignal;
+      notifyUnauthorized?: boolean;
+    },
+  ): Promise<T> {
+    const response = await fetchResponse(method, path, options);
 
     if (response.status === 204) {
       return undefined as T;
@@ -330,6 +356,15 @@ export function createRealApiClient(): SparkApi {
     updatePreferences: (body) =>
       request<User>('PATCH', '/me/preferences', { body, requiresCsrf: true }),
     getUsage: () => request<Usage>('GET', '/me/usage'),
+    exportMyData: async (format, signal) => {
+      const response = await fetchResponse('GET', `/me/export${buildQuery({ format })}`, { signal, requiresCsrf: true });
+      if (response.headers.get('Content-Type')?.split(';')[0].trim() !== 'application/zip') {
+        throw new Error('导出服务返回了意外的文件格式，请稍后重试。');
+      }
+      const filename = response.headers.get('Content-Disposition')?.match(/filename="(spark-export-\d{8}\.zip)"/i)?.[1] ?? 'spark-export.zip';
+      const blob = await response.blob();
+      return { blob, filename };
+    },
     listSessions: () => request<SessionList>('GET', '/sessions'),
     revokeSession: (id) =>
       request<void>('DELETE', `/sessions/${encodeURIComponent(id)}`, { requiresCsrf: true }),
@@ -457,8 +492,14 @@ export function createRealApiClient(): SparkApi {
         body,
         requiresCsrf: true,
       }),
-    updateProjectDecisions: (id, body) =>
+    updateProjectDecisions: (id, body, idempotencyKey) =>
       request<Collection>('PATCH', `/collections/${encodeURIComponent(id)}/projects`, {
+        body,
+        requiresCsrf: true,
+        idempotencyKey,
+      }),
+    undoProjectDecisions: (id, body) =>
+      request<Collection>('POST', `/collections/${encodeURIComponent(id)}/projects/undo`, {
         body,
         requiresCsrf: true,
       }),

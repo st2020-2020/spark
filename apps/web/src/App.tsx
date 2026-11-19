@@ -21,6 +21,7 @@ import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { initAppearance } from './lib/appearance';
 import { SettingsPage } from './pages/SettingsPage';
 import { TrashPage } from './pages/TrashPage';
+import { TriagePage } from './pages/TriagePage';
 import { UnclassifiedPage } from './pages/UnclassifiedPage';
 
 function AuthenticatedShell() {
@@ -99,6 +100,7 @@ export function AppRoutes() {
         <Route path="/projects/:id" element={<ProjectDetailPage />} />
         <Route path="/collections" element={<CollectionsPage />} />
         <Route path="/unclassified" element={<UnclassifiedPage />} />
+        <Route path="/unclassified/triage" element={<TriagePage />} />
         <Route path="/collections/:id" element={<CollectionDetailPage />} />
         <Route path="/trash" element={<TrashPage />} />
         <Route path="/settings" element={<SettingsPage />} />
