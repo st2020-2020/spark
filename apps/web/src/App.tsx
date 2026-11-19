@@ -18,7 +18,8 @@ import { ProjectDetailPage } from './pages/ProjectDetailPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
-import { SettingsPage, applyThemePreference } from './pages/SettingsPage';
+import { initAppearance } from './lib/appearance';
+import { SettingsPage } from './pages/SettingsPage';
 import { TrashPage } from './pages/TrashPage';
 import { UnclassifiedPage } from './pages/UnclassifiedPage';
 
@@ -28,7 +29,7 @@ function AuthenticatedShell() {
   if (isLoading) {
     return (
       <div className="sp-auth-page">
-        <div style={{ width: '100%', maxWidth: 420 }}>
+        <div className="sp-auth-loading">
           <LoadingState message="正在恢复登录会话…" />
         </div>
       </div>
@@ -52,7 +53,7 @@ function PublicOnly({ children }: { children: ReactNode }) {
   if (isLoading) {
     return (
       <div className="sp-auth-page">
-        <div style={{ width: '100%', maxWidth: 420 }}>
+        <div className="sp-auth-loading">
           <LoadingState message="正在检查登录状态…" />
         </div>
       </div>
@@ -138,14 +139,7 @@ export function AppProviders({
 }) {
   const [queryClient] = useState(() => createAppQueryClient());
   useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem('spark:theme');
-      if (saved === 'light' || saved === 'dark') {
-        applyThemePreference(saved);
-      }
-    } catch {
-      // Ignore storage error
-    }
+    initAppearance();
   }, []);
 
   return (

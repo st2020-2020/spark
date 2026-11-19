@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Folder, Loader2, SendHorizontal, Sparkles, WifiOff, X } from 'lucide-react';
+import { ArrowUp, Check, Folder, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
 import type { SparkDocument } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
@@ -30,11 +30,14 @@ export function CollectionComposer({
   defaultProjectId,
   autoFocus = false,
   showAiEntry = !defaultProjectId,
+  variant = 'card',
   onCreated,
 }: {
   defaultProjectId?: string;
   autoFocus?: boolean;
   showAiEntry?: boolean;
+  /** "sheet" drops the outer card chrome when the composer lives inside the quick-capture sheet. */
+  variant?: 'card' | 'sheet';
   onCreated?: () => void;
 }) {
   const api = useApi();
@@ -355,12 +358,14 @@ export function CollectionComposer({
 
   return (
     <section
-      className={`sp-composer ${effectiveActivated ? 'sp-composer--active' : ''}`}
+      className={`sp-composer ${effectiveActivated ? 'sp-composer--active' : ''} ${
+        variant === 'sheet' ? 'sp-composer--sheet' : ''
+      }`}
       aria-label="快速收集"
     >
       {!isOnline && (
-        <div className="sp-banner sp-banner--warning" style={{ marginBottom: 10 }} role="status">
-          <span className="sp-row">
+        <div className="sp-banner sp-banner--warning sp-composer-notice" role="status">
+          <span className="sp-banner-icon">
             <WifiOff size={15} strokeWidth={2} aria-hidden="true" />
             <span>当前离线：已保留本地草稿，待联网后继续保存。</span>
           </span>
@@ -368,7 +373,7 @@ export function CollectionComposer({
       )}
 
       {storageWarning && (
-        <div className="sp-banner sp-banner--warning" style={{ marginBottom: 10 }} role="alert">
+        <div className="sp-banner sp-banner--warning sp-composer-notice" role="alert">
           <span>{storageWarning}</span>
         </div>
       )}
@@ -410,23 +415,22 @@ export function CollectionComposer({
 
             {projectPickerOpen && (
               <div className="sp-popover sp-popover--above" role="dialog" aria-label="选择关联项目">
-                <div className="sp-stack" style={{ gap: 6, padding: 4 }}>
+                <div className="sp-stack sp-stack--tight">
                   <input
                     ref={projectSearchInputRef}
                     type="search"
                     aria-label="筛选已有项目"
-                    className="sp-input"
+                    className="sp-input sp-picker-search"
                     placeholder="搜索项目…"
                     value={projectSearch}
                     onChange={(e) => setProjectSearch(e.target.value)}
-                    style={{ padding: '6px 8px', fontSize: 13 }}
                   />
                   {filteredProjects.length === 0 ? (
-                    <span className="sp-help" style={{ padding: '4px 6px' }}>
+                    <span className="sp-picker-empty">
                       {allProjects.length === 0 ? '暂无项目，保存后可在待归类查看' : '没有匹配的项目'}
                     </span>
                   ) : (
-                    <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                    <div className="sp-picker-list">
                       {filteredProjects.map((proj) => {
                         const checked = projectIds.includes(proj.id);
                         return (
@@ -437,23 +441,15 @@ export function CollectionComposer({
                             aria-pressed={checked}
                             onClick={() => toggleProject(proj.id)}
                           >
-                            <Folder
-                              size={15}
-                              strokeWidth={2}
-                              style={{ color: checked ? 'var(--sp-primary)' : undefined }}
-                            />
-                            <span
-                              style={{
-                                flex: 1,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {proj.name}
-                            </span>
+                            <Folder size={16} strokeWidth={2} aria-hidden="true" />
+                            <span className="sp-truncate">{proj.name}</span>
                             {checked && (
-                              <span style={{ color: 'var(--sp-primary)', fontSize: 12 }}>已选</span>
+                              <Check
+                                size={16}
+                                strokeWidth={2.4}
+                                className="sp-picker-check"
+                                aria-hidden="true"
+                              />
                             )}
                           </button>
                         );
@@ -468,18 +464,18 @@ export function CollectionComposer({
         betweenEditorAndToolbar={
           <>
             {(selectedProjects.length > 0 || aiExcluded) && (
-              <div className="sp-row" style={{ marginTop: 10 }}>
+              <div className="sp-composer-chips">
                 {selectedProjects.map((proj) => (
                   <span key={proj.id} className="sp-pill sp-pill--green">
                     <Folder size={13} strokeWidth={2} aria-hidden="true" />
                     <span>{proj.name}</span>
                     <button
                       type="button"
+                      className="sp-chip-remove"
                       aria-label={`移除项目 ${proj.name}`}
                       onClick={() => toggleProject(proj.id)}
-                      style={{ padding: '0 2px', display: 'inline-flex', alignItems: 'center' }}
                     >
-                      <X size={12} strokeWidth={2} />
+                      <X size={12} strokeWidth={2.4} aria-hidden="true" />
                     </button>
                   </span>
                 ))}
@@ -488,11 +484,11 @@ export function CollectionComposer({
                     <span>不参与 AI 整理</span>
                     <button
                       type="button"
+                      className="sp-chip-remove"
                       aria-label="取消排除 AI 整理"
                       onClick={() => setAiExcluded(false)}
-                      style={{ padding: '0 2px', display: 'inline-flex', alignItems: 'center' }}
                     >
-                      <X size={12} strokeWidth={2} />
+                      <X size={12} strokeWidth={2.4} aria-hidden="true" />
                     </button>
                   </span>
                 )}
@@ -580,7 +576,7 @@ export function CollectionComposer({
             )}
 
             {submitError && (
-              <div className="sp-banner sp-banner--error" style={{ marginTop: 10 }} role="alert">
+              <div className="sp-banner sp-banner--error sp-composer-error" role="alert">
                 <span>{submitError}</span>
                 <button type="button" className="sp-btn sp-btn--sm" onClick={handleSubmit}>
                   重试保存
@@ -651,14 +647,13 @@ export function CollectionComposer({
           <div className="sp-composer-save-right">
             {showCharCounter && (
               <span
-                className="sp-help"
-                style={{
-                  fontSize: 12,
-                  color:
-                    totalChars > MAX_TEXT_AND_INTENT_CHARS
-                      ? 'var(--sp-danger)'
-                      : 'var(--sp-muted)',
-                }}
+                className={`sp-char-count ${
+                  totalChars > MAX_TEXT_AND_INTENT_CHARS
+                    ? 'sp-char-count--over'
+                    : isNearLimit
+                      ? 'sp-char-count--near'
+                      : ''
+                }`}
               >
                 {isNearLimit
                   ? `${totalChars.toLocaleString()} / ${MAX_TEXT_AND_INTENT_CHARS.toLocaleString()}`
@@ -679,7 +674,7 @@ export function CollectionComposer({
               {saveMutation.isPending ? (
                 <Loader2 size={18} strokeWidth={2} className="sp-spin" aria-hidden="true" />
               ) : (
-                <SendHorizontal size={18} strokeWidth={2} aria-hidden="true" />
+                <ArrowUp size={19} strokeWidth={2.4} aria-hidden="true" />
               )}
             </button>
           </div>
@@ -720,7 +715,7 @@ export function CollectionComposer({
             </div>
             <button
               type="button"
-              className="sp-btn sp-btn--sm sp-ai-enable-btn"
+              className="sp-btn sp-btn--sm sp-btn--primary sp-ai-enable-btn"
               onClick={() => setAiConsentOpen(true)}
             >
               <Sparkles size={14} strokeWidth={2} aria-hidden="true" />

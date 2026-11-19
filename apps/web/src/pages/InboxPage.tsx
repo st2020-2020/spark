@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { SlidersHorizontal } from 'lucide-react';
@@ -8,7 +8,9 @@ import { CollectionComposer } from '../components/CollectionComposer';
 import { PageHeader } from '../components/PageHeader';
 import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
+import { JarScene } from '../components/Illustrations';
 import { useApi } from '../context/ApiContext';
+import { greeting, groupByDay, todayLine } from '../lib/journal';
 
 export function InboxPage() {
   const api = useApi();
@@ -39,6 +41,8 @@ export function InboxPage() {
   });
 
   const items = collectionsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const dayGroups = useMemo(() => groupByDay(items, (c) => c.created_at), [items]);
+  const headerLine = `${greeting()}，${todayLine()}`;
 
   const updateFilter = (next: { unreadOnly?: boolean; type?: CollectionType | '' }) => {
     const params = new URLSearchParams(searchParams);
@@ -56,33 +60,34 @@ export function InboxPage() {
 
   return (
     <div>
-      <PageHeader title="收件箱" />
+      <PageHeader title="收件箱" subtitle={headerLine} />
 
       <CollectionComposer autoFocus={shouldFocusComposer} />
 
       <PendingSuggestionsBanner />
 
-      <div className="sp-filter-tabs" aria-label="收件箱筛选">
+      <div className="sp-filter-bar">
+        <div className="sp-filter-tabs" aria-label="收件箱筛选">
+          <button
+            type="button"
+            className={`sp-filter-tab ${!unreadOnly ? 'active' : ''}`}
+            aria-pressed={!unreadOnly}
+            onClick={() => updateFilter({ unreadOnly: false })}
+          >
+            全部
+          </button>
+          <button
+            type="button"
+            className={`sp-filter-tab ${unreadOnly ? 'active' : ''}`}
+            aria-pressed={unreadOnly}
+            onClick={() => updateFilter({ unreadOnly: true })}
+          >
+            未读
+          </button>
+        </div>
         <button
           type="button"
-          className={`sp-filter-tab ${!unreadOnly ? 'active' : ''}`}
-          aria-pressed={!unreadOnly}
-          onClick={() => updateFilter({ unreadOnly: false })}
-        >
-          全部
-        </button>
-        <button
-          type="button"
-          className={`sp-filter-tab ${unreadOnly ? 'active' : ''}`}
-          aria-pressed={unreadOnly}
-          onClick={() => updateFilter({ unreadOnly: true })}
-        >
-          未读
-        </button>
-        <button
-          type="button"
-          className="sp-btn--quiet sp-btn--icon"
-          style={{ marginLeft: 'auto' }}
+          className="sp-btn--quiet sp-btn--icon sp-note-footer-action"
           aria-label="展开类型筛选"
           aria-expanded={showSecondaryFilter}
           onClick={() => setShowSecondaryFilter((v) => !v)}
@@ -92,16 +97,15 @@ export function InboxPage() {
       </div>
 
       {showSecondaryFilter && (
-        <div className="sp-row" style={{ marginBottom: 14 }}>
-          <label htmlFor="inbox-type-filter" className="sp-help">
+        <div className="sp-filter-panel">
+          <label htmlFor="inbox-type-filter" className="sp-filter-panel-label">
             内容类型
           </label>
           <select
             id="inbox-type-filter"
-            className="sp-select"
+            className="sp-select sp-select--compact"
             value={typeFilter ?? ''}
             onChange={(e) => updateFilter({ type: e.target.value as CollectionType | '' })}
-            style={{ width: 'auto', padding: '5px 10px', fontSize: 13 }}
           >
             <option value="">全部</option>
             <option value="text">文字</option>
@@ -145,19 +149,40 @@ export function InboxPage() {
           />
         ) : (
           <div className="sp-inbox-empty">
+            <JarScene className="sp-inbox-empty-art" />
             <p className="sp-inbox-empty-title">保存的内容会出现在这里。</p>
             <p className="sp-inbox-empty-hint">先记下来，项目可以稍后再选。</p>
           </div>
         ))}
 
-      <div className="sp-stack">
-        {items.map((col) => (
-          <CollectionCard key={col.id} collection={col} />
+      <div className="sp-journal">
+        {dayGroups.map((group) => (
+          <section key={group.stamp.key} className="sp-day">
+            <h2
+              className={`sp-day-stamp ${group.stamp.relative === '今天' ? 'sp-day-stamp--today' : ''}`}
+              aria-label={group.stamp.label}
+            >
+              <span className="sp-day-top" aria-hidden="true">
+                {group.stamp.relative || group.stamp.month}
+              </span>
+              <span className="sp-day-num" aria-hidden="true">
+                {group.stamp.day}
+              </span>
+              <span className="sp-day-week" aria-hidden="true">
+                {group.stamp.weekday}
+              </span>
+            </h2>
+            <div className="sp-note-list">
+              {group.items.map((col) => (
+                <CollectionCard key={col.id} collection={col} timeStyle="clock" />
+              ))}
+            </div>
+          </section>
         ))}
       </div>
 
       {collectionsQuery.hasNextPage && (
-        <div style={{ textAlign: 'center', marginTop: 20 }}>
+        <div className="sp-load-more">
           <button
             type="button"
             className="sp-btn"

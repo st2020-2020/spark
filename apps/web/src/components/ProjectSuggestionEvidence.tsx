@@ -15,7 +15,7 @@ export function ProjectSuggestionEvidence({
   return (
     <div className="sp-evidence-wrap">
       {association.reason && (
-        <div className="sp-help sp-break-anywhere" style={{ color: 'var(--sp-fg)' }}>
+        <div className="sp-help sp-break-anywhere">
           推荐理由：{association.reason}
         </div>
       )}

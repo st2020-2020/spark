@@ -267,16 +267,7 @@ export function RichTextEditor({
             {support.reason ?? '正文包含当前编辑器暂不支持的内容协议。'} 为防止丢失原有内容，已保留原文并禁用富文本覆写。
           </span>
         </div>
-        <pre
-          className="sp-mono"
-          style={{
-            margin: 0,
-            padding: 12,
-            background: 'var(--sp-surface-muted)',
-            borderRadius: 'var(--sp-radius-control)',
-            overflowX: 'auto',
-          }}
-        >
+        <pre className="sp-editor-raw">
           {JSON.stringify(value, null, 2)}
         </pre>
       </div>
@@ -366,7 +357,7 @@ export function RichTextEditor({
   return (
     <div>
       {serializeError && (
-        <div className="sp-banner sp-banner--error" style={{ marginBottom: 8 }}>
+        <div className="sp-banner sp-banner--error sp-composer-notice">
           <span>{serializeError}</span>
         </div>
       )}
@@ -397,13 +388,12 @@ export function RichTextEditor({
 
             {linkPanelOpen && (
               <div
-                className="sp-popover sp-popover--above"
-                style={{ minWidth: 280, padding: 10 }}
+                className="sp-popover sp-popover--above sp-popover--form"
                 role="dialog"
                 aria-label="附加链接"
               >
-                <div className="sp-stack" style={{ gap: 8 }}>
-                  <label htmlFor="sp-editor-link-input" className="sp-label" style={{ fontSize: 12 }}>
+                <div className="sp-stack sp-stack--tight">
+                  <label htmlFor="sp-editor-link-input" className="sp-popover-label">
                     正文链接地址
                   </label>
                   <input
@@ -422,10 +412,9 @@ export function RichTextEditor({
                         applyLink();
                       }
                     }}
-                    style={{ padding: '7px 10px', fontSize: 13 }}
                   />
                   {linkError && <div className="sp-error-text">{linkError}</div>}
-                  <div className="sp-row" style={{ justifyContent: 'flex-end' }}>
+                  <div className="sp-row sp-row--end">
                     <button
                       type="button"
                       className="sp-btn sp-btn--sm sp-btn--quiet"

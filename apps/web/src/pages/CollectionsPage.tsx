@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { SlidersHorizontal } from 'lucide-react';
+import { SlidersHorizontal, X } from 'lucide-react';
 import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
@@ -141,7 +141,7 @@ export function CollectionsPage() {
       />
 
       {filtersOpen && (
-        <div className="sp-row" style={{ marginBottom: 14 }}>
+        <div className="sp-filter-panel">
           <select
             aria-label="按项目筛选"
             className="sp-select sp-select--compact"
@@ -181,43 +181,43 @@ export function CollectionsPage() {
       )}
 
       {(projectId || typeFilter || readFilter) && (
-        <div className="sp-row" style={{ marginBottom: 14 }}>
+        <div className="sp-active-filters">
           {projectId && (
             <span className="sp-pill sp-pill--green">
-              项目：{activeProjectName ?? '已选项目'}
+              <span>项目：{activeProjectName ?? '已选项目'}</span>
               <button
                 type="button"
+                className="sp-chip-remove"
                 aria-label="清除项目筛选"
                 onClick={() => setFilterParam('project_id', '')}
-                style={{ padding: '0 2px' }}
               >
-                ×
+                <X size={12} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </span>
           )}
           {typeFilter && (
             <span className="sp-pill sp-pill--green">
-              类型：{typeFilter === 'text' ? '文字' : typeFilter === 'url' ? '网址' : '图片'}
+              <span>类型：{typeFilter === 'text' ? '文字' : typeFilter === 'url' ? '网址' : '图片'}</span>
               <button
                 type="button"
+                className="sp-chip-remove"
                 aria-label="清除类型筛选"
                 onClick={() => setFilterParam('type', '')}
-                style={{ padding: '0 2px' }}
               >
-                ×
+                <X size={12} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </span>
           )}
           {readFilter && (
             <span className="sp-pill sp-pill--green">
-              {readFilter === 'false' ? '未读' : '已读'}
+              <span>{readFilter === 'false' ? '未读' : '已读'}</span>
               <button
                 type="button"
+                className="sp-chip-remove"
                 aria-label="清除阅读状态筛选"
                 onClick={() => setFilterParam('read', '')}
-                style={{ padding: '0 2px' }}
               >
-                ×
+                <X size={12} strokeWidth={2.4} aria-hidden="true" />
               </button>
             </span>
           )}
@@ -228,7 +228,7 @@ export function CollectionsPage() {
       )}
 
       {debouncedQ && !listOrSearchQuery.isLoading && !listOrSearchQuery.isError && (
-        <div className="sp-help" style={{ marginBottom: 12 }} role="status">
+        <div className="sp-result-summary" role="status">
           {listOrSearchQuery.hasNextPage
             ? `搜索「${debouncedQ}」结果：已加载 ${hits.length} 条（可继续加载更多）`
             : `搜索「${debouncedQ}」结果：共 ${hits.length} 条`}
@@ -245,6 +245,7 @@ export function CollectionsPage() {
 
       {!listOrSearchQuery.isLoading && !listOrSearchQuery.isError && hits.length === 0 && (
         <EmptyState
+          art={hasFilters ? 'search' : 'jar'}
           title={hasFilters ? '没有找到相关收藏' : '还没有任何收藏'}
           description={
             hasFilters
@@ -252,7 +253,7 @@ export function CollectionsPage() {
               : '去收件箱记下你的第一条资料。'
           }
           action={
-            <div className="sp-row" style={{ justifyContent: 'center' }}>
+            <>
               {hasFilters && (
                 <button type="button" className="sp-btn" onClick={clearAllFilters}>
                   清除筛选
@@ -264,12 +265,12 @@ export function CollectionsPage() {
               <Link to="/inbox" className="sp-btn sp-btn--primary">
                 去收件箱
               </Link>
-            </div>
+            </>
           }
         />
       )}
 
-      <div className="sp-stack">
+      <div className="sp-note-list">
         {hits.map((hit) => (
           <CollectionCard
             key={hit.collection.id}
@@ -281,7 +282,7 @@ export function CollectionsPage() {
       </div>
 
       {listOrSearchQuery.hasNextPage && (
-        <div style={{ textAlign: 'center', marginTop: 20 }}>
+        <div className="sp-load-more">
           <button
             type="button"
             className="sp-btn"

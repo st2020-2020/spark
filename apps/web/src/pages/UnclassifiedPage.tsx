@@ -83,23 +83,13 @@ export function UnclassifiedPage() {
     if (suggested.length === 0 && projects.length === 0) return null;
 
     return (
-      <div
-        className="sp-stack"
-        style={{
-          gap: 8,
-          marginTop: 6,
-          padding: '10px 14px',
-          background: 'var(--sp-surface)',
-          border: '1px solid var(--sp-border)',
-          borderRadius: 'var(--sp-radius-card)',
-        }}
-      >
+      <div className="sp-classify-tray">
         {suggested.map((sug) => (
           <div key={sug.project_id} className="sp-suggestion-card sp-suggestion-card--highlighted">
-            <div className="sp-row-between">
+            <div className="sp-suggestion-head">
               <div className="sp-row">
-                <span className="sp-pill sp-pill--green">AI 建议</span>
-                <strong className="sp-break-anywhere" style={{ fontSize: 13 }}>
+                <span className="sp-pill sp-pill--spark">AI 建议</span>
+                <strong className="sp-suggestion-name sp-break-anywhere">
                   建议归入：{sug.name}
                 </strong>
               </div>
@@ -143,15 +133,14 @@ export function UnclassifiedPage() {
         ))}
 
         {projects.length > 0 && (
-          <div className="sp-row">
+          <div className="sp-classify-row">
             <select
               aria-label={`为「${col.display_title}」选择项目`}
-              className="sp-select"
+              className="sp-select sp-select--compact"
               value={chosenId}
               onChange={(e) =>
                 setSelectedProjectByCol((prev) => ({ ...prev, [col.id]: e.target.value }))
               }
-              style={{ flex: 1, minWidth: 160, padding: '6px 10px', fontSize: 13 }}
             >
               <option value="">选择要关联的项目…</option>
               {projects.map((p) => (
@@ -209,18 +198,16 @@ export function UnclassifiedPage() {
         >
           <span>待确认 AI 建议</span>
           {pendingSuggestionsCount > 0 && (
-            <span className="sp-pill sp-pill--green" style={{ marginLeft: 6, padding: '1px 7px' }}>
-              {pendingSuggestionsCount}
-            </span>
+            <span className="sp-filter-count">{pendingSuggestionsCount}</span>
           )}
         </button>
       </div>
 
       {projects.length === 0 && !projectsQuery.isLoading && (
-        <div className="sp-banner sp-banner--info" style={{ marginBottom: 14 }}>
+        <div className="sp-banner sp-banner--info sp-spaced">
           <span>
             还没有项目，尚未归类的资料会暂时保留在这里。随时可以去{' '}
-            <Link to="/projects" style={{ fontWeight: 500 }}>
+            <Link to="/projects" className="sp-strong">
               新建项目
             </Link>
             。
@@ -229,7 +216,7 @@ export function UnclassifiedPage() {
       )}
 
       {actionError && (
-        <div className="sp-banner sp-banner--error" style={{ marginBottom: 14 }} role="alert">
+        <div className="sp-banner sp-banner--error sp-spaced" role="alert">
           <span>{actionError}</span>
         </div>
       )}
@@ -267,17 +254,20 @@ export function UnclassifiedPage() {
         />
       )}
 
-      <div className="sp-stack" style={{ gap: 16 }}>
-        {items.map((col) => (
-          <div key={col.id}>
-            <CollectionCard collection={col} />
-            {renderQuickClassify(col)}
-          </div>
-        ))}
+      <div className="sp-note-list sp-note-list--loose">
+        {items.map((col) => {
+          const tray = renderQuickClassify(col);
+          return (
+            <div key={col.id} className={tray ? 'sp-classify-group' : undefined}>
+              <CollectionCard collection={col} />
+              {tray}
+            </div>
+          );
+        })}
       </div>
 
       {unclassifiedQuery.hasNextPage && (
-        <div style={{ textAlign: 'center', marginTop: 20 }}>
+        <div className="sp-load-more">
           <button
             type="button"
             className="sp-btn"

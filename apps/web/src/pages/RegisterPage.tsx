@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { getFriendlyErrorMessage } from '../api/errors';
+import { AuthLayout } from '../components/AuthLayout';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { countUnicodeChars } from '../lib/document';
@@ -89,54 +90,56 @@ export function RegisterPage() {
     }
   };
 
+  const showSimulatedCode = import.meta.env.DEV && api.isTestAdapter && simulatedCode;
+
   return (
-    <div className="sp-auth-page">
-      <div className="sp-auth-card">
-        <div className="sp-brand" style={{ padding: '0 0 10px' }}>
-          <span className="sp-brand-mark" aria-hidden="true">S</span>
-          <span>Spark</span>
-        </div>
-        <h1 className="sp-page-title" style={{ fontSize: 18, marginBottom: 4 }}>
-          Spark 邀请内测注册
-        </h1>
-        <p className="sp-help" style={{ marginTop: 0, marginBottom: 18 }}>
-          一码一人，需先验证邮箱并兑换有效邀请码。
-        </p>
-
-        {error && (
-          <div className="sp-banner sp-banner--error" style={{ marginBottom: 12 }} role="alert">
-            <span>{error}</span>
-          </div>
-        )}
-
-        {notice && (
-          <div className="sp-banner sp-banner--info" style={{ marginBottom: 12 }} role="status">
-            <span>{notice}</span>
-          </div>
-        )}
-
-        {import.meta.env.DEV && api.isTestAdapter && simulatedCode && (
-          <div className="sp-banner sp-banner--warning" style={{ marginBottom: 12 }} role="status">
-            <span>
-              [测试适配器模拟验证码]（非真实邮件）：<strong className="sp-mono">{simulatedCode}</strong>
-              ；可用测试邀请码：<span className="sp-mono">SPARK-TEST-0001</span>
-            </span>
-          </div>
-        )}
-
-        <form onSubmit={(e) => void handleSubmit(e)} className="sp-stack" style={{ gap: 14 }}>
+    <AuthLayout
+      title="Spark 邀请内测注册"
+      subtitle="一码一人，需先验证邮箱并兑换有效邀请码。"
+      messages={
+        (error || notice || showSimulatedCode) && (
+          <>
+            {error && (
+              <div className="sp-banner sp-banner--error" role="alert">
+                <span>{error}</span>
+              </div>
+            )}
+            {notice && (
+              <div className="sp-banner sp-banner--info" role="status">
+                <span>{notice}</span>
+              </div>
+            )}
+            {showSimulatedCode && (
+              <div className="sp-banner sp-banner--warning" role="status">
+                <span>
+                  [测试适配器模拟验证码]（非真实邮件）：<strong className="sp-mono">{simulatedCode}</strong>
+                  ；可用测试邀请码：<span className="sp-mono">SPARK-TEST-0001</span>
+                </span>
+              </div>
+            )}
+          </>
+        )
+      }
+      footer={
+        <>
+          <Link to="/login">已有账号？去登录</Link>
+          <Link to="/reset-password">忘记密码</Link>
+        </>
+      }
+    >
+        <form onSubmit={(e) => void handleSubmit(e)} className="sp-auth-form">
           <div className="sp-field">
             <label htmlFor="reg-email" className="sp-label">
               邮箱
             </label>
-            <div className="sp-row">
+            <div className="sp-input-group">
               <input
                 id="reg-email"
                 type="email"
                 required
                 autoComplete="email"
+                inputMode="email"
                 className="sp-input"
-                style={{ flex: 1 }}
                 placeholder="you@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -144,7 +147,6 @@ export function RegisterPage() {
               <button
                 type="button"
                 className="sp-btn"
-                style={{ minHeight: 44 }}
                 disabled={sendingCode || countdown > 0 || !email.trim()}
                 onClick={() => void handleSendCode()}
               >
@@ -216,21 +218,10 @@ export function RegisterPage() {
             </div>
           </div>
 
-          <button
-            type="submit"
-            className="sp-btn sp-btn--primary"
-            style={{ width: '100%', minHeight: 42 }}
-            disabled={submitting}
-          >
+          <button type="submit" className="sp-btn sp-btn--primary sp-btn--block" disabled={submitting}>
             {submitting ? '正在创建账号…' : '验证并注册'}
           </button>
         </form>
-
-        <div className="sp-row-between" style={{ marginTop: 18, fontSize: 13 }}>
-          <Link to="/login">已有账号？去登录</Link>
-          <Link to="/reset-password">忘记密码</Link>
-        </div>
-      </div>
-    </div>
+    </AuthLayout>
   );
 }

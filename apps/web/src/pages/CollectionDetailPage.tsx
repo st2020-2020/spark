@@ -6,9 +6,10 @@ import {
   Ban,
   Check,
   ExternalLink,
-  Folder,
   History,
   Loader2,
+  Mail,
+  MailOpen,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -37,6 +38,7 @@ import {
 import { loadDraft, removeDraft, saveDraft, useBeforeUnloadWarning } from '../lib/drafts';
 import { formatDateTime, formatRemainingTrashDays } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
+import { projectToneClass } from '../lib/projectTone';
 import {
   classifyOrganizationDisplay,
   isOrganizationActiveStatus,
@@ -363,11 +365,13 @@ export function CollectionDetailPage() {
   if (collectionQuery.isLoading) return <LoadingState message="正在加载收藏…" />;
   if (collectionQuery.isError) {
     return (
-      <div className="sp-stack">
-        <Link to={backTo} className="sp-btn--quiet sp-back-link" style={{ alignSelf: 'flex-start' }}>
-          <ArrowLeft size={16} strokeWidth={2} aria-hidden="true" />
-          <span>返回</span>
-        </Link>
+      <div>
+        <div className="sp-detail-bar">
+          <Link to={backTo} className="sp-btn--quiet sp-back-link">
+            <ArrowLeft size={18} strokeWidth={2} aria-hidden="true" />
+            <span>返回</span>
+          </Link>
+        </div>
         <ErrorBanner
           error={collectionQuery.error}
           onRetry={() => void collectionQuery.refetch()}
@@ -389,7 +393,7 @@ export function CollectionDetailPage() {
   });
   const orgPillClass =
     orgDisplay.pillTone === 'green'
-      ? 'sp-pill sp-pill--green'
+      ? 'sp-pill sp-pill--success'
       : orgDisplay.pillTone === 'warning'
         ? 'sp-pill sp-pill--warning'
         : orgDisplay.pillTone === 'danger'
@@ -397,48 +401,54 @@ export function CollectionDetailPage() {
           : 'sp-pill';
 
   return (
-    <div className="sp-stack" style={{ gap: 16 }}>
-      <div className="sp-row-between">
+    <div>
+      <div className="sp-detail-bar">
         <Link to={backTo} className="sp-btn--quiet sp-back-link">
-          <ArrowLeft size={16} strokeWidth={2} aria-hidden="true" />
+          <ArrowLeft size={18} strokeWidth={2} aria-hidden="true" />
           <span>返回</span>
         </Link>
 
         {!isInTrash && (
-          <div className="sp-row">
+          <div className="sp-detail-actions">
             <button
               type="button"
               className="sp-btn--quiet"
               onClick={() => toggleReadMutation.mutate(!collection.read_at)}
               disabled={toggleReadMutation.isPending}
             >
-              <span>{collection.read_at ? '标为未读' : '标为已读'}</span>
+              {collection.read_at ? (
+                <Mail size={16} strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <MailOpen size={16} strokeWidth={2} aria-hidden="true" />
+              )}
+              <span className="sp-collapse-label">
+                {collection.read_at ? '标为未读' : '标为已读'}
+              </span>
             </button>
             {!isEditing && (
               <button type="button" className="sp-btn--quiet" onClick={() => startEditing(collection)}>
-                <Pencil size={15} strokeWidth={2} aria-hidden="true" />
-                <span>编辑</span>
+                <Pencil size={16} strokeWidth={2} aria-hidden="true" />
+                <span className="sp-collapse-label">编辑</span>
               </button>
             )}
             <button
               type="button"
-              className="sp-btn--quiet"
-              style={{ color: 'var(--sp-danger)' }}
+              className="sp-btn--quiet sp-btn--danger-text"
               onClick={() => trashMutation.mutate()}
               disabled={trashMutation.isPending}
             >
-              <Trash2 size={15} strokeWidth={2} aria-hidden="true" />
-              <span>移入回收站</span>
+              <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
+              <span className="sp-collapse-label">移入回收站</span>
             </button>
           </div>
         )}
       </div>
 
       {isInTrash && (
-        <div className="sp-banner sp-banner--warning" role="status">
+        <div className="sp-banner sp-banner--warning sp-trash-notice" role="status">
           <div>
             <strong>此收藏位于回收站</strong>
-            <div className="sp-help" style={{ color: 'inherit', marginTop: 2 }}>
+            <div className="sp-banner-detail">
               删除于 {formatDateTime(collection.deleted_at!)} ·{' '}
               {formatRemainingTrashDays(collection.purge_after)}
             </div>
@@ -455,9 +465,9 @@ export function CollectionDetailPage() {
         </div>
       )}
 
-      {/* Reading / Editing Card: Body & Source first */}
-      <article className="sp-card">
-        <div className="sp-note-meta">
+      {/* Reading / editing card: body and source first */}
+      <article className="sp-card sp-detail-card">
+        <div className="sp-detail-meta">
           <time dateTime={collection.created_at}>{formatDateTime(collection.created_at)}</time>
           {collection.updated_at !== collection.created_at && (
             <span>· 编辑于 {formatDateTime(collection.updated_at)}</span>
@@ -467,9 +477,7 @@ export function CollectionDetailPage() {
         {!isEditing ? (
           <div>
             {collection.manual_title && (
-              <h1 className="sp-page-title sp-break-anywhere" style={{ marginBottom: 12 }}>
-                {collection.manual_title}
-              </h1>
+              <h1 className="sp-detail-title sp-break-anywhere">{collection.manual_title}</h1>
             )}
 
             <SafeDocumentView document={collection.document} />
@@ -480,7 +488,6 @@ export function CollectionDetailPage() {
                 target="_blank"
                 rel="noopener noreferrer"
                 className="sp-note-source"
-                style={{ marginTop: 16 }}
               >
                 <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
                 <span className="sp-break-anywhere">{collection.original_url}</span>
@@ -489,7 +496,7 @@ export function CollectionDetailPage() {
           </div>
         ) : (
           editDraft && (
-            <div className="sp-stack" style={{ gap: 14 }}>
+            <div className="sp-stack sp-stack--loose">
               {editError && (
                 <div className="sp-banner sp-banner--error" role="alert">
                   <span>{editError}</span>
@@ -497,43 +504,28 @@ export function CollectionDetailPage() {
               )}
 
               {conflictServerDoc && (
-                <div
-                  className="sp-card"
-                  style={{
-                    borderColor: 'var(--sp-warning)',
-                    background: 'var(--sp-warning-bg)',
-                    padding: 16,
-                  }}
-                >
-                  <h2 style={{ margin: '0 0 8px', fontSize: 15, color: 'var(--sp-warning)' }}>
+                <div className="sp-conflict">
+                  <h2 className="sp-conflict-title">
                     检测到内容版本冲突（服务器已更新至 v{conflictServerDoc.content_version}）
                   </h2>
-                  <p className="sp-help" style={{ marginTop: 0, color: 'var(--sp-fg)' }}>
-                    你的本地草稿已完整保留在右侧，请对比后选择处理方式：
-                  </p>
+                  <p className="sp-help">你的本地草稿已完整保留在右侧，请对比后选择处理方式：</p>
                   <div className="sp-conflict-grid">
-                    <div className="sp-card" style={{ padding: 14 }}>
-                      <div className="sp-label" style={{ marginBottom: 6 }}>
+                    <div className="sp-conflict-pane">
+                      <span className="sp-label">
                         服务器最新版本 (v{conflictServerDoc.content_version})
-                      </div>
+                      </span>
                       <SafeDocumentView document={conflictServerDoc.document} />
                       {conflictServerDoc.intent && (
-                        <p className="sp-help" style={{ marginTop: 8, marginBottom: 0 }}>
-                          用途：{conflictServerDoc.intent}
-                        </p>
+                        <p className="sp-help">用途：{conflictServerDoc.intent}</p>
                       )}
                     </div>
-                    <div className="sp-card" style={{ padding: 14 }}>
-                      <div className="sp-label" style={{ marginBottom: 6 }}>你的本地草稿</div>
+                    <div className="sp-conflict-pane">
+                      <span className="sp-label">你的本地草稿</span>
                       <SafeDocumentView document={editDraft.document} />
-                      {editDraft.intent && (
-                        <p className="sp-help" style={{ marginTop: 8, marginBottom: 0 }}>
-                          用途：{editDraft.intent}
-                        </p>
-                      )}
+                      {editDraft.intent && <p className="sp-help">用途：{editDraft.intent}</p>}
                     </div>
                   </div>
-                  <div className="sp-row" style={{ marginTop: 12 }}>
+                  <div className="sp-row sp-conflict-actions">
                     <button
                       type="button"
                       className="sp-btn sp-btn--sm"
@@ -611,6 +603,7 @@ export function CollectionDetailPage() {
                 <input
                   id="edit-original-url"
                   type="url"
+                  inputMode="url"
                   className="sp-input"
                   value={editDraft.originalUrl}
                   onChange={(e) =>
@@ -635,11 +628,11 @@ export function CollectionDetailPage() {
                 />
               </div>
 
-              <div className="sp-row-between">
-                <span className="sp-help">
+              <div className="sp-edit-footer">
+                <span className="sp-char-count">
                   {editCharCount.toLocaleString()} / {MAX_TEXT_AND_INTENT_CHARS.toLocaleString()} 字
                 </span>
-                <div className="sp-row">
+                <div className="sp-form-actions">
                   <button type="button" className="sp-btn" onClick={cancelEditing}>
                     取消
                   </button>
@@ -659,10 +652,10 @@ export function CollectionDetailPage() {
 
         {/* Existing attachments (kept for read protection) */}
         {collection.attachments.length > 0 && (
-          <section style={{ borderTop: '1px solid var(--sp-border)', paddingTop: 18, marginTop: 22 }}>
-            <h2 className="sp-help" style={{ margin: '0 0 10px' }}>
-              图片附件 ({collection.attachments.length})
-            </h2>
+          <section className="sp-section">
+            <div className="sp-section-head">
+              <h2 className="sp-section-title">图片附件 ({collection.attachments.length})</h2>
+            </div>
             <div className="sp-attachment-grid">
               {collection.attachments.map((att) => (
                 <AttachmentImage key={att.id} attachment={att} />
@@ -673,145 +666,143 @@ export function CollectionDetailPage() {
 
         {/* Intent */}
         {!isEditing && (
-          <section style={{ borderTop: '1px solid var(--sp-border)', paddingTop: 18, marginTop: 22 }}>
-            <h2 className="sp-help" style={{ margin: '0 0 6px' }}>
-              用途
-            </h2>
+          <section className="sp-section">
+            <div className="sp-section-head">
+              <h2 className="sp-section-title">用途</h2>
+            </div>
             <p
-              className="sp-break-anywhere"
-              style={{ margin: 0, color: collection.intent ? 'var(--sp-fg)' : 'var(--sp-muted)' }}
+              className={`sp-intent-text sp-break-anywhere ${
+                collection.intent ? '' : 'sp-intent-text--empty'
+              }`}
             >
               {collection.intent || '尚未填写'}
             </p>
           </section>
         )}
 
-        {/* Project Associations */}
-        <section style={{ borderTop: '1px solid var(--sp-border)', paddingTop: 18, marginTop: 22 }}>
-          <div className="sp-row-between" style={{ marginBottom: 10 }}>
-            <h2 className="sp-help" style={{ margin: 0 }}>
-              关联项目
-            </h2>
-            <span className="sp-help" style={{ fontSize: 12 }}>
-              决定版本 v{collection.decision_version}
-            </span>
+        {/* Project associations */}
+        <section className="sp-section">
+          <div className="sp-section-head">
+            <h2 className="sp-section-title">关联项目</h2>
+            <span className="sp-section-note">决定版本 v{collection.decision_version}</span>
           </div>
 
           {decisionError && (
-            <div className="sp-banner sp-banner--error" style={{ marginBottom: 10 }} role="alert">
+            <div className="sp-banner sp-banner--error sp-spaced" role="alert">
               <span>{decisionError}</span>
             </div>
           )}
 
-          {collection.projects.length === 0 && (
-            <p className="sp-help" style={{ margin: '0 0 10px' }}>
-              暂未关联项目
-            </p>
-          )}
+          {collection.projects.length === 0 && <p className="sp-help sp-spaced">暂未关联项目</p>}
 
-          <div className="sp-stack" style={{ gap: 10, marginBottom: 12 }}>
-            {collection.projects.map((pa) => {
-              const isSuggested = pa.decision === 'suggested';
-              const isAuto = pa.decision === 'auto';
-              return (
-                <div
-                  key={pa.project_id}
-                  id={isSuggested ? 'ai-suggestion-section' : undefined}
-                  className={`sp-suggestion-card ${
-                    isSuggested ? 'sp-suggestion-card--highlighted' : ''
-                  }`}
-                >
-                  <div className="sp-row-between">
-                    <div className="sp-row">
-                      <Link to={`/projects/${pa.project_id}`} className="sp-project-link">
-                        <Folder size={15} strokeWidth={2} aria-hidden="true" />
-                        <span>{pa.name}</span>
-                      </Link>
-                      <span
-                        className={`sp-pill ${
-                          isSuggested || isAuto || pa.decision === 'confirmed'
-                            ? 'sp-pill--green'
-                            : ''
-                        }`}
-                      >
-                        {pa.decision === 'manual' && '手动关联'}
-                        {pa.decision === 'confirmed' && '已确认'}
-                        {pa.decision === 'auto' && '自动关联'}
-                        {pa.decision === 'suggested' && 'AI 建议'}
-                        {pa.decision === 'rejected' && '已忽略'}
-                      </span>
+          {collection.projects.length > 0 && (
+            <div className="sp-assoc-list">
+              {collection.projects.map((pa) => {
+                const isSuggested = pa.decision === 'suggested';
+                const isAuto = pa.decision === 'auto';
+                return (
+                  <div
+                    key={pa.project_id}
+                    id={isSuggested ? 'ai-suggestion-section' : undefined}
+                    className={`sp-suggestion-card ${
+                      isSuggested ? 'sp-suggestion-card--highlighted' : ''
+                    }`}
+                  >
+                    <div className="sp-suggestion-head">
+                      <div className="sp-row">
+                        <Link
+                          to={`/projects/${pa.project_id}`}
+                          className={`sp-tape ${projectToneClass(pa.project_id)}`}
+                        >
+                          <span>{pa.name}</span>
+                        </Link>
+                        <span
+                          className={`sp-pill ${
+                            isSuggested
+                              ? 'sp-pill--spark'
+                              : isAuto || pa.decision === 'confirmed'
+                                ? 'sp-pill--green'
+                                : ''
+                          }`}
+                        >
+                          {pa.decision === 'manual' && '手动关联'}
+                          {pa.decision === 'confirmed' && '已确认'}
+                          {pa.decision === 'auto' && '自动关联'}
+                          {pa.decision === 'suggested' && 'AI 建议'}
+                          {pa.decision === 'rejected' && '已忽略'}
+                        </span>
+                      </div>
+
+                      {!isInTrash && (
+                        <div className="sp-row">
+                          {(isSuggested || isAuto) && (
+                            <button
+                              type="button"
+                              className="sp-btn sp-btn--sm sp-btn--primary"
+                              disabled={projectDecisionMutation.isPending}
+                              onClick={() =>
+                                projectDecisionMutation.mutate({
+                                  baseVersion: collection.decision_version,
+                                  projectId: pa.project_id,
+                                  action: 'include',
+                                })
+                              }
+                            >
+                              <Check size={14} strokeWidth={2} aria-hidden="true" />
+                              <span>{isSuggested ? '加入项目' : '确认'}</span>
+                            </button>
+                          )}
+                          {pa.decision !== 'rejected' && (
+                            <button
+                              type="button"
+                              className="sp-btn sp-btn--sm"
+                              disabled={projectDecisionMutation.isPending}
+                              onClick={() =>
+                                projectDecisionMutation.mutate({
+                                  baseVersion: collection.decision_version,
+                                  projectId: pa.project_id,
+                                  action: 'exclude',
+                                })
+                              }
+                            >
+                              <X size={14} strokeWidth={2} aria-hidden="true" />
+                              <span>{isSuggested ? '忽略' : '移除'}</span>
+                            </button>
+                          )}
+                          {pa.decision === 'rejected' && (
+                            <button
+                              type="button"
+                              className="sp-btn sp-btn--sm"
+                              disabled={projectDecisionMutation.isPending}
+                              onClick={() =>
+                                projectDecisionMutation.mutate({
+                                  baseVersion: collection.decision_version,
+                                  projectId: pa.project_id,
+                                  action: 'reset',
+                                })
+                              }
+                            >
+                              恢复自动判断
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    {!isInTrash && (
-                      <div className="sp-row">
-                        {(isSuggested || isAuto) && (
-                          <button
-                            type="button"
-                            className="sp-btn sp-btn--sm sp-btn--primary"
-                            disabled={projectDecisionMutation.isPending}
-                            onClick={() =>
-                              projectDecisionMutation.mutate({
-                                baseVersion: collection.decision_version,
-                                projectId: pa.project_id,
-                                action: 'include',
-                              })
-                            }
-                          >
-                            <Check size={13} strokeWidth={2} aria-hidden="true" />
-                            <span>{isSuggested ? '加入项目' : '确认'}</span>
-                          </button>
-                        )}
-                        {pa.decision !== 'rejected' && (
-                          <button
-                            type="button"
-                            className="sp-btn sp-btn--sm"
-                            disabled={projectDecisionMutation.isPending}
-                            onClick={() =>
-                              projectDecisionMutation.mutate({
-                                baseVersion: collection.decision_version,
-                                projectId: pa.project_id,
-                                action: 'exclude',
-                              })
-                            }
-                          >
-                            <X size={13} strokeWidth={2} aria-hidden="true" />
-                            <span>{isSuggested ? '忽略' : '移除'}</span>
-                          </button>
-                        )}
-                        {pa.decision === 'rejected' && (
-                          <button
-                            type="button"
-                            className="sp-btn sp-btn--sm"
-                            disabled={projectDecisionMutation.isPending}
-                            onClick={() =>
-                              projectDecisionMutation.mutate({
-                                baseVersion: collection.decision_version,
-                                projectId: pa.project_id,
-                                action: 'reset',
-                              })
-                            }
-                          >
-                            恢复自动判断
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    <ProjectSuggestionEvidence association={pa} />
                   </div>
-
-                  <ProjectSuggestionEvidence association={pa} />
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
 
           {!isInTrash && availableProjects.length > 0 && (
-            <div className="sp-row">
+            <div className="sp-classify-row">
               <select
                 aria-label="手动添加到项目"
                 className="sp-select sp-select--compact"
                 value={selectedProjectToAdd}
                 onChange={(e) => setSelectedProjectToAdd(e.target.value)}
-                style={{ minWidth: 180 }}
               >
                 <option value="">添加到项目…</option>
                 {availableProjects.map((p) => (
@@ -842,15 +833,13 @@ export function CollectionDetailPage() {
           )}
         </section>
 
-        {/* AI Organization Status, Controls & Results */}
-        <section
-          aria-label="AI 自动整理"
-          style={{ borderTop: '1px solid var(--sp-border)', paddingTop: 18, marginTop: 22 }}
-        >
+        {/* AI organization status, controls and results */}
+        <section aria-label="AI 自动整理" className="sp-section">
           <div className="sp-org-box">
-            <div className="sp-row-between">
+            <div className="sp-org-head">
               <div className="sp-row">
-                <h2 className="sp-help" style={{ margin: 0, color: 'var(--sp-fg)', fontWeight: 500 }}>
+                <h2 className="sp-org-title">
+                  <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
                   AI 自动整理
                 </h2>
                 <span className={orgPillClass}>
@@ -871,12 +860,12 @@ export function CollectionDetailPage() {
                   >
                     {collection.ai_excluded ? (
                       <>
-                        <Sparkles size={13} strokeWidth={2} aria-hidden="true" />
+                        <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
                         <span>允许 AI 整理</span>
                       </>
                     ) : (
                       <>
-                        <Ban size={13} strokeWidth={2} aria-hidden="true" />
+                        <Ban size={14} strokeWidth={2} aria-hidden="true" />
                         <span>不参与 AI 整理</span>
                       </>
                     )}
@@ -890,7 +879,7 @@ export function CollectionDetailPage() {
                       onClick={() => restartOrgMutation.mutate()}
                     >
                       <RefreshCw
-                        size={13}
+                        size={14}
                         strokeWidth={2}
                         className={restartOrgMutation.isPending ? 'sp-spin' : undefined}
                         aria-hidden="true"
@@ -904,12 +893,12 @@ export function CollectionDetailPage() {
               )}
             </div>
 
-            <p className="sp-help" style={{ margin: 0 }}>
+            <p className="sp-help sp-org-desc">
               {orgDisplay.description}
               {orgDisplay.kind === 'disabled' && aiTrialEligible && aiPlatformEnabled && (
                 <>
                   {' '}
-                  <Link to="/settings" style={{ fontWeight: 500 }}>
+                  <Link to="/settings" className="sp-strong">
                     前往设置开启
                   </Link>
                 </>
@@ -938,22 +927,22 @@ export function CollectionDetailPage() {
             )}
 
             {(collection.organization.generated_title || collection.organization.summary) && (
-              <div className="sp-org-summary-card sp-stack" style={{ gap: 8 }}>
+              <div className="sp-org-summary-card">
                 {collection.organization.generated_title && (
                   <div>
-                    <div className="sp-help" style={{ marginBottom: 2 }}>
+                    <div className="sp-org-field-label">
                       AI 建议标题
                       {collection.manual_title ? '（当前展示你的自定义标题）' : ''}
                     </div>
-                    <div className="sp-break-anywhere" style={{ fontWeight: 500, fontSize: 14 }}>
+                    <div className="sp-org-field-value sp-org-field-value--title sp-break-anywhere">
                       {collection.organization.generated_title}
                     </div>
                   </div>
                 )}
                 {collection.organization.summary && (
                   <div>
-                    <div className="sp-help" style={{ marginBottom: 2 }}>AI 摘要</div>
-                    <p className="sp-break-anywhere" style={{ margin: 0, fontSize: 14 }}>
+                    <div className="sp-org-field-label">AI 摘要</div>
+                    <p className="sp-org-field-value sp-break-anywhere">
                       {collection.organization.summary}
                     </p>
                   </div>
@@ -963,17 +952,17 @@ export function CollectionDetailPage() {
           </div>
         </section>
 
-        {/* Secondary / Collapsed Extractions & Revisions */}
-        <section style={{ borderTop: '1px solid var(--sp-border)', paddingTop: 14, marginTop: 18 }}>
+        {/* Secondary / collapsed extractions and revisions */}
+        <section className="sp-section sp-section--quiet">
           <details
             className="sp-details"
             open={secondaryExpanded}
             onToggle={(e) => setSecondaryExpanded((e.target as HTMLDetailsElement).open)}
           >
             <summary>提取内容与修订历史</summary>
-            <div className="sp-stack" style={{ gap: 10, paddingTop: 10 }}>
+            <div className="sp-stack sp-details-body">
               {extractionsQuery.isSuccess && extractionsQuery.data.items.length > 0 && (
-                <div className="sp-stack" style={{ gap: 6 }}>
+                <div className="sp-stack sp-stack--tight">
                   {extractionsQuery.data.items.map((ext) => (
                     <div key={ext.id} className="sp-help">
                       {ext.source_kind === 'url' ? '网页正文' : '图片文字'}：{ext.text || ext.status}
@@ -1013,17 +1002,13 @@ export function CollectionDetailPage() {
           )}
         <div className="sp-stack">
           {(revisionsQuery.data?.items ?? []).map((rev) => (
-            <div key={rev.content_version} className="sp-card" style={{ padding: 14 }}>
-              <div className="sp-row-between" style={{ marginBottom: 6 }}>
+            <div key={rev.content_version} className="sp-conflict-pane">
+              <div className="sp-row-between sp-revision-head">
                 <strong>内容 v{rev.content_version}</strong>
-                <span className="sp-help">{formatDateTime(rev.created_at)}</span>
+                <span className="sp-help sp-tabular">{formatDateTime(rev.created_at)}</span>
               </div>
               <SafeDocumentView document={rev.document} />
-              {rev.intent && (
-                <p className="sp-help" style={{ marginTop: 6, marginBottom: 0 }}>
-                  用途：{rev.intent}
-                </p>
-              )}
+              {rev.intent && <p className="sp-help">用途：{rev.intent}</p>}
             </div>
           ))}
         </div>

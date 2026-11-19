@@ -65,7 +65,7 @@ export function PendingSuggestionsBanner() {
       data-testid="pending-suggestions-banner"
     >
       <div className="sp-pending-suggestions-head">
-        <div className="sp-row" style={{ gap: 8, minWidth: 0 }}>
+        <div className="sp-pending-suggestions-lead">
           <span className="sp-pending-suggestions-icon" aria-hidden="true">
             <Sparkles size={14} strokeWidth={2} />
           </span>
@@ -73,7 +73,7 @@ export function PendingSuggestionsBanner() {
             有 <strong>{pendingSuggestionsCount}</strong> 条 AI 项目建议待确认
           </span>
         </div>
-        <div className="sp-row" style={{ gap: 6, flexShrink: 0 }}>
+        <div className="sp-pending-suggestions-actions">
           <button
             type="button"
             className="sp-btn sp-btn--sm"
@@ -115,8 +115,8 @@ export function PendingSuggestionsBanner() {
                       : col.excerpt}
                   </Link>
                   {firstSuggested && (
-                    <div className="sp-row" style={{ gap: 6, flexWrap: 'wrap' }}>
-                      <span className="sp-pill sp-pill--green">
+                    <div className="sp-row">
+                      <span className="sp-pill sp-pill--spark">
                         建议归入：{firstSuggested.name}
                       </span>
                     </div>
