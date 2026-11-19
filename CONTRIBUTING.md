@@ -79,7 +79,7 @@ gh pr create --base main --fill
 - **一个 PR 一个主题**。代码改动建议控制在 400 行以内（不含生成文件、锁文件与文档）；更大的改动按任务拆分。
 - **标题**：与提交摘要格式相同，例如 `feat(web): add triage mode for unclassified notes`。
 - **描述**：按 [PR 模板](.github/pull_request_template.md) 填写：改了什么、为什么、如何验证、风险与回滚、同步了哪些文档。
-- **检查**：在描述中贴出实际运行的检查结果。当前仓库没有 CI，以下检查由提交者在本地或 OrbStack 容器中执行：
+- **检查**：在描述中贴出实际运行的检查结果。[Verify Spark](.github/workflows/verify.yml) 在面向 main 的 PR 和 main 推送上运行密钥扫描、Web 类型生成/测试/构建及真实 PostgreSQL 后端测试。CI 使用 GitHub 托管的临时 runner、只读仓库权限和一次性测试库。桌面、Android 真机及交互联调仍按改动范围执行。
 
 | 涉及模块 | 必须通过 |
 | --- | --- |
@@ -90,6 +90,8 @@ gh pr create --base main --fill
 | 文档 | 相对链接有效 |
 
 - **文档**：行为、接口或配置变化时，同一 PR 内更新对应的事实来源（见 [docs/README.md](docs/README.md)）。
+
+密钥扫描覆盖 PR 引入的提交并隐藏匹配值。推送公开分支前先在本地扫描同一提交范围。发现真实凭证时应先撤销或轮换，再处理 Git 历史。只报告文件、规则、处理状态。工作流使用完整提交固定第三方 Action，凭证不持久化到检出目录。禁止向 PR runner 提供部署 SSH 身份、云密钥或生产配置文件。
 
 ### 4.2 评审
 
@@ -126,7 +128,8 @@ git tag -a v0.2.0 -m "Spark v0.2.0"
 git push origin v0.2.0
 ```
 
-5. 在 GitHub 创建 Release，说明取自 CHANGELOG 对应条目；按 [deploy/README.md](deploy/README.md) 部署。
+5. 人工确认发布 SHA 属于已评审的主干、对应检查通过。PR CI 没有生产发布身份；生产操作员用独立 SSH 身份发布，先预检并验证备份，切换后核对 API、Worker 和 Web。失败按部署说明回退。
+6. 在 GitHub 创建 Release，说明取自 CHANGELOG 对应条目；按 [deploy/README.md](deploy/README.md) 部署。
 
 ## 7. 紧急修复
 

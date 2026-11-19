@@ -4,3 +4,9 @@ dist
 .env.local
 playwright-report
 test-results
+
+.env*
+*.pem
+*.key
+*.dump
+.local
