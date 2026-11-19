@@ -1,0 +1,6 @@
+<resources>
+    <!-- Keep both capture and Web controls within system bars on our target SDK. -->
+    <style name="SparkActivityTheme" parent="SparkTheme">
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+</resources>

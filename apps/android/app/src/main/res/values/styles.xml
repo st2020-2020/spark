@@ -1,0 +1,10 @@
+<resources>
+    <style name="SparkTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">#287B59</item>
+        <item name="android:windowBackground">#FFFFFF</item>
+        <item name="android:statusBarColor">#224A38</item>
+        <item name="android:navigationBarColor">#17251D</item>
+    </style>
+    <style name="SparkActivityTheme" parent="SparkTheme" />
+</resources>
