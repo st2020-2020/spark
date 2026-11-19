@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
 import { AIConsentModal } from '../components/AIConsentModal';
+import { DataExport } from '../components/DataExport';
 import { PageHeader } from '../components/PageHeader';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
@@ -20,7 +21,7 @@ import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/for
 
 export function SettingsPage() {
   const api = useApi();
-  const { user, setUser, logout, aiTrialEligible, aiPlatformEnabled } = useAuth();
+  const { user, setUser, logout, refreshSession, aiTrialEligible, aiPlatformEnabled } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -207,6 +208,8 @@ export function SettingsPage() {
             ) : null}
           </div>
         </section>
+
+        <DataExport key={user?.id} preview={api.isTestAdapter} onSessionExpired={() => void refreshSession()} />
 
         <section className="sp-card" aria-label="活跃设备会话">
           <h2 className="sp-card-title">活跃设备会话</h2>
