@@ -486,7 +486,9 @@ describe('Platform AI organization & UI states', () => {
       },
       'create-col-stale-1111111111',
     );
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await waitFor(async () => {
+      expect((await adapter.getCollection(col.id)).has_suggestion).toBe(true);
+    });
 
     renderApp(['/inbox'], adapter);
     const pendingBanner = await screen.findByTestId('pending-suggestions-banner');
@@ -522,6 +524,8 @@ describe('Platform AI organization & UI states', () => {
     await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
     await screen.findByRole('heading', { name: '登录你的空间' });
 
+    expect(adapter.getOrganizationSubscriberCount()).toBe(0);
+
     // Register a second account and verify same collection_id event is NOT suppressed by Account A's dedupe history
     const verif = await adapter.sendVerification({ email: 'userb@spark.local', purpose: 'register' });
     const code = adapter.getLastVerificationCode('userb@spark.local')!;
@@ -536,6 +540,8 @@ describe('Platform AI organization & UI states', () => {
     cleanup();
     renderApp(['/inbox'], adapter);
     await screen.findByRole('heading', { name: '收件箱' });
+    // The inbox can render before the effect that subscribes this session runs.
+    await waitFor(() => expect(adapter.getOrganizationSubscriberCount()).toBe(1));
     expect(screen.queryByText('跨标签防覆盖项目测试文档')).not.toBeInTheDocument();
 
     act(() => {

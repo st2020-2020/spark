@@ -30,6 +30,7 @@
 
   --sp-radius-xs: 6px;
   --sp-radius-control: 10px;
+  --sp-input-height: 42px;
   --sp-radius-card: 14px;
   --sp-radius-panel: 18px;
   --sp-radius-pill: 999px;
@@ -80,6 +81,12 @@
 
   --sp-topbar-h: 56px;
   --sp-tabbar-h: 62px;
+}
+
+@media (max-width: 767px) {
+  :root {
+    --sp-input-height: 48px;
+  }
 }
 
 :root[data-mode="dark"] {

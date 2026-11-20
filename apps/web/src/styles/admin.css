@@ -35,6 +35,22 @@
   color: var(--sp-danger);
 }
 
-.sp-admin input[type="file"] {
-  max-width: 100%;
+.sp-admin-file-picker {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.sp-admin-file-picker .sp-help {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.sp-row.sp-admin-budget-controls {
+  align-items: flex-end;
+}
+
+.sp-admin-budget-controls > .sp-btn,
+.sp-admin-file-picker > .sp-btn {
+  height: var(--sp-input-height);
 }
