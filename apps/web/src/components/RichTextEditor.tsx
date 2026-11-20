@@ -33,6 +33,32 @@ import {
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
 import { extractFilesFromDataTransfer } from '../lib/uploads';
 
+// Pasted HTML uses these same fixed schemas before any editor update is serialized.
+const DocumentLink = Link.extend({
+  addAttributes() {
+    return { href: { default: null } };
+  },
+}).configure({
+  openOnClick: false,
+  autolink: false,
+  protocols: ['http', 'https'],
+  isAllowedUri: isValidHttpUrl,
+});
+
+const DocumentOrderedList = OrderedList.extend({
+  addAttributes() {
+    return {
+      start: {
+        default: 1,
+        parseHTML: (element: HTMLElement) => {
+          const value = Number(element.getAttribute('start'));
+          return Number.isInteger(value) && value >= 1 && value <= 10000 ? value : 1;
+        },
+      },
+    };
+  },
+});
+
 interface RichTextEditorProps {
   value: SparkDocument;
   onChange: (doc: SparkDocument) => void;
@@ -113,19 +139,14 @@ export function RichTextEditor({
       HardBreak,
       Bold,
       Highlight.configure({ multicolor: false }),
-      Link.configure({
-        openOnClick: false,
-        autolink: false,
-        protocols: ['http', 'https'],
-        validate: (href) => isValidHttpUrl(href),
-      }),
+      DocumentLink,
       BulletList,
-      OrderedList,
+      DocumentOrderedList,
       ListItem,
       History,
       Placeholder.configure({ placeholder }),
     ],
-    content: support.supported ? value.content : EMPTY_DOCUMENT.content,
+    content: support.supported ? support.document.content : EMPTY_DOCUMENT.content,
     editorProps: {
       attributes: {
         role: 'textbox',
@@ -177,9 +198,9 @@ export function RichTextEditor({
     if (!editor || !support.supported) return;
     const current = sanitizeDocumentRoot(editor.getJSON() as RawEditorNode);
     const currentJson = current.ok ? JSON.stringify(current.document) : '';
-    const nextJson = JSON.stringify(value);
+    const nextJson = JSON.stringify(support.document);
     if (currentJson !== nextJson) {
-      editor.commands.setContent(value.content, false);
+      editor.commands.setContent(support.document.content, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resetToken, editor]);
