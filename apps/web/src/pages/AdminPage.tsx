@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { InvitePreview, InviteCode, User } from '../api/types';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
@@ -47,6 +47,8 @@ export function AdminPage() {
   const queryClient = useQueryClient();
 
   const [batchName, setBatchName] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [csvFilename, setCsvFilename] = useState('');
   const [readingFile, setReadingFile] = useState(false);
   const [now, setNow] = useState(Date.now);
   const [csvText, setCsvText] = useState('');
@@ -144,6 +146,7 @@ export function AdminPage() {
       setPreviewResult(null);
       setBatchName('');
       setCsvText('');
+      setCsvFilename('');
       setPreviewKey(generateIdempotencyKey());
       pushToast({ message: `已导入批次「${batch.name}」，共 ${batch.total_codes} 个邀请码` });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'invite-batches'] });
@@ -230,6 +233,7 @@ export function AdminPage() {
     reader.onerror = () => setImportError('无法读取 CSV 文件，请重新选择或粘贴文件内容。');
     reader.onload = () => {
       setCsvText(String(reader.result ?? ''));
+      setCsvFilename(file.name);
     };
     reader.readAsText(file, 'utf-8');
   };
@@ -299,11 +303,33 @@ export function AdminPage() {
                 />
               </div>
 
-              <div className="sp-field">
+              <div className="sp-field sp-admin-grow">
                 <label htmlFor="admin-csv-file" className="sp-label">
-                  选择 CSV 文件
+                  邀请码文件
                 </label>
-                <input disabled={importBusy} id="admin-csv-file" type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
+                <input
+                  hidden
+                  ref={fileInput}
+                  disabled={importBusy}
+                  id="admin-csv-file"
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={handleCsvFile}
+                />
+                <div className="sp-admin-file-picker">
+                  <button
+                    type="button"
+                    className="sp-btn"
+                    disabled={importBusy}
+                    aria-describedby="admin-csv-filename"
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    选择 CSV 文件
+                  </button>
+                  <span id="admin-csv-filename" className="sp-help" role="status">
+                    {readingFile ? '正在读取文件…' : csvFilename || '未选择文件'}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -321,6 +347,7 @@ export function AdminPage() {
                 value={csvText}
                 onChange={(e) => {
                   setCsvText(e.target.value);
+                  setCsvFilename('');
                   setPreviewResult(null);
                   setPreviewKey(generateIdempotencyKey());
                 }}
@@ -621,7 +648,7 @@ export function AdminPage() {
               ))}
             {budgetsQuery.data && (
               <div className="sp-stack sp-stack--tight">
-                <div className="sp-row">
+                <div className="sp-row sp-admin-budget-controls">
                   <div className="sp-field sp-admin-grow">
                     <label htmlFor="budget-platform" className="sp-label">
                       平台日预算 (units, {formatUnitsToYuan(Number(budgetPlatform) || 0)})
@@ -665,7 +692,6 @@ export function AdminPage() {
                   <button
                     type="button"
                     className="sp-btn sp-btn--primary"
-
                     disabled={saveBudgetMutation.isPending}
                     onClick={() => saveBudgetMutation.mutate()}
                   >

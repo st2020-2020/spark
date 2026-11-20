@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
@@ -254,26 +254,46 @@ it('keeps CSV after an expired preview and obtains a fresh preview for the uncha
   const api = createTestAdapter();
   await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
   const preview = vi.spyOn(api, 'previewInviteImport');
-  const commit = vi.spyOn(api, 'commitInviteImport').mockRejectedValueOnce(
-    new ApiError({ status: 410, code: 'import_expired', message: '预览过期，请重新校验。' }),
-  );
+  let finishCommit!: () => void;
+  const inFlight = new Promise<void>((resolve) => { finishCommit = resolve; });
+  const commit = vi.spyOn(api, 'commitInviteImport').mockImplementationOnce(async () => {
+    await inFlight;
+    throw new ApiError({ status: 410, code: 'import_expired', message: '预览过期，请重新校验。' });
+  });
   renderAdminApp(api);
   const csv = 'code,expires_at,max_uses\nFIRST-INVITE-01,,1';
   await user.type(await screen.findByLabelText('批次名称'), '邀请内测');
-  await user.upload(screen.getByLabelText('选择 CSV 文件'), new File([csv], 'beta.csv', { type: 'text/csv' }));
+  const choose = screen.getByRole('button', { name: '选择 CSV 文件' });
+  expect(choose).toHaveAccessibleDescription('未选择文件');
+  const file = new File([csv], 'beta.csv', { type: 'text/csv' });
+  const input = screen.getByLabelText('邀请码文件');
+  await user.upload(input, file);
+  await waitFor(() => expect(screen.getByLabelText('CSV 内容')).toHaveValue(csv));
+  expect(choose).toHaveAccessibleDescription('beta.csv');
+  fireEvent(input, new Event('cancel', { bubbles: true }));
+  expect(choose).toHaveAccessibleDescription('beta.csv');
+  expect(screen.getByLabelText('CSV 内容')).toHaveValue(csv);
+  await user.clear(screen.getByLabelText('CSV 内容'));
+  expect(choose).toHaveAccessibleDescription('未选择文件');
+  await user.upload(input, file);
   await waitFor(() => expect(screen.getByLabelText('CSV 内容')).toHaveValue(csv));
   const validate = screen.getByRole('button', { name: '预览校验' });
   const confirm = screen.getByRole('button', { name: '确认导入' });
   await user.click(validate);
   await waitFor(() => expect(confirm).toBeEnabled());
   await user.click(confirm);
+  expect(choose).toBeDisabled();
+  expect(input).toBeDisabled();
+  finishCommit();
   await screen.findByText('预览过期，请重新校验。');
+  expect(choose).toBeEnabled();
   expect(confirm).toBeDisabled();
   expect(screen.getByLabelText('CSV 内容')).toHaveValue(csv);
   await user.click(validate);
   await waitFor(() => expect(confirm).toBeEnabled());
   await user.click(confirm);
   await screen.findByText('邀请内测');
+  expect(choose).toHaveAccessibleDescription('未选择文件');
   expect(preview.mock.calls[0][1]).not.toBe(preview.mock.calls[1][1]);
   expect(commit.mock.calls[0][0]).not.toBe(commit.mock.calls[1][0]);
 });

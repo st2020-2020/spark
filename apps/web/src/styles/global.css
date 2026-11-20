@@ -3018,7 +3018,7 @@ a.sp-tape:hover {
 
 .sp-input,
 .sp-select {
-  height: 42px;
+  height: var(--sp-input-height);
 }
 
 .sp-select {
@@ -3104,7 +3104,6 @@ p.sp-help {
 
   .sp-input,
   .sp-select {
-    height: 48px;
     border-radius: 12px;
   }
 
