@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import type { SparkDocument } from '../api/types';
+import { inspectSparkDocumentSupport } from './document';
 
 export interface CollectionDraft {
   collectionId: string;
@@ -20,12 +21,16 @@ function buildKey(userId: string, scope: string): string {
   return `${DRAFT_PREFIX}:${userId}:${scope}`;
 }
 
-export function loadDraft<T>(userId: string, scope: string): { data: T | null; error?: string } {
+export function loadDraft<T extends { document: SparkDocument }>(userId: string, scope: string): { data: T | null; error?: string } {
   if (!userId) return { data: null };
   try {
     const raw = window.localStorage.getItem(buildKey(userId, scope));
     if (!raw) return { data: null };
-    return { data: JSON.parse(raw) as T };
+    const draft = JSON.parse(raw) as T;
+    const checked = inspectSparkDocumentSupport(draft.document);
+    // Keep future document versions intact for the existing read-only fallback.
+    if (checked.supported) draft.document = checked.document;
+    return { data: draft };
   } catch {
     return { data: null, error: '无法读取本地草稿存储（浏览器存储受限或数据已损坏）。' };
   }

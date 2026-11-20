@@ -1,0 +1,15 @@
+services:
+  mail-worker:
+    environment:
+      SPARK_SMTP_HOST: ${SPARK_SMTP_HOST:-}
+      SPARK_SMTP_TLS: ${SPARK_SMTP_TLS:-implicit}
+      SPARK_SMTP_PORT: ${SPARK_SMTP_PORT:-}
+      SPARK_SMTP_FROM: ${SPARK_SMTP_FROM:-}
+      SPARK_SMTP_CREDENTIALS_FILE: /run/secrets/spark-smtp-credentials.json
+    volumes:
+      - type: bind
+        source: ${SPARK_SMTP_CREDENTIALS_HOST_PATH:-/etc/spark/mail/smtp-credentials.json}
+        target: /run/secrets/spark-smtp-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false

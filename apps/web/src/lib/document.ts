@@ -58,7 +58,9 @@ export function isValidHttpUrl(rawUrl: string): boolean {
   }
 }
 
-export function inspectSparkDocumentSupport(raw: unknown): { supported: boolean; reason?: string } {
+export function inspectSparkDocumentSupport(raw: unknown):
+  | { supported: true; document: SparkDocument }
+  | { supported: false; reason: string } {
   if (!raw || typeof raw !== 'object') {
     return { supported: false, reason: '文档结构无效' };
   }
@@ -70,7 +72,7 @@ export function inspectSparkDocumentSupport(raw: unknown): { supported: boolean;
   if (!result.ok) {
     return { supported: false, reason: result.message };
   }
-  return { supported: true };
+  return { supported: true, document: result.document };
 }
 
 function sanitizeMarks(

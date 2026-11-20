@@ -88,5 +88,5 @@ export function SafeDocumentView({ document }: { document: SparkDocument }) {
     );
   }
 
-  return <div className="sp-richtext">{renderBlocks(document.content.content)}</div>;
+  return <div className="sp-richtext">{renderBlocks(support.document.content.content)}</div>;
 }

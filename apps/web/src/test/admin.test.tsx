@@ -86,7 +86,7 @@ describe('AdminPage T11 read-only users & independent module degradation', () =>
     const userSection = await screen.findByRole('region', { name: '用户管理' });
     await within(userSection).findByText('alpha@spark.local');
     expect(within(userSection).getByText('beta@spark.local')).toBeInTheDocument();
-    expect(within(userSection).getByText('只读账号运行元数据')).toBeInTheDocument();
+    expect(within(userSection).getByText('可查看账号角色、登录状态与 AI 整理设置')).toBeInTheDocument();
 
     // Unimplemented account write buttons must be removed
     expect(screen.queryByRole('button', { name: /禁用账号|恢复账号/ })).not.toBeInTheDocument();
@@ -135,8 +135,8 @@ describe('AdminPage T11 read-only users & independent module degradation', () =>
     // Invite batches & codes still work independently
     const inviteSection = screen.getByRole('region', { name: '邀请码批次列表' });
     await within(inviteSection).findByText('测试适配器初始批次');
-    await user.click(within(inviteSection).getByRole('button', { name: '查看码元数据' }));
-    await within(inviteSection).findByText('批次邀请码元数据（原始码不回显）');
+    await user.click(within(inviteSection).getByRole('button', { name: '查看邀请码' }));
+    await within(inviteSection).findByText('测试适配器初始批次 · 邀请码状态');
 
     // Budgets still load and save independently
     const budgetPlatform = await screen.findByLabelText(/平台日预算/);
@@ -223,4 +223,57 @@ describe('AdminPage T11 read-only users & independent module degradation', () =>
       expect(listUsersSpy).toHaveBeenCalledTimes(6);
     });
   }, 15000);
+});
+
+it('shows effective redemption states and updates them after the administrator disables a batch', async () => {
+  const user = userEvent.setup();
+  const api = createTestAdapter();
+  await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+  const batch = (await api.listInviteBatches()).items[0];
+  const base = { batch_id: batch.id, max_uses: 1, used_count: 0, disabled: false };
+  vi.spyOn(api, 'listInviteCodes').mockResolvedValue({ items: [
+    { ...base, id: 'used-code', used_count: 1 },
+    { ...base, id: 'expired-code', expires_at: '2000-01-01T00:00:00Z' },
+    { ...base, id: 'unused-code' },
+  ] });
+  renderAdminApp(api);
+  const section = within(await screen.findByRole('region', { name: '邀请码批次列表' }));
+  await user.click(await section.findByRole('button', { name: '查看邀请码' }));
+  for (const state of ['已过期', '已兑换']) {
+    const row = (await section.findByRole('cell', { name: state })).closest('tr')!;
+    expect(within(row).getByRole('button', { name: '禁用' })).toBeDisabled();
+  }
+  await section.findByText('可用');
+  await user.click(section.getByRole('button', { name: '禁用批次' }));
+  expect(await section.findByText('批次已禁用')).toBeVisible();
+  expect(section.queryByText('可用')).toBeNull();
+});
+
+it('keeps CSV after an expired preview and obtains a fresh preview for the unchanged file', async () => {
+  const user = userEvent.setup();
+  const api = createTestAdapter();
+  await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+  const preview = vi.spyOn(api, 'previewInviteImport');
+  const commit = vi.spyOn(api, 'commitInviteImport').mockRejectedValueOnce(
+    new ApiError({ status: 410, code: 'import_expired', message: '预览过期，请重新校验。' }),
+  );
+  renderAdminApp(api);
+  const csv = 'code,expires_at,max_uses\nFIRST-INVITE-01,,1';
+  await user.type(await screen.findByLabelText('批次名称'), '邀请内测');
+  await user.upload(screen.getByLabelText('选择 CSV 文件'), new File([csv], 'beta.csv', { type: 'text/csv' }));
+  await waitFor(() => expect(screen.getByLabelText('CSV 内容')).toHaveValue(csv));
+  const validate = screen.getByRole('button', { name: '预览校验' });
+  const confirm = screen.getByRole('button', { name: '确认导入' });
+  await user.click(validate);
+  await waitFor(() => expect(confirm).toBeEnabled());
+  await user.click(confirm);
+  await screen.findByText('预览过期，请重新校验。');
+  expect(confirm).toBeDisabled();
+  expect(screen.getByLabelText('CSV 内容')).toHaveValue(csv);
+  await user.click(validate);
+  await waitFor(() => expect(confirm).toBeEnabled());
+  await user.click(confirm);
+  await screen.findByText('邀请内测');
+  expect(preview.mock.calls[0][1]).not.toBe(preview.mock.calls[1][1]);
+  expect(commit.mock.calls[0][0]).not.toBe(commit.mock.calls[1][0]);
 });

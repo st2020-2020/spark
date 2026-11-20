@@ -359,7 +359,7 @@ func (s *Server) Maintenance(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	for _, stmt := range []string{`UPDATE mail_outbox SET encrypted_payload=NULL WHERE expires_at<=now() AND encrypted_payload IS NOT NULL`, `UPDATE invite_imports SET encrypted_rows=NULL,state='expired' WHERE expires_at<=now() AND state='preview'`, `DELETE FROM auth_rate_limits WHERE window_start<now()-interval '1 day'`, `DELETE FROM idempotency_keys WHERE expires_at<=now()`} {
+	for _, stmt := range []string{`UPDATE mail_outbox SET encrypted_payload=NULL, delivery_state=CASE WHEN delivery_state='queued' THEN 'cancelled' ELSE delivery_state END WHERE expires_at<=now() AND encrypted_payload IS NOT NULL`, `UPDATE invite_imports SET encrypted_rows=NULL,state='expired' WHERE expires_at<=now() AND state='preview'`, `DELETE FROM auth_rate_limits WHERE window_start<now()-interval '1 day'`, `DELETE FROM idempotency_keys WHERE expires_at<=now()`} {
 		if _, err = tx.Exec(ctx, stmt); err != nil {
 			return err
 		}

@@ -32,11 +32,12 @@ Options:
   --health-url <url>       Optional public HTTPS base URL to verify after swap
   --goproxy <url>          Optional GOPROXY build arg for server image build
   --with-worker            Also start/verify AI worker (requires AI preflight)
+  --with-mail              Enable the authorized mail provider and verify mail-worker
   --with-oss               Include compose.v0.3-oss.yaml & start/verify asset-worker
   --with-url-extract       Include compose.v0.3-url-extract.yaml & start/verify url-worker
   --with-image-analysis    Include compose.v0.3-image-analysis.yaml & start/verify image-worker (requires --with-oss)
   --with-purge             Include compose.v0.3-purge.yaml (+ purge-oss if --with-oss) & start/verify purge-worker
-  --migrate                Allow migration to the schema declared by --commit (e.g. v3 -> v7)
+  --migrate                Allow migration to the schema declared by --commit (e.g. v7 -> v8)
   --restore-db             Manual rollback only: restore spark.dump when rolling back across schema versions
   --skip-web               Skip Web build and static swap
   --verify-restore         Test pg_restore into a unique temporary scratch DB
@@ -85,6 +86,7 @@ API_PORT="8080"
 HEALTH_URL=""
 GOPROXY_ARG=""
 WITH_WORKER="false"
+WITH_MAIL="false"
 WITH_OSS="false"
 WITH_URL_EXTRACT="false"
 WITH_IMAGE_ANALYSIS="false"
@@ -114,6 +116,7 @@ while [[ $# -gt 0 ]]; do
     --health-url) HEALTH_URL="${2:-}"; shift 2 ;;
     --goproxy) GOPROXY_ARG="${2:-}"; shift 2 ;;
     --with-worker) WITH_WORKER="true"; shift ;;
+    --with-mail) WITH_MAIL="true"; shift ;;
     --with-oss) WITH_OSS="true"; shift ;;
     --with-url-extract) WITH_URL_EXTRACT="true"; shift ;;
     --with-image-analysis) WITH_IMAGE_ANALYSIS="true"; shift ;;
@@ -199,6 +202,71 @@ run_target() {
   else
     bash -c "$script" -- "$@" </dev/null
   fi
+}
+
+run_target_with_mail_settings() {
+  {
+    cat <<'MAIL_HELPERS'
+read_mail_environment() (
+  local env_file="$1"
+  shift
+  unset SPARK_MAIL_MODE "${!SPARK_SMTP_@}" "${!SPARK_SES_@}"
+  "$@" compose --env-file "$env_file" -p spark-mail-preflight -f - config --environment \
+    <<<'services: {check: {image: scratch}}' |
+    awk '/^SPARK_(MAIL_MODE|SMTP_(HOST|TLS|PORT|FROM|CREDENTIALS_HOST_PATH)|SES_(REGION|FROM|REGISTER_TEMPLATE_ID|RESET_TEMPLATE_ID|CREDENTIALS_HOST_PATH))=/'
+)
+
+mail_val() {
+  sed -n "s/^$1=//p" <<< "$mail_env"
+}
+
+check_mail_settings() {
+  local mode="$1" credentials metadata tls port
+  case "$mode" in
+    smtp)
+      [[ -n "$(mail_val SPARK_SMTP_HOST)" && -n "$(mail_val SPARK_SMTP_FROM)" ]] ||
+        { echo "SMTP requires SPARK_SMTP_HOST and SPARK_SMTP_FROM." >&2; return 1; }
+      tls="$(mail_val SPARK_SMTP_TLS)"
+      case "${tls:-implicit}" in
+        implicit|starttls) ;;
+        *) echo "SPARK_SMTP_TLS must be implicit or starttls." >&2; return 1 ;;
+      esac
+      port="$(mail_val SPARK_SMTP_PORT)"
+      if [[ -n "$port" ]]; then
+        [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && (( port <= 65535 )) ||
+          { echo "SPARK_SMTP_PORT must be in the range 1 to 65535." >&2; return 1; }
+      fi
+      credentials="$(mail_val SPARK_SMTP_CREDENTIALS_HOST_PATH)"
+      credentials="${credentials:-/etc/spark/mail/smtp-credentials.json}"
+      ;;
+    tencent-ses)
+      [[ -n "$(mail_val SPARK_SES_REGION)" && -n "$(mail_val SPARK_SES_FROM)" ]] ||
+        { echo "Tencent SES requires SPARK_SES_REGION and SPARK_SES_FROM." >&2; return 1; }
+      [[ "$(mail_val SPARK_SES_REGISTER_TEMPLATE_ID)" =~ ^[1-9][0-9]*$ &&
+         "$(mail_val SPARK_SES_RESET_TEMPLATE_ID)" =~ ^[1-9][0-9]*$ ]] ||
+        { echo "Tencent SES requires positive integer register and reset template IDs." >&2; return 1; }
+      credentials="$(mail_val SPARK_SES_CREDENTIALS_HOST_PATH)"
+      credentials="${credentials:-/etc/spark/mail/tencent-ses-credentials.json}"
+      ;;
+    *)
+      echo "--with-mail requires SPARK_MAIL_MODE=smtp or tencent-ses." >&2
+      return 1
+      ;;
+  esac
+  [[ "$credentials" = /* ]] &&
+    { test -f "$credentials" || sudo -n test -f "$credentials" 2>/dev/null; } ||
+    { echo "Mail credentials must be a regular file at an absolute host path." >&2; return 1; }
+  metadata="$(stat -c '%u:%g:%a' -- "$credentials" 2>/dev/null ||
+    stat -f '%u:%g:%Lp' -- "$credentials" 2>/dev/null ||
+    sudo -n stat -c '%u:%g:%a' -- "$credentials" 2>/dev/null || true)"
+  case "$metadata" in
+    0:65532:440|65532:*:400) ;;
+    *) echo "Mail credentials require root:65532 0440 or UID 65532 0400." >&2; return 1 ;;
+  esac
+}
+MAIL_HELPERS
+    cat
+  } | run_target "$@"
 }
 
 sync_dir_to_empty_target() {
@@ -319,8 +387,8 @@ if [[ "$CMD" == "deploy" ]]; then
 fi
 
 # --- Target preflight ---
-log "Running target preflight checks (cmd=$CMD, mode=$MODE, project=$PROJECT, deploy_dir=$DEPLOY_DIR, ai=$WITH_WORKER, oss=$WITH_OSS, urls=$WITH_URL_EXTRACT, images=$WITH_IMAGE_ANALYSIS, purge=$WITH_PURGE)"
-run_target "$CMD" "$DOCKER_CONTEXT" "$DEPLOY_DIR" "$ENV_FILE" "$WITH_WORKER" "$WITH_OSS" "$WITH_URL_EXTRACT" "$WITH_IMAGE_ANALYSIS" "$WITH_PURGE" <<'REMOTE'
+log "Running target preflight checks (cmd=$CMD, mode=$MODE, project=$PROJECT, deploy_dir=$DEPLOY_DIR, ai=$WITH_WORKER, mail=$WITH_MAIL, oss=$WITH_OSS, urls=$WITH_URL_EXTRACT, images=$WITH_IMAGE_ANALYSIS, purge=$WITH_PURGE)"
+run_target_with_mail_settings "$CMD" "$DOCKER_CONTEXT" "$DEPLOY_DIR" "$ENV_FILE" "$WITH_WORKER" "$WITH_OSS" "$WITH_URL_EXTRACT" "$WITH_IMAGE_ANALYSIS" "$WITH_PURGE" "$WITH_MAIL" <<'REMOTE'
 set -euo pipefail
 CMD="$1"
 DOCKER_CTX="$2"
@@ -331,6 +399,7 @@ WITH_OSS="$6"
 WITH_URL_EXTRACT="$7"
 WITH_IMAGE_ANALYSIS="$8"
 WITH_PURGE="$9"
+WITH_MAIL="${10}"
 
 dcmd=(docker)
 if [[ -n "$DOCKER_CTX" ]]; then
@@ -376,6 +445,15 @@ origin="$(env_val SPARK_ORIGIN)"
 [[ "$origin" == https://* ]] || { echo "SPARK_ORIGIN must start with https:// (got $origin)" >&2; exit 1; }
 
 if [[ "$CMD" != "rollback" ]]; then
+  mail_env="$(read_mail_environment "$ENV_FILE" "${dcmd[@]}")" 2>/dev/null ||
+    { echo "Could not resolve mail settings from the target env file." >&2; exit 1; }
+  mail_mode="$(mail_val SPARK_MAIL_MODE)"
+  if [[ "$WITH_MAIL" == "true" ]]; then
+    check_mail_settings "$mail_mode"
+  elif [[ -n "$mail_mode" && "$mail_mode" != disabled ]]; then
+    echo "Production mail must be disabled unless --with-mail is passed with an authorized provider." >&2
+    exit 1
+  fi
   ai_enabled="$(env_val SPARK_AI_ENABLED)"
 if [[ "$WITH_WORKER" == "true" ]]; then
   [[ "$ai_enabled" == "true" ]] || { echo "--with-worker requires SPARK_AI_ENABLED=true in $ENV_FILE" >&2; exit 1; }
@@ -462,7 +540,7 @@ run_rollback() {
   local restore_db_arg="${2:-false}"
   local manual_arg="${3:-false}"
   log "Executing rollback from backup directory: ${bdir:-<latest>} (restore_db=$restore_db_arg)"
-  run_target "$DOCKER_CONTEXT" "$PROJECT" "$DEPLOY_DIR" "$ENV_FILE" "$WEB_DIR" "$API_PORT" "$HEALTH_TIMEOUT" "$bdir" "$RELEASE_ID" "$restore_db_arg" "$manual_arg" <<'REMOTE'
+  run_target_with_mail_settings "$DOCKER_CONTEXT" "$PROJECT" "$DEPLOY_DIR" "$ENV_FILE" "$WEB_DIR" "$API_PORT" "$HEALTH_TIMEOUT" "$bdir" "$RELEASE_ID" "$restore_db_arg" "$manual_arg" <<'REMOTE'
 set -euo pipefail
 DOCKER_CTX="$1"
 PROJECT="$2"
@@ -574,6 +652,8 @@ authorizations="$(
   unset SPARK_AI_ENABLED SPARK_OSS_ENABLED SPARK_URL_EXTRACT_ENABLED SPARK_IMAGE_ANALYSIS_ENABLED SPARK_PURGE_ENABLED
   pg_dc config --environment | awk '/^SPARK_(AI|OSS|URL_EXTRACT|IMAGE_ANALYSIS|PURGE)_ENABLED=/'
 )"
+mail_env="$(read_mail_environment "$ENV_FILE" "${dcmd[@]}")" 2>/dev/null ||
+  { echo "Could not resolve mail settings from the target env file." >&2; exit 1; }
 
 snapshot_overlays=""
 if [[ -f "$BDIR/api.overlays" ]]; then
@@ -639,6 +719,34 @@ fi
 
 snapshot_compose="${BDIR}/deploy"
 compose_files=(-f "${DEPLOY_DIR}/deploy/compose.prod.yaml")
+mail_mode=disabled
+RB_MAIL=false
+current_mail_mode="$(mail_val SPARK_MAIL_MODE)"
+snapshot_mail_mode="$(sed -n 's/^mail=//p' <<< "$snapshot_overlays")"
+case "$current_mail_mode" in
+  smtp|tencent-ses)
+    if [[ "$snapshot_mail_mode" != "$current_mail_mode" ]]; then
+      capability_notice "SPARK_MAIL_MODE stays off (authorized provider differs from snapshot)."
+    elif [[ ! -f "$BDIR/mail-worker.was_running" ]]; then
+      capability_notice "SPARK_MAIL_MODE stays off (snapshot had no running mail worker)."
+    elif [[ -f "$snapshot_compose/compose.v0.4-mail.yaml" &&
+            -f "$snapshot_compose/compose.v0.4-mail-$current_mail_mode.yaml" ]] &&
+         check_mail_settings "$current_mail_mode" 2>/dev/null; then
+      RB_MAIL=true
+      mail_mode="$current_mail_mode"
+      compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.4-mail.yaml"
+        -f "${DEPLOY_DIR}/deploy/compose.v0.4-mail-$mail_mode.yaml")
+    else
+      capability_notice "SPARK_MAIL_MODE stays off (mail settings or snapshot provider overlay unavailable)."
+    fi
+    ;;
+  *)
+    if [[ -n "$snapshot_mail_mode" || -f "$BDIR/mail-worker.was_running" ||
+          ( -n "$current_mail_mode" && "$current_mail_mode" != disabled ) ]]; then
+      capability_notice "SPARK_MAIL_MODE stays off (current authorization disabled or invalid)."
+    fi
+    ;;
+esac
 add_overlay() {
   local overlay="compose.v0.3-${1}.yaml"
   [[ -f "$snapshot_compose/$overlay" ]] || { echo "Rollback snapshot missing $overlay" >&2; exit 1; }
@@ -652,12 +760,13 @@ if [[ "$RB_PURGE" == true ]]; then
   if [[ "$RB_OSS" == true ]]; then add_overlay purge-oss; fi
 fi
 
-dc() {
+dc() (
+  unset "${!SPARK_SMTP_@}" "${!SPARK_SES_@}"
   SPARK_PROD_API_PORT="$API_PORT" SPARK_API_IMAGE=spark-api:prod \
     SPARK_AI_ENABLED="$RB_AI" SPARK_OSS_ENABLED="$RB_OSS" SPARK_URL_EXTRACT_ENABLED="$RB_URL" \
-    SPARK_IMAGE_ANALYSIS_ENABLED="$RB_IMG" SPARK_PURGE_ENABLED="$RB_PURGE" \
+    SPARK_IMAGE_ANALYSIS_ENABLED="$RB_IMG" SPARK_PURGE_ENABLED="$RB_PURGE" SPARK_MAIL_MODE="$mail_mode" \
     "${dcmd[@]}" compose --env-file "$ENV_FILE" "${compose_files[@]}" -p "$PROJECT" "$@"
-}
+)
 
 # Prechecks passed: clean up staging directories belonging to this release id and execute rollback
 if [[ -d "${DEPLOY_DIR}/server.staging-${RELEASE_ID}" ]]; then
@@ -675,7 +784,7 @@ fi
 
 stop_running_workers() {
   local svc ids id
-  for svc in worker asset-worker url-worker image-worker purge-worker; do
+  for svc in worker asset-worker url-worker image-worker purge-worker mail-worker; do
     ids="$("${dcmd[@]}" ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$svc")"
     for id in $ids; do
       "${dcmd[@]}" stop -t 30 "$id" >/dev/null
@@ -742,6 +851,15 @@ fi
 # 5. Restore API image and recreate API + any previously-running workers
 image_id="$(cat "${BDIR}/image.id")"
 "${dcmd[@]}" tag "$image_id" spark-api:prod
+if [[ "$live_version" != "$backup_version" ]] && (( backup_version >= 8 )); then
+  # Restoring a mail-capable database must never replay old verification mail.
+  dc run --rm --no-deps -T tools invalidate-restored-mail
+  if [[ "$MANUAL_ROLLBACK" == "true" ]]; then
+    dc exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U spark -d spark \
+      -c 'UPDATE sessions SET revoked_at=now() WHERE revoked_at IS NULL;'
+    echo "revoked restored sessions before starting API"
+  fi
+fi
 dc up -d --no-deps --force-recreate --wait --wait-timeout "$HEALTH_TIMEOUT" api
 api_health="$("${dcmd[@]}" inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${PROJECT}-api-1" 2>/dev/null || true)"
 [[ "$api_health" == "healthy" ]] || { echo "rollback api health is '${api_health:-unknown}', expected healthy" >&2; exit 1; }
@@ -768,6 +886,7 @@ restore_worker() {
 }
 
 restore_worker "$RB_AI" worker ai
+restore_worker "$RB_MAIL" mail-worker mail
 restore_worker "$RB_OSS" asset-worker ""
 restore_worker "$RB_URL" url-worker url-extract
 restore_worker "$RB_IMG" image-worker image-analysis
@@ -798,6 +917,12 @@ git -C "$REPO_ROOT" archive "$COMMIT" | tar -x -C "$STAGING_DIR"
 
 [[ -f "${STAGING_DIR}/deploy/compose.prod.yaml" ]] || die "commit $COMMIT missing deploy/compose.prod.yaml"
 [[ -d "${STAGING_DIR}/server" ]] || die "commit $COMMIT missing server/"
+if [[ "$WITH_MAIL" == "true" ]]; then
+  for mail_overlay in mail mail-smtp mail-tencent-ses; do
+    [[ -f "$STAGING_DIR/deploy/compose.v0.4-$mail_overlay.yaml" ]] ||
+      die "commit $COMMIT missing deploy/compose.v0.4-$mail_overlay.yaml"
+  done
+fi
 EXPECTED_SCHEMA_VERSION="$(sed -n 's/^const Version = \([0-9][0-9]*\)[[:space:]]*$/\1/p' "${STAGING_DIR}/server/db/migrate.go")"
 [[ "$EXPECTED_SCHEMA_VERSION" =~ ^[0-9]+$ ]] || die "cannot determine server schema Version from server/db/migrate.go"
 
@@ -915,14 +1040,14 @@ rollback_tag="spark-api:rollback-${RELEASE_ID}"
 "${dcmd[@]}" tag "$running_api_img" "$rollback_tag"
 
 # Record running workers and non-secret API feature switches for rollback
-for svc in worker asset-worker url-worker image-worker purge-worker; do
+for svc in worker asset-worker url-worker image-worker purge-worker mail-worker; do
   if [[ "$("${dcmd[@]}" inspect --format '{{.State.Running}}' "${PROJECT}-${svc}-1" 2>/dev/null || true)" == "true" ]]; then
     touch "${BDIR}/${svc}.was_running"
   fi
 done
 : > "${BDIR}/api.overlays"
 api_env="$("${dcmd[@]}" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "${PROJECT}-api-1" |
-  awk '/^SPARK_(AI|OSS|URL_EXTRACT|IMAGE_ANALYSIS|PURGE)_ENABLED=/')"
+  awk '/^SPARK_((AI|OSS|URL_EXTRACT|IMAGE_ANALYSIS|PURGE)_ENABLED|MAIL_MODE)=/')"
 if grep -qx "SPARK_AI_ENABLED=true" <<< "$api_env"; then
   echo "ai=true" >> "${BDIR}/api.overlays"
 else
@@ -932,6 +1057,10 @@ grep -qx "SPARK_OSS_ENABLED=true" <<< "$api_env" && echo "oss" >> "${BDIR}/api.o
 grep -qx "SPARK_URL_EXTRACT_ENABLED=true" <<< "$api_env" && echo "url-extract" >> "${BDIR}/api.overlays" || true
 grep -qx "SPARK_IMAGE_ANALYSIS_ENABLED=true" <<< "$api_env" && echo "image-analysis" >> "${BDIR}/api.overlays" || true
 grep -qx "SPARK_PURGE_ENABLED=true" <<< "$api_env" && echo "purge" >> "${BDIR}/api.overlays" || true
+case "$(sed -n 's/^SPARK_MAIL_MODE=//p' <<< "$api_env")" in
+  smtp) echo "mail=smtp" >> "${BDIR}/api.overlays" ;;
+  tencent-ses) echo "mail=tencent-ses" >> "${BDIR}/api.overlays" ;;
+esac
 
 {
   dc exec -T postgres pg_isready -t 5 -U spark -d spark >/dev/null
@@ -971,7 +1100,7 @@ if [[ "$SKIP_WEB" != "true" ]]; then
 fi
 
 log "Building spark-api:prod, checking/migrating DB schema, and bringing up services"
-run_target "$DOCKER_CONTEXT" "$PROJECT" "$DEPLOY_DIR" "$ENV_FILE" "$WEB_DIR" "$API_PORT" "$WITH_WORKER" "$WITH_OSS" "$WITH_URL_EXTRACT" "$WITH_IMAGE_ANALYSIS" "$WITH_PURGE" "$MIGRATE" "$SKIP_WEB" "$VERIFY_RESTORE" "$RELEASE_ID" "$HEALTH_TIMEOUT" "$GOPROXY_ARG" "$PREV_BACKUP_DIR" "$EXPECTED_SCHEMA_VERSION" <<'REMOTE'
+run_target_with_mail_settings "$DOCKER_CONTEXT" "$PROJECT" "$DEPLOY_DIR" "$ENV_FILE" "$WEB_DIR" "$API_PORT" "$WITH_WORKER" "$WITH_OSS" "$WITH_URL_EXTRACT" "$WITH_IMAGE_ANALYSIS" "$WITH_PURGE" "$MIGRATE" "$SKIP_WEB" "$VERIFY_RESTORE" "$RELEASE_ID" "$HEALTH_TIMEOUT" "$GOPROXY_ARG" "$PREV_BACKUP_DIR" "$EXPECTED_SCHEMA_VERSION" "$WITH_MAIL" <<'REMOTE'
 set -euo pipefail
 DOCKER_CTX="$1"
 PROJECT="$2"
@@ -992,6 +1121,7 @@ HEALTH_TIMEOUT="${16}"
 GOPROXY_ARG="${17}"
 BDIR="${18}"
 expected_version="${19}"
+WITH_MAIL="${20}"
 
 dcmd=(docker)
 if [[ -n "$DOCKER_CTX" ]]; then
@@ -999,6 +1129,15 @@ if [[ -n "$DOCKER_CTX" ]]; then
 fi
 
 compose_files=(-f "${DEPLOY_DIR}/deploy/compose.prod.yaml")
+mail_mode=disabled
+if [[ "$WITH_MAIL" == true ]]; then
+  mail_env="$(read_mail_environment "$ENV_FILE" "${dcmd[@]}")" 2>/dev/null ||
+    { echo "Could not resolve mail settings from the target env file." >&2; exit 1; }
+  mail_mode="$(mail_val SPARK_MAIL_MODE)"
+  check_mail_settings "$mail_mode"
+  compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.4-mail.yaml"
+    -f "${DEPLOY_DIR}/deploy/compose.v0.4-mail-$mail_mode.yaml")
+fi
 [[ "$WITH_OSS" == "true" ]] && compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.3-oss.yaml")
 [[ "$WITH_URL_EXTRACT" == "true" ]] && compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.3-url-extract.yaml")
 [[ "$WITH_IMAGE_ANALYSIS" == "true" ]] && compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.3-image-analysis.yaml")
@@ -1007,13 +1146,15 @@ if [[ "$WITH_PURGE" == "true" ]]; then
   [[ "$WITH_OSS" == "true" ]] && compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.3-purge-oss.yaml")
 fi
 
-dc() {
-  SPARK_PROD_API_PORT="$API_PORT" "${dcmd[@]}" compose --env-file "$ENV_FILE" "${compose_files[@]}" -p "$PROJECT" "$@"
-}
+dc() (
+  unset "${!SPARK_SMTP_@}" "${!SPARK_SES_@}"
+  SPARK_PROD_API_PORT="$API_PORT" SPARK_MAIL_MODE="$mail_mode" \
+    "${dcmd[@]}" compose --env-file "$ENV_FILE" "${compose_files[@]}" -p "$PROJECT" "$@"
+)
 
 stop_running_workers() {
   local svc ids id
-  for svc in worker asset-worker url-worker image-worker purge-worker; do
+  for svc in worker asset-worker url-worker image-worker purge-worker mail-worker; do
     ids="$("${dcmd[@]}" ps -aq --filter "label=com.docker.compose.project=$PROJECT" --filter "label=com.docker.compose.service=$svc")"
     for id in $ids; do
       "${dcmd[@]}" stop -t 30 "$id" >/dev/null
@@ -1110,6 +1251,7 @@ start_worker() {
 }
 
 start_worker "$WITH_WORKER" worker ai
+start_worker "$WITH_MAIL" mail-worker mail
 start_worker "$WITH_OSS" asset-worker ""
 start_worker "$WITH_URL_EXTRACT" url-worker url-extract
 start_worker "$WITH_IMAGE_ANALYSIS" image-worker image-analysis

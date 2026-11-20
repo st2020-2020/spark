@@ -1,6 +1,6 @@
 import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { InvitePreview, User } from '../api/types';
+import type { InvitePreview, InviteCode, User } from '../api/types';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
@@ -8,6 +8,15 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { formatDateTime, formatUnitsToYuan } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
+
+import '../styles/admin.css';
+
+function inviteState(code: InviteCode, batchDisabled: boolean) {
+  if (code.used_count >= code.max_uses) return '已兑换';
+  if (code.expires_at && Date.parse(code.expires_at) <= Date.now()) return '已过期';
+  if (batchDisabled) return '批次已禁用';
+  return code.disabled ? '已禁用' : '可用';
+}
 
 function isNotImplemented404(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
@@ -38,6 +47,8 @@ export function AdminPage() {
   const queryClient = useQueryClient();
 
   const [batchName, setBatchName] = useState('');
+  const [readingFile, setReadingFile] = useState(false);
+  const [now, setNow] = useState(Date.now);
   const [csvText, setCsvText] = useState('');
   const [previewKey, setPreviewKey] = useState(() => generateIdempotencyKey());
   const [commitKey, setCommitKey] = useState(() => generateIdempotencyKey());
@@ -51,17 +62,32 @@ export function AdminPage() {
 
   const isAdmin = user?.role === 'admin';
 
-  const batchesQuery = useQuery({
+  const batchesQuery = useInfiniteQuery({
     queryKey: ['admin', 'invite-batches'],
-    queryFn: () => api.listInviteBatches({ limit: 50 }),
+    queryFn: ({ pageParam }) => api.listInviteBatches({ limit: 50, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.next_cursor,
     enabled: isAdmin,
   });
 
-  const codesQuery = useQuery({
+  const codesQuery = useInfiniteQuery({
     queryKey: ['admin', 'invite-codes', expandedBatchId],
-    queryFn: () => api.listInviteCodes(expandedBatchId!, { limit: 100 }),
+    queryFn: ({ pageParam }) => api.listInviteCodes(expandedBatchId!, { limit: 100, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.next_cursor,
     enabled: isAdmin && Boolean(expandedBatchId),
   });
+
+  const batches = batchesQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const codes = codesQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const batch = batches.find((item) => item.id === expandedBatchId);
+  const deadlines = [previewResult?.expires_at, ...codes.map((code) => code.expires_at)];
+  const nextExpiry = Math.min(...deadlines.map((date) => date ? Date.parse(date) : Infinity).filter((t) => t > now));
+  useEffect(() => {
+    if (!Number.isFinite(nextExpiry)) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.min(2_147_483_647, Math.max(0, nextExpiry - Date.now())));
+    return () => window.clearTimeout(timer);
+  }, [nextExpiry, now]);
 
   const usersQuery = useInfiniteQuery({
     queryKey: ['admin', 'users'],
@@ -102,6 +128,7 @@ export function AdminPage() {
     onSuccess: (res) => {
       setImportError(null);
       setPreviewResult(res);
+      setPreviewKey(generateIdempotencyKey());
       setCommitKey(generateIdempotencyKey());
     },
     onError: (err) => setImportError(getFriendlyErrorMessage(err)),
@@ -121,7 +148,12 @@ export function AdminPage() {
       pushToast({ message: `已导入批次「${batch.name}」，共 ${batch.total_codes} 个邀请码` });
       void queryClient.invalidateQueries({ queryKey: ['admin', 'invite-batches'] });
     },
-    onError: (err) => setImportError(getFriendlyErrorMessage(err)),
+    onError: (err) => {
+      if (err instanceof ApiError && ['import_expired', 'invite_unavailable', 'duplicate_resource'].includes(err.code)) {
+        setPreviewResult(null);
+      }
+      setImportError(getFriendlyErrorMessage(err));
+    },
   });
 
   const batchStatusMutation = useMutation({
@@ -138,7 +170,7 @@ export function AdminPage() {
     mutationFn: (params: { id: string; disabled: boolean }) =>
       api.setInviteCodeStatus(params.id, { disabled: params.disabled }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['admin', 'invite-codes', expandedBatchId] });
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'invite-codes'] });
       pushToast({ message: '已更新邀请码状态' });
     },
     onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
@@ -179,14 +211,25 @@ export function AdminPage() {
     );
   }
 
+  const importBusy = readingFile || previewMutation.isPending || commitMutation.isPending;
   const handleCsvFile = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    e.target.value = '';
+    setImportError(null);
+    setPreviewResult(null);
+    setPreviewKey(generateIdempotencyKey());
+    // A UTF-8 file over four bytes per allowed character cannot fit the API contract.
+    if (file.size > 4 * 262144 + 3) {
+      setImportError('CSV 内容超过 262,144 个字符的限制，请拆分成多个批次。');
+      return;
+    }
+    setReadingFile(true);
     const reader = new FileReader();
+    reader.onloadend = () => setReadingFile(false);
+    reader.onerror = () => setImportError('无法读取 CSV 文件，请重新选择或粘贴文件内容。');
     reader.onload = () => {
       setCsvText(String(reader.result ?? ''));
-      setPreviewResult(null);
-      setPreviewKey(generateIdempotencyKey());
     };
     reader.readAsText(file, 'utf-8');
   };
@@ -198,46 +241,50 @@ export function AdminPage() {
       setImportError('请填写批次名称并提供 CSV 内容。');
       return;
     }
-    previewMutation.mutate();
+    if (!importBusy) {
+      setPreviewResult(null);
+      previewMutation.mutate();
+    }
   };
 
   const isPreviewExpired =
     previewResult && new Date(previewResult.expires_at).getTime() <= Date.now();
   const canCommit =
-    Boolean(previewResult) &&
-    previewResult!.errors.length === 0 &&
-    previewResult!.valid_rows > 0 &&
+    previewResult !== null &&
+    previewResult.errors.length === 0 &&
+    previewResult.valid_rows > 0 &&
     !isPreviewExpired;
 
   const userItems = dedupeUsersById(usersQuery.data?.pages);
 
   return (
-    <div>
+    <div className="sp-admin">
       <header className="sp-pagehead">
         <h1 className="sp-page-title">管理后台</h1>
       </header>
 
-      <div className="sp-stack" style={{ gap: 16 }}>
+      <div className="sp-stack sp-stack--loose">
         {/* Invite CSV Import */}
         <section className="sp-card" aria-label="批量导入邀请码">
-          <h2 style={{ margin: '0 0 8px', fontSize: 16 }}>导入邀请码批次</h2>
-          <p className="sp-help" style={{ marginTop: 0, marginBottom: 14 }}>
-            支持 <span className="sp-mono">code,expires_at,max_uses</span> 三列；服务端仅保存摘要。
+          <h2>导入邀请码批次</h2>
+          <p className="sp-help">
+            每行一个邀请码，最多 1,000 行。CSV 表头为 <span className="sp-mono">code,expires_at,max_uses</span>，到期时间可留空，使用次数填 1。确认导入后，从原始文件分发邀请码。
           </p>
 
           {importError && (
-            <div className="sp-banner sp-banner--error" style={{ marginBottom: 12 }} role="alert">
+            <div className="sp-banner sp-banner--error" role="alert">
               <span>{importError}</span>
             </div>
           )}
 
-          <form onSubmit={handlePreview} className="sp-stack" style={{ gap: 12 }}>
+          <form onSubmit={handlePreview} className="sp-stack">
             <div className="sp-row">
-              <div className="sp-field" style={{ flex: 1, minWidth: 200 }}>
+              <div className="sp-field sp-admin-grow">
                 <label htmlFor="admin-batch-name" className="sp-label">
                   批次名称
                 </label>
                 <input
+                  disabled={importBusy}
                   id="admin-batch-name"
                   type="text"
                   maxLength={100}
@@ -256,7 +303,7 @@ export function AdminPage() {
                 <label htmlFor="admin-csv-file" className="sp-label">
                   选择 CSV 文件
                 </label>
-                <input id="admin-csv-file" type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
+                <input disabled={importBusy} id="admin-csv-file" type="file" accept=".csv,text/csv" onChange={handleCsvFile} />
               </div>
             </div>
 
@@ -265,8 +312,10 @@ export function AdminPage() {
                 CSV 内容
               </label>
               <textarea
+                disabled={importBusy}
                 id="admin-csv-text"
                 rows={4}
+                maxLength={262144}
                 className="sp-textarea sp-mono"
                 placeholder={'code,expires_at,max_uses\nSPARK-ALPHA-0001,2030-01-01T00:00:00Z,1'}
                 value={csvText}
@@ -279,13 +328,13 @@ export function AdminPage() {
             </div>
 
             <div className="sp-row">
-              <button type="submit" className="sp-btn" disabled={previewMutation.isPending}>
-                {previewMutation.isPending ? '校验中…' : '预览校验'}
+              <button type="submit" className="sp-btn" disabled={importBusy}>
+                {readingFile ? '读取文件中…' : previewMutation.isPending ? '校验中…' : '预览校验'}
               </button>
               <button
                 type="button"
                 className="sp-btn sp-btn--primary"
-                disabled={!canCommit || commitMutation.isPending}
+                disabled={!canCommit || importBusy}
                 onClick={() => commitMutation.mutate()}
               >
                 {commitMutation.isPending ? '提交中…' : '确认导入'}
@@ -294,14 +343,7 @@ export function AdminPage() {
           </form>
 
           {previewResult && (
-            <div
-              style={{
-                marginTop: 14,
-                padding: 12,
-                background: 'var(--sp-bg)',
-                borderRadius: 'var(--sp-radius-control)',
-              }}
-            >
+            <div className="sp-admin-preview" role="status">
               <div className="sp-row-between">
                 <strong>
                   预览结果：有效行 {previewResult.valid_rows} 条，错误 {previewResult.errors.length} 条
@@ -309,12 +351,12 @@ export function AdminPage() {
                 <span className="sp-help">有效期至 {formatDateTime(previewResult.expires_at)}</span>
               </div>
               {isPreviewExpired && (
-                <div className="sp-error-text" style={{ marginTop: 6 }}>
+                <div className="sp-error-text">
                   预览已过期，请重新点击「预览校验」。
                 </div>
               )}
               {previewResult.errors.length > 0 && (
-                <ul style={{ margin: '8px 0 0', paddingLeft: 18, color: 'var(--sp-danger)' }}>
+                <ul className="sp-admin-import-errors">
                   {previewResult.errors.map((err, i) => (
                     <li key={i}>
                       第 {err.row} 行 [{err.code}]：{err.message}
@@ -328,7 +370,15 @@ export function AdminPage() {
 
         {/* Invite Batches */}
         <section className="sp-card" aria-label="邀请码批次列表">
-          <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>邀请码批次</h2>
+          <div className="sp-row-between">
+            <h2>邀请码批次</h2>
+            <button type="button" className="sp-btn sp-btn--sm" disabled={batchesQuery.isFetching || codesQuery.isFetching}
+              onClick={() => {
+                void batchesQuery.refetch();
+                if (expandedBatchId) void codesQuery.refetch();
+              }}>刷新兑换状态</button>
+          </div>
+          <p className="sp-help">禁用批次后，所有未兑换的邀请码暂停使用。已注册账号仍可登录。</p>
           {batchesQuery.isLoading && <LoadingState message="加载批次…" />}
           {batchesQuery.isError &&
             (isNotImplemented404(batchesQuery.error) ? (
@@ -341,13 +391,13 @@ export function AdminPage() {
                 onRetry={isAuthError(batchesQuery.error) ? undefined : () => void batchesQuery.refetch()}
               />
             ))}
-          {batchesQuery.data && batchesQuery.data.items.length === 0 && (
+          {batchesQuery.data && batches.length === 0 && (
             <EmptyState
               title="暂无邀请码批次"
               description="可在上方导入 CSV 创建首批邀请码。"
             />
           )}
-          {batchesQuery.data && batchesQuery.data.items.length > 0 && (
+          {batchesQuery.data && batches.length > 0 && (
             <div className="sp-table-wrap">
               <table className="sp-table">
                 <thead>
@@ -360,7 +410,7 @@ export function AdminPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {batchesQuery.data.items.map((batch) => (
+                  {batches.map((batch) => (
                     <tr key={batch.id}>
                       <td>{batch.name}</td>
                       <td>
@@ -385,11 +435,12 @@ export function AdminPage() {
                               setExpandedBatchId((cur) => (cur === batch.id ? null : batch.id))
                             }
                           >
-                            {expandedBatchId === batch.id ? '收起码表' : '查看码元数据'}
+                            {expandedBatchId === batch.id ? '收起邀请码' : '查看邀请码'}
                           </button>
                           <button
                             type="button"
                             className="sp-btn sp-btn--sm"
+                            disabled={batchStatusMutation.isPending}
                             onClick={() =>
                               batchStatusMutation.mutate({
                                 id: batch.id,
@@ -408,9 +459,11 @@ export function AdminPage() {
             </div>
           )}
 
+          {batchesQuery.hasNextPage && <button type="button" className="sp-btn" disabled={batchesQuery.isFetching}
+            onClick={() => void batchesQuery.fetchNextPage()}>加载更多批次</button>}
           {expandedBatchId && (
-            <div style={{ marginTop: 14 }}>
-              <h3 style={{ margin: '0 0 8px', fontSize: 14 }}>批次邀请码元数据（原始码不回显）</h3>
+            <div className="sp-admin-code-list">
+              <h3>{batch?.name} · 邀请码状态</h3>
               {codesQuery.isLoading && <LoadingState message="加载邀请码…" />}
               {codesQuery.isError && (
                 <ErrorBanner
@@ -418,10 +471,10 @@ export function AdminPage() {
                   onRetry={isAuthError(codesQuery.error) ? undefined : () => void codesQuery.refetch()}
                 />
               )}
-              {codesQuery.data && codesQuery.data.items.length === 0 && (
+              {codesQuery.data && codes.length === 0 && (
                 <EmptyState title="该批次暂无邀请码" />
               )}
-              {codesQuery.data && codesQuery.data.items.length > 0 && (
+              {codesQuery.data && codes.length > 0 && (
                 <div className="sp-table-wrap">
                   <table className="sp-table">
                     <thead>
@@ -434,18 +487,21 @@ export function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {codesQuery.data.items.map((code) => (
+                      {codes.map((code) => {
+                        const state = inviteState(code, batch?.status === 'disabled');
+                        return (
                         <tr key={code.id}>
                           <td className="sp-mono">{code.id.slice(0, 8)}…</td>
                           <td className="sp-mono">
                             {code.used_count} / {code.max_uses}
                           </td>
-                          <td>{code.disabled ? '已禁用' : '可用'}</td>
+                          <td>{state}</td>
                           <td>{code.expires_at ? formatDateTime(code.expires_at) : '永不过期'}</td>
                           <td>
                             <button
                               type="button"
                               className="sp-btn sp-btn--sm"
+                              disabled={codeStatusMutation.isPending || (state !== '可用' && state !== '已禁用')}
                               onClick={() =>
                                 codeStatusMutation.mutate({
                                   id: code.id,
@@ -457,20 +513,23 @@ export function AdminPage() {
                             </button>
                           </td>
                         </tr>
-                      ))}
+                      );
+                      })}
                     </tbody>
                   </table>
                 </div>
               )}
+              {codesQuery.hasNextPage && <button type="button" className="sp-btn" disabled={codesQuery.isFetching}
+                onClick={() => void codesQuery.fetchNextPage()}>加载更多邀请码</button>}
             </div>
           )}
         </section>
 
         {/* Users (Read-only with cursor pagination) */}
         <section className="sp-card" aria-label="用户管理">
-          <div className="sp-row-between" style={{ marginBottom: 12 }}>
-            <h2 style={{ margin: 0, fontSize: 16 }}>用户列表</h2>
-            <span className="sp-help">只读账号运行元数据</span>
+          <div className="sp-row-between">
+            <h2>用户列表</h2>
+            <span className="sp-help">可查看账号角色、登录状态与 AI 整理设置</span>
           </div>
           {usersQuery.isLoading && <LoadingState message="加载用户列表…" />}
           {usersQuery.isError &&
@@ -489,7 +548,7 @@ export function AdminPage() {
             <EmptyState title="暂无用户" description="当前没有可展示的用户记录。" />
           )}
           {userItems.length > 0 && (
-            <div className="sp-stack" style={{ gap: 12 }}>
+            <div className="sp-stack">
               <div className="sp-table-wrap">
                 <table className="sp-table">
                   <thead>
@@ -544,8 +603,8 @@ export function AdminPage() {
 
         {/* Budgets, Model Config & Failures (Each handles its own loading/404/error independently) */}
         <section className="sp-card" aria-label="预算与运行监控">
-          <h2 style={{ margin: '0 0 12px', fontSize: 16 }}>额度与模型配置</h2>
-          <div className="sp-stack" style={{ gap: 12 }}>
+          <h2>额度与模型配置</h2>
+          <div className="sp-stack">
             {budgetsQuery.isLoading && <LoadingState message="加载预算配置…" />}
             {budgetsQuery.isError &&
               (isNotImplemented404(budgetsQuery.error) ? (
@@ -561,9 +620,9 @@ export function AdminPage() {
                 />
               ))}
             {budgetsQuery.data && (
-              <div className="sp-stack" style={{ gap: 8 }}>
+              <div className="sp-stack sp-stack--tight">
                 <div className="sp-row">
-                  <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
+                  <div className="sp-field sp-admin-grow">
                     <label htmlFor="budget-platform" className="sp-label">
                       平台日预算 (units, {formatUnitsToYuan(Number(budgetPlatform) || 0)})
                     </label>
@@ -576,7 +635,7 @@ export function AdminPage() {
                       onChange={(e) => setBudgetPlatform(e.target.value)}
                     />
                   </div>
-                  <div className="sp-field" style={{ flex: 1, minWidth: 160 }}>
+                  <div className="sp-field sp-admin-grow">
                     <label htmlFor="budget-user" className="sp-label">
                       单用户日额度 (units, {formatUnitsToYuan(Number(budgetUser) || 0)})
                     </label>
@@ -589,7 +648,7 @@ export function AdminPage() {
                       onChange={(e) => setBudgetUser(e.target.value)}
                     />
                   </div>
-                  <div className="sp-field" style={{ width: 130 }}>
+                  <div className="sp-field sp-admin-concurrency">
                     <label htmlFor="worker-conc" className="sp-label">
                       Worker 并发 (1-8)
                     </label>
@@ -606,7 +665,7 @@ export function AdminPage() {
                   <button
                     type="button"
                     className="sp-btn sp-btn--primary"
-                    style={{ alignSelf: 'flex-end' }}
+
                     disabled={saveBudgetMutation.isPending}
                     onClick={() => saveBudgetMutation.mutate()}
                   >

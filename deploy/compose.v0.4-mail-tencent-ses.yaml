@@ -1,0 +1,15 @@
+services:
+  mail-worker:
+    environment:
+      SPARK_SES_REGION: ${SPARK_SES_REGION:-}
+      SPARK_SES_FROM: ${SPARK_SES_FROM:-}
+      SPARK_SES_REGISTER_TEMPLATE_ID: ${SPARK_SES_REGISTER_TEMPLATE_ID:-}
+      SPARK_SES_RESET_TEMPLATE_ID: ${SPARK_SES_RESET_TEMPLATE_ID:-}
+      SPARK_SES_CREDENTIALS_FILE: /run/secrets/spark-ses-credentials.json
+    volumes:
+      - type: bind
+        source: ${SPARK_SES_CREDENTIALS_HOST_PATH:-/etc/spark/mail/tencent-ses-credentials.json}
+        target: /run/secrets/spark-ses-credentials.json
+        read_only: true
+        bind:
+          create_host_path: false

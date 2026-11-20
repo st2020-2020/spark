@@ -1,6 +1,6 @@
-# Spark 在线后端：首个开发批次
+# Spark 在线后端
 
-本模块实现邀请导入、邮箱验证、邀请注册、登录与会话、密码重置、项目、文字/网址收藏、用途、人工项目关联和关键词找回。它是 ROADMAP 首批纵向流程的后端，不代表 M1–M4 全部完成。根目录 MyGo 入口与真实 `data/` 不参与本模块。
+API 提供邀请注册、邮箱验证、登录与密码找回、资料收集、项目归类、搜索和个人数据导出。邮件、AI 整理、附件、网页提取和永久删除由独立 Worker 按部署配置启用。
 
 ## OrbStack 开发运行
 
@@ -19,7 +19,7 @@ dc up -d --build api web
 dc ps
 ```
 
-迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `007_extraction_keys_upload_cleanup.sql`（版本 7）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v7.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
+迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `008_mail_delivery.sql`（版本 8）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v8.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
 
 ## 图片附件与独立资产 Worker（v0.3-T03）
 
@@ -190,6 +190,49 @@ dc run --rm -T tools dev-mail CHALLENGE_ID
 
 通过 `dc run --rm tools maintenance` 显式清理过期邮件密文、邀请预览密文、限流和幂等记录；开发环境长期运行时按需执行。
 
+## 验证邮件（v0.4-T02）
+
+启用外部渠道前先迁移到 `008_mail_delivery.sql`。API 和独立 `/spark-worker mail` 共用数据库、`SPARK_ENCRYPTION_KEY` 及同一个 `SPARK_MAIL_MODE`。API 只需渠道模式，在同一事务保存挑战、加密载荷和仅含挑战 ID 的 River 任务。渠道配置和只读凭证文件只注入邮件 Worker。邮件 Worker 与 AI 和 OSS 独立，健康检查沿用 `/spark-worker healthcheck` 和 `127.0.0.1:9091/ready`。
+
+### 腾讯云 SES
+
+`SPARK_MAIL_MODE=tencent-ses` 使用官方 Go SDK 调用固定的 `https://ses.tencentcloudapi.com/`。两个模板均须在所选地域审核通过，唯一变量为 `code`。单次只发送给一个收件人，`TriggerType=1`。发件账号只需调用 `ses:SendEmail` 的权限。
+
+| Worker 设置 | 值 |
+| --- | --- |
+| `SPARK_SES_REGION` | SES 资源所在地域，`ap-guangzhou` 或 `ap-hongkong` |
+| `SPARK_SES_FROM` | 已验证发件地址，填写不带别名的 ASCII 邮箱 |
+| `SPARK_SES_REGISTER_TEMPLATE_ID` | 审核通过的注册验证码模板 ID |
+| `SPARK_SES_RESET_TEMPLATE_ID` | 审核通过的密码重置验证码模板 ID |
+| `SPARK_SES_CREDENTIALS_FILE` | Worker 内读取的 JSON 文件，字段为 `secret_id` 和 `secret_key` |
+
+SES 验证 HTTPS 证书，关闭 SDK 重试、区域回退、重定向和调试日志。腾讯云明确返回限频拒绝时由 River 安排重试。断线、异常 HTTP 状态、无法解析的响应或缺少受理标识时，保留 `uncertain` 并停止自动投递。腾讯云返回有效受理标识仅表示供应商接受了请求。
+
+### SMTP
+
+`SPARK_MAIL_MODE=smtp` 使用 SMTP，凭证文件为 JSON，包含 `username` 和 `password`。
+
+| Worker 设置 | 值 |
+| --- | --- |
+| `SPARK_SMTP_HOST` | SMTP 服务器证书对应域名 |
+| `SPARK_SMTP_TLS` | `implicit` 默认走 TLS 465，`starttls` 默认走 587 并强制升级 |
+| `SPARK_SMTP_PORT` | 可选，覆盖上述端口 |
+| `SPARK_SMTP_FROM` | 验证邮件的发件地址 |
+| `SPARK_SMTP_CREDENTIALS_FILE` | 邮件 Worker 内只读凭证文件的路径 |
+| `SPARK_SMTP_CA_FILE` | 可选的 PEM 信任根，供受控环境验证 |
+
+身份和证书链始终验证，最低 TLS 1.2。AUTH PLAIN 只在 TLS 建立后进行。SMTP 发送中文纯文本和 HTML。最终接收回复丢失时保留 `uncertain`。
+
+### 重发、切换与恢复
+
+两种外部渠道的 `202` 均表示请求已持久受理，供应商接收时间记为 `delivered_at`。验证码 60 秒后可重发，有效期 10 分钟，最多试 5 次。现有 `development` 模式保留本地一次性读取，`disabled` 返回 `503`。
+
+邮件 Worker 单并发，两种外部渠道共用平台限额，每 10 分钟最多接收 20 个新挑战，每 UTC 日最多 120 个，并受现有邮箱和来源限流。River 最多运行三次尝试，退避约 20 秒和 60 秒。Worker 临发复核挑战是否仍有效，明确拒收且挑战仍有效时才恢复密文安排重试。崩溃或结果不明后的任务不会自动重发，用户可按正常间隔申请新验证码。运维日志记录挑战 ID 和固定故障类别。
+
+切换渠道时先停止旧邮件 Worker，再对齐 API 和新 Worker 的模式。加密载荷保留申请时的渠道，Worker 取消渠道不匹配的待发任务。同一个任务不会因切换渠道而改投。
+
+恢复备份时保持 API 和邮件 Worker 停止，在离线恢复库运行 `/spark invalidate-restored-mail`。该命令取消恢复出的邮件队列并作废旧验证码，输出影响数量。完成恢复检查后再启用流量和邮件 Worker，由用户申请新验证码。停用外部投递时将 API 模式改为 `disabled`，并停止邮件 Worker。
+
 ## 当前 API 与数据语义
 
 已实现的契约操作：
@@ -211,7 +254,7 @@ dc run --rm -T tools dev-mail CHALLENGE_ID
 
 ## 生成与验证
 
-Go module 与构建镜像固定 Go 1.27.3，Gin 1.11.0、pgx 5.7.6；完整依赖版本见 `go.mod/go.sum`。生成器固定 oapi-codegen 2.4.1、sqlc 1.29.0。类型生成以共享 contracts 为唯一来源；`oapi-overlay.yaml` 仅将 Go `UserStatus` 类型命名为 `AccountStatusRequest`，解决与 `User.status` 枚举的名称碰撞，不改变 JSON 字段、枚举或必填性。
+Go module 与构建镜像固定 Go 1.27.4，Gin 1.11.0、pgx 5.9.2；完整依赖版本见 `go.mod/go.sum`。生成器固定 oapi-codegen 2.4.1、sqlc 1.29.0。类型生成以共享 contracts 为唯一来源；`oapi-overlay.yaml` 仅将 Go `UserStatus` 类型命名为 `AccountStatusRequest`，解决与 `User.status` 枚举的名称碰撞，不改变 JSON 字段、枚举或必填性。
 
 在容器内重新生成（绑定本模块目录接收生成文件，契约只读挂载）：
 
@@ -237,7 +280,7 @@ test 镜像设置 `CGO_ENABLED=0`；默认运行 `go test ./... -count=1`，实�
 
 ## 范围与限制
 
-尚未实现真实邮件投递、OCR、标签、自动采纳项目、完整管理后台及后续同步。文字整理使用 River 和独立 Worker，平台关闭时返回 `skipped` / `integration_not_configured`。图片附件、图片理解、网页提取和永久删除按各自能力开关配置。
+SMTP 邮件 Worker 已在受控 TLS 邮件服务上验证注册与密码找回。生产启用须配置发件身份并验证实际收件。标签、自动采纳项目、完整管理后台及后续同步仍在规划中。文字整理使用 River 和独立 Worker，平台关闭时返回 `skipped` / `integration_not_configured`。图片附件、图片理解、网页提取和永久删除按各自能力开关配置。
 
 正式邮件缺凭证只阻止相应集成；`disabled` 模式验证码接口返回 503，不假报已发送。首批没有以仿真实现代替真实 PostgreSQL。容器中的 pgx/sqlc 与真实数据库验证和前端浏览器闭环分别报告；容量压测、真实云服务和备份恢复 RPO/RTO 属于后续验收。
 

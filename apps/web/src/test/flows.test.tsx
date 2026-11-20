@@ -34,6 +34,28 @@ async function loginAsAdmin(user: ReturnType<typeof userEvent.setup>, adapter = 
 }
 
 describe('Spark Web key flows', () => {
+  it.each([
+    ['Android WebView SparkAndroid/2', true],
+    ['Android WebView SparkAndroid/20', false],
+    ['Android Chrome Mobile', false],
+  ])('exposes local drafts only to a compatible app (%s)', async (ua, supported) => {
+    const agent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(ua);
+    try {
+      const user = userEvent.setup();
+      await loginAsAdmin(user);
+      await user.click(screen.getByRole('button', { name: '更多导航' }));
+      const drawer = within(screen.getByRole('dialog', { name: '导航菜单' }));
+      const link = drawer.queryByRole('link', { name: '本机草稿' });
+      if (supported) expect(link).toHaveAttribute('href', '/android/local-drafts');
+      else expect(link).toBeNull();
+      await user.click(drawer.getByRole('link', { name: '待归类' }));
+      await screen.findByRole('heading', { name: '待归类' });
+      expect(screen.getByRole('button', { name: '更多导航' })).toHaveAttribute('aria-current', 'location');
+    } finally {
+      agent.mockRestore();
+    }
+  });
+
   it('completes admin invite CSV preview/commit and registers a new user with 0-project empty state', async () => {
     const user = userEvent.setup();
     const { adapter } = await loginAsAdmin(user);

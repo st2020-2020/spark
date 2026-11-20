@@ -30,7 +30,8 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	if err = s.authRate(c, "verification", email); err != nil {
 		return nil, err
 	}
-	if s.Config.MailMode != "development" {
+	externalMail := isMailDeliveryMode(s.Config.MailMode)
+	if !externalMail && s.Config.MailMode != "development" {
 		return nil, problem(503, "service_unavailable", "邮件服务尚未配置，无法发送验证码。")
 	}
 	ctx := c.Request.Context()
@@ -50,10 +51,18 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	if recent {
 		return nil, problem(429, "rate_limited", "请稍后再申请验证码。")
 	}
-	if _, err = tx.Exec(ctx, `UPDATE mail_outbox SET encrypted_payload=NULL WHERE challenge_id IN (SELECT id FROM email_challenges WHERE email_normalized=$1 AND purpose=$2)`, email, string(req.Purpose)); err != nil {
-		return nil, err
+	if externalMail {
+		if err := s.reserveMailChallenge(c, tx); err != nil {
+			return nil, err
+		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE email_challenges SET consumed_at=now() WHERE email_normalized=$1 AND purpose=$2 AND consumed_at IS NULL`, email, string(req.Purpose)); err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE mail_outbox SET encrypted_payload=NULL,
+		delivery_state=CASE WHEN delivery_state='queued' THEN 'cancelled' ELSE delivery_state END
+		WHERE challenge_id IN (SELECT id FROM email_challenges WHERE email_normalized=$1 AND purpose=$2)
+		  AND encrypted_payload IS NOT NULL`, email, string(req.Purpose)); err != nil {
 		return nil, err
 	}
 	id := uuid.NewString()
@@ -63,20 +72,35 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	}
 	code := fmt.Sprintf("%06d", n.Int64())
 	expires := time.Now().UTC().Add(10 * time.Minute)
-	encrypted, err := s.seal("mail:"+id, jsonBytes(gin.H{"adapter": "development-only", "challenge_id": id, "email": email, "purpose": req.Purpose, "verification_code": code, "expires_at": expires}))
+	message := challengeMail{
+		Adapter: "development-only", ChallengeID: id, Email: email, Purpose: string(req.Purpose),
+		Code: code, ExpiresAt: expires,
+	}
+	state := "development"
+	if externalMail {
+		message.Adapter, state = s.Config.MailMode, "queued"
+	}
+	encrypted, err := s.seal("mail:"+id, jsonBytes(message))
 	if err != nil {
 		return nil, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO email_challenges(id,email_normalized,purpose,code_digest,expires_at) VALUES($1,$2,$3,$4,$5)`, id, email, string(req.Purpose), s.mac("verification", id, code), expires); err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO mail_outbox(challenge_id,encrypted_payload,expires_at) VALUES($1,$2,$3)`, id, encrypted, expires); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO mail_outbox(challenge_id,encrypted_payload,expires_at,delivery_state) VALUES($1,$2,$3,$4)`, id, encrypted, expires, state); err != nil {
 		return nil, err
+	}
+	if externalMail {
+		if err := enqueueMail(ctx, tx, s.Organizer.Queue, id); err != nil {
+			return nil, err
+		}
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	c.Header("X-Spark-Mail-Adapter", "development")
+	if !externalMail {
+		c.Header("X-Spark-Mail-Adapter", "development")
+	}
 	c.Set("status", 202)
 	return contract.VerificationResult{ChallengeId: uuid.MustParse(id), ExpiresIn: 600, ResendAfter: 60}, nil
 }
@@ -181,7 +205,8 @@ func (s *Server) register(c *gin.Context) (any, error) {
 	if _, err = tx.Exec(ctx, `UPDATE email_challenges SET consumed_at=now() WHERE id=$1`, req.ChallengeId.String()); err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE mail_outbox SET encrypted_payload=NULL WHERE challenge_id=$1`, req.ChallengeId.String()); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE mail_outbox SET encrypted_payload=NULL,
+		delivery_state=CASE WHEN delivery_state='queued' THEN 'cancelled' ELSE delivery_state END WHERE challenge_id=$1`, req.ChallengeId.String()); err != nil {
 		return nil, err
 	}
 	sess, err := s.newSession(ctx, tx, c, u)
@@ -302,7 +327,8 @@ func (s *Server) resetPassword(c *gin.Context) (any, error) {
 	if _, err = tx.Exec(ctx, `UPDATE email_challenges SET consumed_at=now() WHERE id=$1`, req.ChallengeId.String()); err != nil {
 		return nil, err
 	}
-	if _, err = tx.Exec(ctx, `UPDATE mail_outbox SET encrypted_payload=NULL WHERE challenge_id=$1`, req.ChallengeId.String()); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE mail_outbox SET encrypted_payload=NULL,
+		delivery_state=CASE WHEN delivery_state='queued' THEN 'cancelled' ELSE delivery_state END WHERE challenge_id=$1`, req.ChallengeId.String()); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {

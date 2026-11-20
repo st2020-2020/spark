@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -16,13 +17,25 @@ const (
 	maxGETsPerSigningWindow = 120
 )
 
-// Charge a weighted account quota with the same keyed PostgreSQL counters
+func (s *Server) chargeAssetLimit(c *gin.Context, q querier, bucket string, cost, limit int, window time.Duration) error {
+	retryAfter, err := reserveRateCapacity(c.Request.Context(), q, s.mac("rate", "oss:"+bucket+":"+current(c).User.ID), cost, limit, window)
+	if err != nil {
+		return err
+	}
+	if retryAfter != 0 {
+		c.Header("Retry-After", strconv.Itoa(retryAfter))
+		return problem(429, "rate_limited", "图片存储授权达到额度，请稍后重试。")
+	}
+	return nil
+}
+
+// Reserve weighted capacity with the same keyed PostgreSQL counters
 // as the existing rate limits. The transaction timestamp keeps multiple
 // counters for one upload in the same UTC window. Denials leave capacity
 // unchanged, including when a later smaller upload still fits.
-func (s *Server) chargeAssetLimit(c *gin.Context, q querier, bucket string, cost, limit int, window time.Duration) error {
+func reserveRateCapacity(ctx context.Context, q querier, key []byte, cost, limit int, window time.Duration) (int, error) {
 	var retryAfter int
-	err := q.QueryRow(c.Request.Context(), `WITH period AS (
+	err := q.QueryRow(ctx, `WITH period AS (
 		SELECT date_bin($2::int * interval '1 second',transaction_timestamp(),
 		                timestamptz '2000-01-01 00:00:00+00') AS start
 	), accepted AS (
@@ -38,13 +51,6 @@ func (s *Server) chargeAssetLimit(c *gin.Context, q querier, bucket string, cost
 	)
 	SELECT CASE WHEN EXISTS (SELECT FROM accepted) THEN 0 ELSE
 	  GREATEST(1,ceil(extract(epoch FROM start + $2::int * interval '1 second' - clock_timestamp()))::int)
-	END FROM period`, s.mac("rate", "oss:"+bucket+":"+current(c).User.ID), int(window/time.Second), cost, limit).Scan(&retryAfter)
-	if err != nil {
-		return err
-	}
-	if retryAfter != 0 {
-		c.Header("Retry-After", strconv.Itoa(retryAfter))
-		return problem(429, "rate_limited", "图片存储授权达到额度，请稍后重试。")
-	}
-	return nil
+	END FROM period`, key, int(window/time.Second), cost, limit).Scan(&retryAfter)
+	return retryAfter, err
 }
