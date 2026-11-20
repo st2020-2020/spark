@@ -66,8 +66,8 @@ func LoadConfig() (Config, error) {
 			return c, errors.New("development mode requires loopback HTTP origin; wildcard listen requires SPARK_CONTAINER=true")
 		}
 	}
-	if c.MailMode != "disabled" && c.MailMode != "development" && c.MailMode != "smtp" {
-		return c, errors.New("SPARK_MAIL_MODE must be disabled, development, or smtp")
+	if c.MailMode != "disabled" && c.MailMode != "development" && !isMailDeliveryMode(c.MailMode) {
+		return c, errors.New("SPARK_MAIL_MODE must be disabled, development, smtp, or tencent-ses")
 	}
 	if c.MailMode == "development" && c.Env != "development" {
 		return c, errors.New("development mailbox is forbidden in production")

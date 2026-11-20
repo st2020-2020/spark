@@ -14,6 +14,8 @@ require (
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.26.0
 	github.com/riverqueue/river/rivertype v0.26.0
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.136
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/ses v1.3.136
 	golang.org/x/image v0.48.0
 	golang.org/x/net v0.62.0
 	golang.org/x/text v0.44.0

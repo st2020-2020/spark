@@ -15,16 +15,41 @@ import (
 	"spark/server/db"
 )
 
+const (
+	mailModeSMTP = "smtp"
+	mailModeSES  = "tencent-ses"
+)
+
+func isMailDeliveryMode(mode string) bool {
+	return mode == mailModeSMTP || mode == mailModeSES
+}
+
+type MailDelivery interface {
+	adapter() string
+	deliver(context.Context, challengeMail, func(context.Context) (bool, error)) mailDeliveryResult
+}
+
+func LoadMailDelivery(mode string) (MailDelivery, error) {
+	switch mode {
+	case mailModeSMTP:
+		return LoadSMTPDelivery()
+	case mailModeSES:
+		return loadTencentSESDelivery(nil)
+	default:
+		return nil, errors.New("mail worker requires SPARK_MAIL_MODE=smtp or tencent-ses")
+	}
+}
+
 type mailWorker struct {
 	river.WorkerDefaults[mailJobArgs]
 	pool   *pgxpool.Pool
 	key    []byte
-	sender *SMTPDelivery
+	sender MailDelivery
 }
 
-func StartMailWorker(ctx context.Context, pool *pgxpool.Pool, key []byte, sender *SMTPDelivery) (*river.Client[pgx.Tx], error) {
+func StartMailWorker(ctx context.Context, pool *pgxpool.Pool, key []byte, sender MailDelivery) (*river.Client[pgx.Tx], error) {
 	if len(key) != 32 || sender == nil {
-		return nil, errors.New("mail worker requires SMTP configuration and the shared encryption key")
+		return nil, errors.New("mail worker requires a delivery adapter and the shared encryption key")
 	}
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &mailWorker{pool: pool, key: key, sender: sender})
@@ -122,7 +147,7 @@ type mailAttempt struct {
 
 func claimMail(ctx context.Context, conn *pgxpool.Conn, id uuid.UUID) (mailAttempt, error) {
 	var a mailAttempt
-	// Take the ciphertext out of the database before contacting SMTP. If
+	// Take the ciphertext out of the database before contacting the delivery service. If
 	// the worker crashes, the durable uncertain row cannot be sent again.
 	err := conn.QueryRow(ctx, `WITH candidate AS (
 		SELECT o.challenge_id,o.encrypted_payload,c.email_normalized,c.purpose,LEAST(c.expires_at,o.expires_at) AS expiry
@@ -149,18 +174,17 @@ func (w *mailWorker) deliver(ctx context.Context, conn *pgxpool.Conn, id uuid.UU
 	}
 	defer clear(payload)
 	var message challengeMail
-	if err := json.Unmarshal(payload, &message); err != nil || message.Adapter != "smtp" || message.ChallengeID != id.String() ||
+	if err := json.Unmarshal(payload, &message); err != nil || message.ChallengeID != id.String() ||
 		message.Email != a.to || message.Purpose != a.purpose {
 		return mailDeliveryResult{"failed", "mail_payload_invalid"}
 	}
-	data, err := renderChallengeMail(w.sender.from, message)
-	if err != nil {
-		return mailDeliveryResult{"failed", "mail_payload_invalid"}
+	// A queued code belongs to its original channel, even after a mode change.
+	if message.Adapter != w.sender.adapter() {
+		return mailDeliveryResult{"cancelled", "mail_adapter_changed"}
 	}
-	defer clear(data)
 	ctx, cancel := context.WithDeadline(ctx, a.expires)
 	defer cancel()
-	return w.sender.send(ctx, a.to, data, func(ctx context.Context) (bool, error) {
+	return w.sender.deliver(ctx, message, func(ctx context.Context) (bool, error) {
 		var valid bool
 		err := conn.QueryRow(ctx, `SELECT EXISTS (
 		 SELECT FROM mail_outbox o JOIN email_challenges c ON c.id=o.challenge_id

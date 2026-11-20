@@ -58,7 +58,7 @@ func LoadSMTPDelivery() (*SMTPDelivery, error) {
 	}
 	cfg.tls = &tls.Config{ServerName: cfg.host, MinVersion: tls.VersionTLS12}
 	if path := os.Getenv("SPARK_SMTP_CA_FILE"); path != "" {
-		pem, err := readSMTPFile(path, 1<<20)
+		pem, err := readMailConfigFile(path, 1<<20)
 		if err != nil {
 			return nil, errors.New("cannot read SMTP trust CA")
 		}
@@ -68,7 +68,7 @@ func LoadSMTPDelivery() (*SMTPDelivery, error) {
 		}
 		cfg.tls.RootCAs = roots
 	}
-	data, err := readSMTPFile(os.Getenv("SPARK_SMTP_CREDENTIALS_FILE"), 8<<10)
+	data, err := readMailConfigFile(os.Getenv("SPARK_SMTP_CREDENTIALS_FILE"), 8<<10)
 	if err != nil {
 		return nil, errors.New("cannot read SMTP credentials file")
 	}
@@ -88,7 +88,7 @@ func LoadSMTPDelivery() (*SMTPDelivery, error) {
 	return cfg, nil
 }
 
-func readSMTPFile(path string, max int64) ([]byte, error) {
+func readMailConfigFile(path string, max int64) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -96,11 +96,11 @@ func readSMTPFile(path string, max int64) ([]byte, error) {
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil || !info.Mode().IsRegular() || info.Size() > max {
-		return nil, errors.New("invalid SMTP configuration file")
+		return nil, errors.New("invalid mail configuration file")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, max+1))
 	if err != nil || int64(len(data)) > max {
-		return nil, errors.New("invalid SMTP file size")
+		return nil, errors.New("invalid mail configuration file size")
 	}
 	return data, nil
 }
@@ -119,6 +119,17 @@ func internationalSMTPAddress(value string) bool {
 
 type mailDeliveryResult struct {
 	state, reason string
+}
+
+func (*SMTPDelivery) adapter() string { return mailModeSMTP }
+
+func (s *SMTPDelivery) deliver(ctx context.Context, message challengeMail, stillValid func(context.Context) (bool, error)) mailDeliveryResult {
+	data, err := renderChallengeMail(s.from, message)
+	if err != nil {
+		return mailDeliveryResult{"failed", "mail_payload_invalid"}
+	}
+	defer clear(data)
+	return s.send(ctx, message.Email, data, stillValid)
 }
 
 func smtpFailure(err error, reason string) mailDeliveryResult {

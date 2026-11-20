@@ -12,22 +12,34 @@ import (
 	"time"
 )
 
-func renderChallengeMail(from string, message challengeMail) ([]byte, error) {
-	if !smtpAddress(from) || !smtpAddress(message.Email) || len(message.Code) != 6 {
-		return nil, errors.New("invalid verification mail")
+const (
+	registerMailSubject = "Spark 注册验证码"
+	resetMailSubject    = "Spark 密码重置验证码"
+)
+
+func validVerificationCode(code string) bool {
+	if len(code) != 6 {
+		return false
 	}
-	for _, digit := range message.Code {
+	for _, digit := range code {
 		if digit < '0' || digit > '9' {
-			return nil, errors.New("invalid verification mail")
+			return false
 		}
+	}
+	return true
+}
+
+func renderChallengeMail(from string, message challengeMail) ([]byte, error) {
+	if !smtpAddress(from) || !smtpAddress(message.Email) || !validVerificationCode(message.Code) {
+		return nil, errors.New("invalid verification mail")
 	}
 	var subject, instruction string
 	switch message.Purpose {
 	case "register":
-		subject = "Spark 注册验证码"
+		subject = registerMailSubject
 		instruction = "请在 Spark 受邀注册页输入验证码和邀请码。"
 	case "password_reset":
-		subject = "Spark 密码重置验证码"
+		subject = resetMailSubject
 		instruction = "请在 Spark 找回密码页面输入验证码。"
 	default:
 		return nil, errors.New("unknown verification mail purpose")

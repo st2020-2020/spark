@@ -15,14 +15,12 @@ import (
 )
 
 func runMail() error {
-	if os.Getenv("SPARK_MAIL_MODE") != "smtp" {
-		return errors.New("mail worker requires SPARK_MAIL_MODE=smtp")
-	}
 	key, err := base64.StdEncoding.DecodeString(os.Getenv("SPARK_ENCRYPTION_KEY"))
 	if err != nil || len(key) != 32 {
 		return errors.New("mail worker requires a base64 encoded 32-byte SPARK_ENCRYPTION_KEY")
 	}
-	sender, err := backend.LoadSMTPDelivery()
+	mode := os.Getenv("SPARK_MAIL_MODE")
+	sender, err := backend.LoadMailDelivery(mode)
 	if err != nil {
 		return err
 	}
@@ -44,6 +42,6 @@ func runMail() error {
 	if err != nil {
 		return err
 	}
-	slog.Info("mail worker started")
+	slog.Info("mail worker started", "mail_adapter", mode)
 	return serveWorker(ctx, stop, cancelWorking, pool, worker)
 }

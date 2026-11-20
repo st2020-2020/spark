@@ -23,18 +23,18 @@ func startSMTPFixtureWorker(t *testing.T, app *Server, sender *SMTPDelivery) *ri
 	return worker
 }
 
-func requestSMTPChallenge(t *testing.T, client *apiClient, email, purpose string) string {
+func requestMailChallenge(t *testing.T, client *apiClient, email, purpose string) string {
 	t.Helper()
 	resp := client.do("POST", "/auth/verification", map[string]any{"email": email, "purpose": purpose}, "")
 	body := resp.want(t, 202)
 	if body["expires_in"] != float64(600) || body["resend_after"] != float64(60) ||
 		body["verification_code"] != nil || resp.header.Get("X-Spark-Mail-Adapter") != "" {
-		t.Fatal("SMTP changed the verification API contract")
+		t.Fatal("mail delivery changed the verification API contract")
 	}
 	return body["challenge_id"].(string)
 }
 
-func waitSMTPState(t *testing.T, app *Server, id, expected string, cipherCleared bool) {
+func waitMailState(t *testing.T, app *Server, id, expected string, cipherCleared bool) {
 	t.Helper()
 	waitImageTest(t, "mail state "+expected, func() bool {
 		var state string
@@ -53,7 +53,7 @@ func TestSMTPVerificationRegistersAndResetRevokesSessions(t *testing.T) {
 	const email = "smtp-registration@example.test"
 	app.Config.MailMode = "smtp"
 	client := newClient(t, app, base)
-	registration := requestSMTPChallenge(t, client, email, "register")
+	registration := requestMailChallenge(t, client, email, "register")
 	client.do("POST", "/auth/verification", map[string]any{"email": email, "purpose": "register"}, "").want(t, 429)
 	if _, err := app.DevelopmentMail(t.Context(), registration); err == nil {
 		t.Fatal("development CLI exposed a real SMTP challenge")
@@ -73,7 +73,7 @@ func TestSMTPVerificationRegistersAndResetRevokesSessions(t *testing.T) {
 	fixture, sender := newSMTPFixture(t, "starttls", "starttls")
 	startSMTPFixtureWorker(t, app, sender)
 	code := smtpFixtureCode(t, fixture.next(t), email, "Spark 注册验证码")
-	waitSMTPState(t, app, registration, "accepted", true)
+	waitMailState(t, app, registration, "accepted", true)
 	reg := client.do("POST", "/auth/register", map[string]any{
 		"email": email, "password": "test-password-12345", "invite_code": invite,
 		"challenge_id": registration, "verification_code": code,
@@ -82,9 +82,9 @@ func TestSMTPVerificationRegistersAndResetRevokesSessions(t *testing.T) {
 	second := newClient(t, app, base)
 	second.signIn(email)
 
-	reset := requestSMTPChallenge(t, client, email, "password_reset")
+	reset := requestMailChallenge(t, client, email, "password_reset")
 	resetCode := smtpFixtureCode(t, fixture.next(t), email, "Spark 密码重置验证码")
-	waitSMTPState(t, app, reset, "accepted", true)
+	waitMailState(t, app, reset, "accepted", true)
 	client.do("POST", "/auth/password-reset", map[string]any{
 		"email": email, "challenge_id": reset, "verification_code": resetCode, "new_password": "updated-test-password-12345",
 	}, "").want(t, 204)
@@ -104,9 +104,9 @@ func TestSMTPRetriesOnlyDefiniteRejection(t *testing.T) {
 	fixture, sender := newSMTPFixture(t, "implicit", "implicit", "451 fixture-sensitive-reply", "250 accepted", "", "550 not accepted")
 	startSMTPFixtureWorker(t, app, sender)
 	const email = "smtp-retry@example.test"
-	id := requestSMTPChallenge(t, client, email, "register")
+	id := requestMailChallenge(t, client, email, "register")
 	first := smtpFixtureCode(t, fixture.next(t), email, "Spark 注册验证码")
-	waitSMTPState(t, app, id, "queued", false)
+	waitMailState(t, app, id, "queued", false)
 	waitImageTest(t, "scheduled retry", func() bool {
 		var ok bool
 		err := app.Pool.QueryRow(t.Context(), `SELECT state='retryable' AND scheduled_at>now()
@@ -121,11 +121,11 @@ func TestSMTPRetriesOnlyDefiniteRejection(t *testing.T) {
 	if second := smtpFixtureCode(t, fixture.next(t), email, "Spark 注册验证码"); second != first {
 		t.Fatal("SMTP retry rotated the already-issued challenge code")
 	}
-	waitSMTPState(t, app, id, "accepted", true)
+	waitMailState(t, app, id, "accepted", true)
 
-	unknown := requestSMTPChallenge(t, client, "smtp-unknown@example.test", "register")
+	unknown := requestMailChallenge(t, client, "smtp-unknown@example.test", "register")
 	fixture.next(t) // SMTP accepted DATA, then the connection disappeared before the reply.
-	waitSMTPState(t, app, unknown, "uncertain", true)
+	waitMailState(t, app, unknown, "uncertain", true)
 	duplicate, err := app.Organizer.Queue.Insert(t.Context(), mailJobArgs{ChallengeID: unknown},
 		&river.InsertOpts{Queue: mailQueue})
 	if err != nil {
@@ -139,9 +139,9 @@ func TestSMTPRetriesOnlyDefiniteRejection(t *testing.T) {
 		t.Fatal("unknown SMTP acceptance caused an extra delivery")
 	}
 
-	rejected := requestSMTPChallenge(t, client, "smtp-permanent@example.test", "register")
+	rejected := requestMailChallenge(t, client, "smtp-permanent@example.test", "register")
 	fixture.next(t)
-	waitSMTPState(t, app, rejected, "failed", true)
+	waitMailState(t, app, rejected, "failed", true)
 }
 
 func TestSMTPSkipsExpiredSupersededAndRestoredMail(t *testing.T) {
@@ -152,21 +152,21 @@ func TestSMTPSkipsExpiredSupersededAndRestoredMail(t *testing.T) {
 	app.Config.MailMode = "smtp"
 	client := newClient(t, app, base)
 	const email = "smtp-superseded@example.test"
-	superseded := requestSMTPChallenge(t, client, email, "register")
+	superseded := requestMailChallenge(t, client, email, "register")
 	if _, err := app.Pool.Exec(t.Context(), `UPDATE email_challenges SET created_at=now()-interval '61 seconds' WHERE id=$1`, superseded); err != nil {
 		t.Fatal(err)
 	}
-	active := requestSMTPChallenge(t, client, email, "register")
-	expired := requestSMTPChallenge(t, client, "smtp-expired@example.test", "register")
+	active := requestMailChallenge(t, client, email, "register")
+	expired := requestMailChallenge(t, client, "smtp-expired@example.test", "register")
 	if _, err := app.Pool.Exec(t.Context(), `UPDATE email_challenges SET expires_at=now()-interval '1 second' WHERE id=$1`, expired); err != nil {
 		t.Fatal(err)
 	}
 	fixture, sender := newSMTPFixture(t, "implicit", "implicit")
 	worker := startSMTPFixtureWorker(t, app, sender)
 	code := smtpFixtureCode(t, fixture.next(t), email, "Spark 注册验证码")
-	waitSMTPState(t, app, active, "accepted", true)
-	waitSMTPState(t, app, superseded, "cancelled", true)
-	waitSMTPState(t, app, expired, "cancelled", true)
+	waitMailState(t, app, active, "accepted", true)
+	waitMailState(t, app, superseded, "cancelled", true)
+	waitMailState(t, app, expired, "cancelled", true)
 	if fixture.attempts.Load() != 1 {
 		t.Fatal("obsolete challenge was dispatched")
 	}
@@ -185,13 +185,20 @@ func TestSMTPSkipsExpiredSupersededAndRestoredMail(t *testing.T) {
 	}, "").want(t, 422)
 }
 
-func TestSMTPOutboxAndQueueRollbackAndGlobalLimits(t *testing.T) {
+func TestMailOutboxAndQueueRollbackAndGlobalLimits(t *testing.T) {
+	for _, mode := range []string{"smtp", "tencent-ses"} {
+		t.Run(mode, func(t *testing.T) { testMailOutboxAndQueueRollbackAndGlobalLimits(t, mode) })
+	}
+}
+
+func testMailOutboxAndQueueRollbackAndGlobalLimits(t *testing.T, mode string) {
+	t.Helper()
 	app, base := testBackend(t)
 	client := newClient(t, app, base)
 	app.Config.MailMode = "disabled"
 	payload := map[string]any{"email": "smtp-atomic@example.test", "purpose": "register"}
 	client.do("POST", "/auth/verification", payload, "").want(t, 503)
-	app.Config.MailMode = "smtp"
+	app.Config.MailMode = mode
 	ctx := t.Context()
 	if _, err := app.Pool.Exec(ctx, `CREATE FUNCTION block_test_mail() RETURNS trigger LANGUAGE plpgsql AS $$
 		BEGIN IF NEW.kind='spark_send_mail' THEN RAISE EXCEPTION 'controlled queue failure'; END IF; RETURN NEW; END $$;
@@ -206,17 +213,17 @@ func TestSMTPOutboxAndQueueRollbackAndGlobalLimits(t *testing.T) {
 	if err := app.Pool.QueryRow(ctx, `SELECT (SELECT count(*) FROM mail_outbox)+(SELECT count(*) FROM email_challenges)
 		 +(SELECT count(*) FROM auth_rate_limits WHERE key IN ($1,$2))`,
 		digest("mail:daily"), digest("mail:burst")).Scan(&rows); err != nil || rows != 0 {
-		t.Fatalf("failed queue insertion left SMTP data or capacity reserved: %d, %v", rows, err)
+		t.Fatalf("failed queue insertion left mail data or capacity reserved: %d, %v", rows, err)
 	}
 
-	id := requestSMTPChallenge(t, client, payload["email"].(string), "register")
+	id := requestMailChallenge(t, client, payload["email"].(string), "register")
 	if _, err := app.Pool.Exec(ctx, `UPDATE auth_rate_limits SET count=$2 WHERE key=$1`, digest("mail:burst"), mailBurstLimit); err != nil {
 		t.Fatal(err)
 	}
 	limited := client.do("POST", "/auth/verification", map[string]any{"email": "smtp-limited@example.test", "purpose": "register"}, "")
 	limited.want(t, 429)
 	if limited.header.Get("Retry-After") == "" {
-		t.Fatal("SMTP platform throttling omitted retry time")
+		t.Fatal("mail platform throttling omitted retry time")
 	}
 	if _, err := app.Pool.Exec(ctx, `UPDATE auth_rate_limits SET count=CASE WHEN key=$1 THEN $3::int ELSE 0 END
 		WHERE key IN ($1,$2)`, digest("mail:daily"), digest("mail:burst"), mailDailyLimit); err != nil {
@@ -227,7 +234,7 @@ func TestSMTPOutboxAndQueueRollbackAndGlobalLimits(t *testing.T) {
 	if err != nil || changed != 1 || cancelled != 1 {
 		t.Fatalf("offline restore did not invalidate the queue: %d, %d, %v", changed, cancelled, err)
 	}
-	waitSMTPState(t, app, id, "cancelled", true)
+	waitMailState(t, app, id, "cancelled", true)
 	if again, duplicate, err := InvalidateRestoredMail(ctx, app.Pool); err != nil || again != 0 || duplicate != 0 {
 		t.Fatalf("restore invalidation was not repeatable: %d, %d, %v", again, duplicate, err)
 	}

@@ -30,8 +30,8 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	if err = s.authRate(c, "verification", email); err != nil {
 		return nil, err
 	}
-	smtpMode := s.Config.MailMode == "smtp"
-	if !smtpMode && s.Config.MailMode != "development" {
+	externalMail := isMailDeliveryMode(s.Config.MailMode)
+	if !externalMail && s.Config.MailMode != "development" {
 		return nil, problem(503, "service_unavailable", "邮件服务尚未配置，无法发送验证码。")
 	}
 	ctx := c.Request.Context()
@@ -51,7 +51,7 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	if recent {
 		return nil, problem(429, "rate_limited", "请稍后再申请验证码。")
 	}
-	if smtpMode {
+	if externalMail {
 		if err := s.reserveMailChallenge(c, tx); err != nil {
 			return nil, err
 		}
@@ -77,8 +77,8 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 		Code: code, ExpiresAt: expires,
 	}
 	state := "development"
-	if smtpMode {
-		message.Adapter, state = "smtp", "queued"
+	if externalMail {
+		message.Adapter, state = s.Config.MailMode, "queued"
 	}
 	encrypted, err := s.seal("mail:"+id, jsonBytes(message))
 	if err != nil {
@@ -90,7 +90,7 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	if _, err = tx.Exec(ctx, `INSERT INTO mail_outbox(challenge_id,encrypted_payload,expires_at,delivery_state) VALUES($1,$2,$3,$4)`, id, encrypted, expires, state); err != nil {
 		return nil, err
 	}
-	if smtpMode {
+	if externalMail {
 		if err := enqueueMail(ctx, tx, s.Organizer.Queue, id); err != nil {
 			return nil, err
 		}
@@ -98,7 +98,7 @@ func (s *Server) verification(c *gin.Context) (any, error) {
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	if !smtpMode {
+	if !externalMail {
 		c.Header("X-Spark-Mail-Adapter", "development")
 	}
 	c.Set("status", 202)

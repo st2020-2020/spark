@@ -190,9 +190,27 @@ dc run --rm -T tools dev-mail CHALLENGE_ID
 
 通过 `dc run --rm tools maintenance` 显式清理过期邮件密文、邀请预览密文、限流和幂等记录；开发环境长期运行时按需执行。
 
-## SMTP 验证邮件（v0.4-T02）
+## 验证邮件（v0.4-T02）
 
-SMTP 启用前先迁移到 `008_mail_delivery.sql`。API 和独立 `/spark-worker mail` 共用数据库及 `SPARK_ENCRYPTION_KEY`，均设置 `SPARK_MAIL_MODE=smtp`。凭证文件只读挂载给邮件 Worker，文件为 JSON，包含 `username` 和 `password`。API 只存短期密文并在同一事务入队，River 任务仅带挑战 ID。邮件 Worker 与 AI 和 OSS 独立运行，健康检查沿用 `/spark-worker healthcheck` 和容器内 `127.0.0.1:9091/ready`。
+启用外部渠道前先迁移到 `008_mail_delivery.sql`。API 和独立 `/spark-worker mail` 共用数据库、`SPARK_ENCRYPTION_KEY` 及同一个 `SPARK_MAIL_MODE`。API 只需渠道模式，在同一事务保存挑战、加密载荷和仅含挑战 ID 的 River 任务。渠道配置和只读凭证文件只注入邮件 Worker。邮件 Worker 与 AI 和 OSS 独立，健康检查沿用 `/spark-worker healthcheck` 和 `127.0.0.1:9091/ready`。
+
+### 腾讯云 SES
+
+`SPARK_MAIL_MODE=tencent-ses` 使用官方 Go SDK 调用固定的 `https://ses.tencentcloudapi.com/`。两个模板均须在所选地域审核通过，唯一变量为 `code`。单次只发送给一个收件人，`TriggerType=1`。发件账号只需调用 `ses:SendEmail` 的权限。
+
+| Worker 设置 | 值 |
+| --- | --- |
+| `SPARK_SES_REGION` | SES 资源所在地域，`ap-guangzhou` 或 `ap-hongkong` |
+| `SPARK_SES_FROM` | 已验证发件地址，填写不带别名的 ASCII 邮箱 |
+| `SPARK_SES_REGISTER_TEMPLATE_ID` | 审核通过的注册验证码模板 ID |
+| `SPARK_SES_RESET_TEMPLATE_ID` | 审核通过的密码重置验证码模板 ID |
+| `SPARK_SES_CREDENTIALS_FILE` | Worker 内读取的 JSON 文件，字段为 `secret_id` 和 `secret_key` |
+
+SES 验证 HTTPS 证书，关闭 SDK 重试、区域回退、重定向和调试日志。腾讯云明确返回限频拒绝时由 River 安排重试。断线、异常 HTTP 状态、无法解析的响应或缺少受理标识时，保留 `uncertain` 并停止自动投递。腾讯云返回有效受理标识仅表示供应商接受了请求。
+
+### SMTP
+
+`SPARK_MAIL_MODE=smtp` 使用 SMTP，凭证文件为 JSON，包含 `username` 和 `password`。
 
 | Worker 设置 | 值 |
 | --- | --- |
@@ -203,11 +221,17 @@ SMTP 启用前先迁移到 `008_mail_delivery.sql`。API 和独立 `/spark-worke
 | `SPARK_SMTP_CREDENTIALS_FILE` | 邮件 Worker 内只读凭证文件的路径 |
 | `SPARK_SMTP_CA_FILE` | 可选的 PEM 信任根，供受控环境验证 |
 
-身份和证书链始终验证，最低 TLS 1.2，启用信任根仍验证主机名。认证使用 AUTH PLAIN，只在 TLS 建立后进行。SMTP 模式的 `202` 表示验证码及待发任务已持久保存。供应商接收时间记录为 `delivered_at`。现有 `development` 模式保留本地一次性读取，`disabled` 返回 `503`。验证码 60 秒后可重发，有效期 10 分钟，最多试 5 次。两类验证码均发送中文纯文本和 HTML。邀请说明可随既有邀请码分享，例如「你已受邀试用 Spark。请在受邀注册页输入邀请码，通过邮箱验证码完成注册。」
+身份和证书链始终验证，最低 TLS 1.2。AUTH PLAIN 只在 TLS 建立后进行。SMTP 发送中文纯文本和 HTML。最终接收回复丢失时保留 `uncertain`。
 
-SMTP 使用单并发 Worker，平台每 10 分钟最多接受 20 个新邮件挑战，每 UTC 日最多 120 个，同时保留现有邮箱和来源限流。明确未接收的临时失败最多跑三次，间隔约 20 秒和 60 秒。过期、消费或重发替换会使原挑战失效。发送前清除持久密文并记为待确认，明确拒收且挑战仍有效时才恢复密文安排重试。最终回复丢失或崩溃后的不明结果不会自动重发，用户可按正常间隔申请新验证码。运维日志只跟踪挑战 ID 和固定故障类别。
+### 重发、切换与恢复
 
-恢复备份时保持 API 和邮件 Worker 停止，在离线恢复库运行 `/spark invalidate-restored-mail`。该命令取消恢复出的邮件队列并作废旧验证码，输出影响数量。完成恢复检查后再启用流量和邮件 Worker，由用户申请新验证码。 停用 SMTP 时将 API 模式改为 `disabled`，并停止邮件 Worker。
+两种外部渠道的 `202` 均表示请求已持久受理，供应商接收时间记为 `delivered_at`。验证码 60 秒后可重发，有效期 10 分钟，最多试 5 次。现有 `development` 模式保留本地一次性读取，`disabled` 返回 `503`。
+
+邮件 Worker 单并发，两种外部渠道共用平台限额，每 10 分钟最多接收 20 个新挑战，每 UTC 日最多 120 个，并受现有邮箱和来源限流。River 最多运行三次尝试，退避约 20 秒和 60 秒。Worker 临发复核挑战是否仍有效，明确拒收且挑战仍有效时才恢复密文安排重试。崩溃或结果不明后的任务不会自动重发，用户可按正常间隔申请新验证码。运维日志记录挑战 ID 和固定故障类别。
+
+切换渠道时先停止旧邮件 Worker，再对齐 API 和新 Worker 的模式。加密载荷保留申请时的渠道，Worker 取消渠道不匹配的待发任务。同一个任务不会因切换渠道而改投。
+
+恢复备份时保持 API 和邮件 Worker 停止，在离线恢复库运行 `/spark invalidate-restored-mail`。该命令取消恢复出的邮件队列并作废旧验证码，输出影响数量。完成恢复检查后再启用流量和邮件 Worker，由用户申请新验证码。停用外部投递时将 API 模式改为 `disabled`，并停止邮件 Worker。
 
 ## 当前 API 与数据语义
 
