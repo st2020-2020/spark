@@ -72,8 +72,13 @@ func (s *Server) seal(aad string, payload []byte) ([]byte, error) {
 	}
 	return gcm.Seal(nonce, nonce, payload, []byte(aad)), nil
 }
+
 func (s *Server) open(aad string, payload []byte) ([]byte, error) {
-	block, err := aes.NewCipher(s.Config.EncryptionKey)
+	return openEncryptedPayload(s.Config.EncryptionKey, aad, payload)
+}
+
+func openEncryptedPayload(key []byte, aad string, payload []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
 	}
@@ -286,7 +291,7 @@ func (s *Server) DevelopmentMail(ctx context.Context, id string) (json.RawMessag
 	}
 	defer tx.Rollback(ctx)
 	var encrypted []byte
-	if err = tx.QueryRow(ctx, `SELECT encrypted_payload FROM mail_outbox WHERE challenge_id=$1 AND expires_at>now() AND encrypted_payload IS NOT NULL FOR UPDATE`, id).Scan(&encrypted); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT encrypted_payload FROM mail_outbox WHERE challenge_id=$1 AND delivery_state='development' AND expires_at>now() AND encrypted_payload IS NOT NULL FOR UPDATE`, id).Scan(&encrypted); err != nil {
 		return nil, err
 	}
 	payload, err := s.open("mail:"+id, encrypted)

@@ -1,6 +1,6 @@
-# Spark 在线后端：首个开发批次
+# Spark 在线后端
 
-本模块实现邀请导入、邮箱验证、邀请注册、登录与会话、密码重置、项目、文字/网址收藏、用途、人工项目关联和关键词找回。它是 ROADMAP 首批纵向流程的后端，不代表 M1–M4 全部完成。根目录 MyGo 入口与真实 `data/` 不参与本模块。
+API 提供邀请注册、邮箱验证、登录与密码找回、资料收集、项目归类、搜索和个人数据导出。邮件、AI 整理、附件、网页提取和永久删除由独立 Worker 按部署配置启用。
 
 ## OrbStack 开发运行
 
@@ -19,7 +19,7 @@ dc up -d --build api web
 dc ps
 ```
 
-迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `007_extraction_keys_upload_cleanup.sql`（版本 7）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v7.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
+迁移只在显式 `tools migrate` 中执行，API 与 Worker 启动会检查应用版本和 River 迁移并拒绝未迁移的库，不会重置数据。当前版本为 `008_mail_delivery.sql`（版本 8）及 River 官方表迁移，重复迁移不重复执行。全新环境先迁移；已有数据的环境先备份（`dc exec -T postgres pg_dump -U spark -Fc spark_dev > .local/spark_dev.before_v8.dump`）再执行 `dc run --rm tools migrate`，从逻辑备份恢复的环境先恢复，再执行迁移。
 
 ## 图片附件与独立资产 Worker（v0.3-T03）
 
@@ -190,6 +190,25 @@ dc run --rm -T tools dev-mail CHALLENGE_ID
 
 通过 `dc run --rm tools maintenance` 显式清理过期邮件密文、邀请预览密文、限流和幂等记录；开发环境长期运行时按需执行。
 
+## SMTP 验证邮件（v0.4-T02）
+
+SMTP 启用前先迁移到 `008_mail_delivery.sql`。API 和独立 `/spark-worker mail` 共用数据库及 `SPARK_ENCRYPTION_KEY`，均设置 `SPARK_MAIL_MODE=smtp`。凭证文件只读挂载给邮件 Worker，文件为 JSON，包含 `username` 和 `password`。API 只存短期密文并在同一事务入队，River 任务仅带挑战 ID。邮件 Worker 与 AI 和 OSS 独立运行，健康检查沿用 `/spark-worker healthcheck` 和容器内 `127.0.0.1:9091/ready`。
+
+| Worker 设置 | 值 |
+| --- | --- |
+| `SPARK_SMTP_HOST` | SMTP 服务器证书对应域名 |
+| `SPARK_SMTP_TLS` | `implicit` 默认走 TLS 465，`starttls` 默认走 587 并强制升级 |
+| `SPARK_SMTP_PORT` | 可选，覆盖上述端口 |
+| `SPARK_SMTP_FROM` | 验证邮件的发件地址 |
+| `SPARK_SMTP_CREDENTIALS_FILE` | 邮件 Worker 内只读凭证文件的路径 |
+| `SPARK_SMTP_CA_FILE` | 可选的 PEM 信任根，供受控环境验证 |
+
+身份和证书链始终验证，最低 TLS 1.2，启用信任根仍验证主机名。认证使用 AUTH PLAIN，只在 TLS 建立后进行。SMTP 模式的 `202` 表示验证码及待发任务已持久保存。供应商接收时间记录为 `delivered_at`。现有 `development` 模式保留本地一次性读取，`disabled` 返回 `503`。验证码 60 秒后可重发，有效期 10 分钟，最多试 5 次。两类验证码均发送中文纯文本和 HTML。邀请说明可随既有邀请码分享，例如「你已受邀试用 Spark。请在受邀注册页输入邀请码，通过邮箱验证码完成注册。」
+
+SMTP 使用单并发 Worker，平台每 10 分钟最多接受 20 个新邮件挑战，每 UTC 日最多 120 个，同时保留现有邮箱和来源限流。明确未接收的临时失败最多跑三次，间隔约 20 秒和 60 秒。过期、消费或重发替换会使原挑战失效。发送前清除持久密文并记为待确认，明确拒收且挑战仍有效时才恢复密文安排重试。最终回复丢失或崩溃后的不明结果不会自动重发，用户可按正常间隔申请新验证码。运维日志只跟踪挑战 ID 和固定故障类别。
+
+恢复备份时保持 API 和邮件 Worker 停止，在离线恢复库运行 `/spark invalidate-restored-mail`。该命令取消恢复出的邮件队列并作废旧验证码，输出影响数量。完成恢复检查后再启用流量和邮件 Worker，由用户申请新验证码。 停用 SMTP 时将 API 模式改为 `disabled`，并停止邮件 Worker。
+
 ## 当前 API 与数据语义
 
 已实现的契约操作：
@@ -237,7 +256,7 @@ test 镜像设置 `CGO_ENABLED=0`；默认运行 `go test ./... -count=1`，实�
 
 ## 范围与限制
 
-尚未实现真实邮件投递、OCR、标签、自动采纳项目、完整管理后台及后续同步。文字整理使用 River 和独立 Worker，平台关闭时返回 `skipped` / `integration_not_configured`。图片附件、图片理解、网页提取和永久删除按各自能力开关配置。
+SMTP 邮件 Worker 已在受控 TLS 邮件服务上验证注册与密码找回。生产启用须配置发件身份并验证实际收件。标签、自动采纳项目、完整管理后台及后续同步仍在规划中。文字整理使用 River 和独立 Worker，平台关闭时返回 `skipped` / `integration_not_configured`。图片附件、图片理解、网页提取和永久删除按各自能力开关配置。
 
 正式邮件缺凭证只阻止相应集成；`disabled` 模式验证码接口返回 503，不假报已发送。首批没有以仿真实现代替真实 PostgreSQL。容器中的 pgx/sqlc 与真实数据库验证和前端浏览器闭环分别报告；容量压测、真实云服务和备份恢复 RPO/RTO 属于后续验收。
 

@@ -45,11 +45,14 @@ func run() error {
 	if len(os.Args) == 2 && os.Args[1] == "images" {
 		return runImages()
 	}
+	if len(os.Args) == 2 && os.Args[1] == "mail" {
+		return runMail()
+	}
 	if len(os.Args) == 2 && os.Args[1] == "purge" {
 		return runPurge()
 	}
 	if len(os.Args) != 1 {
-		return errors.New("usage: spark-worker [assets|urls|images|purge|healthcheck]")
+		return errors.New("usage: spark-worker [assets|urls|images|purge|mail|healthcheck]")
 	}
 	env := os.Getenv("SPARK_ENV")
 	if env == "" {

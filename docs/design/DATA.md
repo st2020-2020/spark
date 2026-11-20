@@ -16,13 +16,14 @@
 | --- | --- | --- |
 | users | id, email_normalized text, password_hash text, status enum(active,disabled), role enum(user,admin), ai_enabled bool, ai_policy_version int, ai_consent_at?, ai_consent_version?, created_at, updated_at | 邮箱唯一；默认 user；密码采用成熟库的 Argon2id 编码，参数随部署评测固定 |
 | email_challenges | id, email_normalized, purpose enum(register,password_reset), code_digest, expires_at, attempts int, consumed_at?, created_at | 过期索引；验证码摘要采用服务端秘密密钥计算；服务端生成高熵 challenge ID |
+| mail_outbox | challenge_id, encrypted_payload?, expires_at, delivered_at?, delivery_state | 与挑战共用主键。开发取码与真实投递分开；真实投递的终态清除密文 |
 | sessions | id, user_id, token_digest, csrf_digest, expires_at, last_seen_at, revoked_at?, device_label, created_at | token_digest 唯一；user_id 与有效状态索引 |
 | invite_batches | id, name, status enum(active,disabled), created_by, created_at | 管理员创建；禁用批次立即阻止后续兑换 |
 | invite_codes | id, batch_id, code_digest, expires_at?, max_uses int, used_count int, disabled_at?, created_at | code_digest 唯一；0 ≤ used_count ≤ max_uses；默认 max_uses=1 |
 | invite_redemptions | id, invite_id, user_id, created_at | 每用户唯一注册兑换；邀请码与用户外键 |
 | invite_imports | id, admin_id, name, payload_digest, encrypted_rows, validation_result jsonb, state enum(preview,committed,expired), expires_at, batch_id?, created_at | 预览暂存加密，提交成功或过期后清除原码；payload_digest 用于核对 |
 
-邮箱去除首尾空白并以产品约定的小写形式作为账号标识。验证码有效期建议 10 分钟、最多尝试 5 次、重发间隔 60 秒，旧验证码在同邮箱同用途新挑战生成时失效。邮件发送通过持久任务，原始验证码只存在于短期加密任务载荷中，完成或到期后清除。
+邮箱去除首尾空白并以产品约定的小写形式作为账号标识。验证码有效期建议 10 分钟、最多尝试 5 次、重发间隔 60 秒，旧验证码在同邮箱同用途新挑战生成时失效。邮件作业只存挑战 ID。API 在同一事务内登记挑战、加密邮件载荷与投递作业。Worker 派发前先持久标记结果不明并取走密文；供应商确认接收后登记 accepted。仅在可确认尚未接收、挑战仍有效且尝试数有余时重新排队。恢复库重新接入服务前作废旧挑战与队列。
 
 邀请码允许管理员导入 CSV，首发接受 code、expires_at、max_uses 三列；code 为 12 至 64 位 ASCII 字母数字或连字符，区分大小写。导入时去除首尾空白，重复行与已有代码摘要冲突显示明确行号。一次最多 1,000 行，预览有效期 30 分钟；存在错误时整个批次不提交。并发提交仍由唯一约束兜底并回滚。
 

@@ -217,6 +217,7 @@ type MailOutbox struct {
 	EncryptedPayload []byte
 	ExpiresAt        pgtype.Timestamptz
 	DeliveredAt      pgtype.Timestamptz
+	DeliveryState    string
 }
 
 type OrganizationCurrent struct {

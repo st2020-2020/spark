@@ -21,7 +21,7 @@ func main() {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: spark migrate | admin EMAIL | dev-mail CHALLENGE_ID | maintenance | retry-upload-cleanup | replay-deletions")
+		return errors.New("usage: spark migrate | admin EMAIL | dev-mail CHALLENGE_ID | maintenance | retry-upload-cleanup | replay-deletions | invalidate-restored-mail")
 	}
 	if os.Args[1] == "healthcheck" && len(os.Args) == 2 {
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -64,6 +64,20 @@ func run() error {
 			return err
 		}
 		fmt.Printf("queued %d upload cleanup jobs\n", count)
+		return nil
+	}
+	if os.Args[1] == "invalidate-restored-mail" {
+		if len(os.Args) != 2 {
+			return errors.New("usage: spark invalidate-restored-mail")
+		}
+		if err := db.Ready(ctx, pool); err != nil {
+			return err
+		}
+		challenges, jobs, err := backend.InvalidateRestoredMail(ctx, pool)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("invalidated %d restored challenges and cancelled %d mail jobs\n", challenges, jobs)
 		return nil
 	}
 	cfg, err := backend.LoadConfig()
