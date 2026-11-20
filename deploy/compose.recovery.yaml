@@ -1,0 +1,34 @@
+# Isolated PostgreSQL restore. Start only postgres before running backup-db.sh.
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: spark
+      POSTGRES_DB: spark
+      POSTGRES_PASSWORD: ${SPARK_RECOVERY_DB_PASSWORD:?Set a unique recovery database password}
+    volumes:
+      - recovery_pg:/var/lib/postgresql/data
+    networks: [offline]
+    healthcheck:
+      test: [CMD, pg_isready, -U, spark, -d, spark]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    mem_limit: 512m
+
+  tools:
+    image: ${SPARK_RECOVERY_IMAGE:-spark-api:recovery}
+    pull_policy: never
+    entrypoint: [/spark]
+    environment:
+      DATABASE_URL: postgres://spark:${SPARK_RECOVERY_DB_PASSWORD:?Set a unique recovery database password}@postgres:5432/spark?sslmode=disable
+    profiles: [tools]
+    networks: [offline]
+    read_only: true
+
+networks:
+  offline:
+    internal: true
+
+volumes:
+  recovery_pg:

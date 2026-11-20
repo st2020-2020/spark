@@ -1,0 +1,12 @@
+# Optional overlay for a controlled SMTP endpoint with a private test CA.
+services:
+  mail-worker:
+    environment:
+      SPARK_SMTP_CA_FILE: /run/spark-smtp/test-ca.pem
+    volumes:
+      - type: bind
+        source: ${SPARK_SMTP_CA_HOST_PATH:?Set SPARK_SMTP_CA_HOST_PATH for the test endpoint}
+        target: /run/spark-smtp/test-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
