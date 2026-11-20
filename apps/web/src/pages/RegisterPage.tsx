@@ -1,70 +1,29 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { AuthLayout } from '../components/AuthLayout';
-import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { countUnicodeChars } from '../lib/document';
-import type { TestAdapter } from '../test-adapter/mockServer';
+import { EmailVerificationFields, useEmailVerification } from '../components/EmailVerification';
 
 export function RegisterPage() {
-  const api = useApi();
   const { register } = useAuth();
   const navigate = useNavigate();
 
-  const [email, setEmail] = useState('');
-  const [challengeId, setChallengeId] = useState('');
-  const [verificationCode, setVerificationCode] = useState('');
+  const verification = useEmailVerification('register');
   const [inviteCode, setInviteCode] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [countdown, setCountdown] = useState(0);
-  const [sendingCode, setSendingCode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [simulatedCode, setSimulatedCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (countdown <= 0) return;
-    const timer = window.setInterval(() => {
-      setCountdown((c) => (c > 0 ? c - 1 : 0));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [countdown]);
-
-  const handleSendCode = async () => {
-    const trimmedEmail = email.trim();
-    if (!trimmedEmail) {
-      setError('请先填写邮箱地址。');
-      return;
-    }
-    setError(null);
-    setNotice(null);
-    setSendingCode(true);
-    try {
-      const res = await api.sendVerification({ email: trimmedEmail, purpose: 'register' });
-      setChallengeId(res.challenge_id);
-      setCountdown(res.resend_after);
-      setNotice(
-        '验证码挑战已创建。开发模式下请通过后端开发邮件工具查看 6 位验证码；正式环境请查收邮箱。',
-      );
-      if (api.isTestAdapter) {
-        const testApi = api as TestAdapter;
-        setSimulatedCode(testApi.getLastVerificationCode?.(trimmedEmail) ?? null);
-      }
-    } catch (err) {
-      setError(getFriendlyErrorMessage(err));
-    } finally {
-      setSendingCode(false);
-    }
-  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!challengeId) {
+    const { challenge, email, code } = verification;
+    if (submitting || verification.sending) return;
+    if (!challenge || Date.now() >= challenge.expiresAt) {
       setError('请先获取并填写邮箱验证码。');
       return;
     }
@@ -78,8 +37,8 @@ export function RegisterPage() {
       await register({
         email: email.trim(),
         password,
-        challenge_id: challengeId,
-        verification_code: verificationCode.trim(),
+        challenge_id: challenge.id,
+        verification_code: code.trim(),
         invite_code: inviteCode.trim(),
       });
       navigate('/inbox', { replace: true });
@@ -90,36 +49,11 @@ export function RegisterPage() {
     }
   };
 
-  const showSimulatedCode = import.meta.env.DEV && api.isTestAdapter && simulatedCode;
-
   return (
     <AuthLayout
       title="Spark 邀请内测注册"
       subtitle="一码一人，需先验证邮箱并兑换有效邀请码。"
-      messages={
-        (error || notice || showSimulatedCode) && (
-          <>
-            {error && (
-              <div className="sp-banner sp-banner--error" role="alert">
-                <span>{error}</span>
-              </div>
-            )}
-            {notice && (
-              <div className="sp-banner sp-banner--info" role="status">
-                <span>{notice}</span>
-              </div>
-            )}
-            {showSimulatedCode && (
-              <div className="sp-banner sp-banner--warning" role="status">
-                <span>
-                  [测试适配器模拟验证码]（非真实邮件）：<strong className="sp-mono">{simulatedCode}</strong>
-                  ；可用测试邀请码：<span className="sp-mono">SPARK-TEST-0001</span>
-                </span>
-              </div>
-            )}
-          </>
-        )
-      }
+      messages={error && <div className="sp-banner sp-banner--error" role="alert">{error}</div>}
       footer={
         <>
           <Link to="/login">已有账号？去登录</Link>
@@ -128,51 +62,7 @@ export function RegisterPage() {
       }
     >
         <form onSubmit={(e) => void handleSubmit(e)} className="sp-auth-form">
-          <div className="sp-field">
-            <label htmlFor="reg-email" className="sp-label">
-              邮箱
-            </label>
-            <div className="sp-input-group">
-              <input
-                id="reg-email"
-                type="email"
-                required
-                autoComplete="email"
-                inputMode="email"
-                className="sp-input"
-                placeholder="you@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-              <button
-                type="button"
-                className="sp-btn"
-                disabled={sendingCode || countdown > 0 || !email.trim()}
-                onClick={() => void handleSendCode()}
-              >
-                {countdown > 0 ? `${countdown}s 后重发` : sendingCode ? '请求中…' : '发送验证码'}
-              </button>
-            </div>
-          </div>
-
-          <div className="sp-field">
-            <label htmlFor="reg-code" className="sp-label">
-              6 位邮箱验证码
-            </label>
-            <input
-              id="reg-code"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              required
-              className="sp-input sp-mono"
-              placeholder="6 位数字"
-              value={verificationCode}
-              onChange={(e) => setVerificationCode(e.target.value)}
-            />
-          </div>
-
+          <EmailVerificationFields verification={verification} purpose="register" busy={submitting} clearError={() => setError(null)} />
           <div className="sp-field">
             <label htmlFor="reg-invite" className="sp-label">
               邀请码
@@ -218,7 +108,7 @@ export function RegisterPage() {
             </div>
           </div>
 
-          <button type="submit" className="sp-btn sp-btn--primary sp-btn--block" disabled={submitting}>
+          <button type="submit" className="sp-btn sp-btn--primary sp-btn--block" disabled={submitting || verification.sending || !verification.challenge || verification.expired}>
             {submitting ? '正在创建账号…' : '验证并注册'}
           </button>
         </form>

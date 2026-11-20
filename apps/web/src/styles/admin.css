@@ -1,0 +1,40 @@
+.sp-admin .sp-card > h2,
+.sp-admin .sp-row-between > h2 {
+  margin: 0;
+  font-size: var(--sp-text-body);
+}
+
+.sp-admin .sp-card > * + *,
+.sp-admin-code-list > * + * {
+  margin-top: 12px;
+}
+
+.sp-admin-code-list h3 {
+  margin-bottom: 0;
+  font-size: var(--sp-text-ui);
+}
+
+.sp-admin-grow {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.sp-admin-concurrency {
+  max-width: 9rem;
+}
+
+.sp-admin-preview {
+  padding: 12px;
+  background: var(--sp-surface-muted);
+  border-radius: var(--sp-radius-control);
+}
+
+.sp-admin-import-errors {
+  margin: 8px 0 0;
+  padding-inline-start: 20px;
+  color: var(--sp-danger);
+}
+
+.sp-admin input[type="file"] {
+  max-width: 100%;
+}
