@@ -230,7 +230,7 @@ SMTP 使用单并发 Worker，平台每 10 分钟最多接受 20 个新邮件挑
 
 ## 生成与验证
 
-Go module 与构建镜像固定 Go 1.27.3，Gin 1.11.0、pgx 5.7.6；完整依赖版本见 `go.mod/go.sum`。生成器固定 oapi-codegen 2.4.1、sqlc 1.29.0。类型生成以共享 contracts 为唯一来源；`oapi-overlay.yaml` 仅将 Go `UserStatus` 类型命名为 `AccountStatusRequest`，解决与 `User.status` 枚举的名称碰撞，不改变 JSON 字段、枚举或必填性。
+Go module 与构建镜像固定 Go 1.27.4，Gin 1.11.0、pgx 5.9.2；完整依赖版本见 `go.mod/go.sum`。生成器固定 oapi-codegen 2.4.1、sqlc 1.29.0。类型生成以共享 contracts 为唯一来源；`oapi-overlay.yaml` 仅将 Go `UserStatus` 类型命名为 `AccountStatusRequest`，解决与 `User.status` 枚举的名称碰撞，不改变 JSON 字段、枚举或必填性。
 
 在容器内重新生成（绑定本模块目录接收生成文件，契约只读挂载）：
 
