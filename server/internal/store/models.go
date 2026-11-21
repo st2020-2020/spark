@@ -85,6 +85,7 @@ type Collection struct {
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
 	PurgeRequestedAt pgtype.Timestamptz
+	LastOpenedAt     pgtype.Timestamptz
 }
 
 type CollectionProject struct {
@@ -270,6 +271,20 @@ type Project struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type ResurfaceDay struct {
+	UserID    pgtype.UUID
+	LocalDate pgtype.Date
+}
+
+type ResurfaceItem struct {
+	UserID       pgtype.UUID
+	LocalDate    pgtype.Date
+	CollectionID pgtype.UUID
+	Position     int16
+	Reason       string
+	Hidden       bool
+}
+
 type Session struct {
 	ID          pgtype.UUID
 	UserID      pgtype.UUID
@@ -336,6 +351,7 @@ type User struct {
 	ImageConsentVersion pgtype.Text
 	ImageConsentedAt    pgtype.Timestamptz
 	ImagePolicyVersion  int64
+	ResurfaceEnabled    bool
 }
 
 type UserChangeCounter struct {

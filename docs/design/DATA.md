@@ -14,7 +14,7 @@
 
 | 表 | 字段 | 约束与索引 |
 | --- | --- | --- |
-| users | id, email_normalized text, password_hash text, status enum(active,disabled), role enum(user,admin), ai_enabled bool, ai_policy_version int, ai_consent_at?, ai_consent_version?, created_at, updated_at | 邮箱唯一；默认 user；密码采用成熟库的 Argon2id 编码，参数随部署评测固定 |
+| users | id, email_normalized text, password_hash text, status enum(active,disabled), role enum(user,admin), ai_enabled bool, ai_policy_version int, ai_consent_at?, ai_consent_version?, resurface_enabled bool, created_at, updated_at | 邮箱唯一；默认 user；密码采用成熟库的 Argon2id 编码，参数随部署评测固定 |
 | email_challenges | id, email_normalized, purpose enum(register,password_reset), code_digest, expires_at, attempts int, consumed_at?, created_at | 过期索引；验证码摘要采用服务端秘密密钥计算；服务端生成高熵 challenge ID |
 | mail_outbox | challenge_id, encrypted_payload?, expires_at, delivered_at?, delivery_state | 与挑战共用主键。开发取码与真实投递分开；真实投递的终态清除密文 |
 | sessions | id, user_id, token_digest, csrf_digest, expires_at, last_seen_at, revoked_at?, device_label, created_at | token_digest 唯一；user_id 与有效状态索引 |
@@ -34,7 +34,7 @@
 | 表 | 字段 | 约束与索引 |
 | --- | --- | --- |
 | projects | id, user_id, name varchar(100), description varchar(2000), focus_points jsonb, state enum(active,paused,completed), version bigint, created_at, updated_at | 用户内名称可重复；关注点最多 20 项，每项 100 字；user_id/state/updated_at 索引 |
-| collections | id, user_id, document jsonb, plain_text text, intent text, original_url?, manual_title?, content_version bigint, resource_version bigint, decision_version bigint, read_at?, ai_excluded bool, ai_policy_version bigint, deleted_at?, purge_after?, purge_requested_at?, created_at, updated_at | user_id/created_at/id 降序索引；用户活动收藏及回收站部分索引 |
+| collections | id, user_id, document jsonb, plain_text text, intent text, original_url?, manual_title?, content_version bigint, resource_version bigint, decision_version bigint, read_at?, last_opened_at?, ai_excluded bool, ai_policy_version bigint, deleted_at?, purge_after?, purge_requested_at?, created_at, updated_at | user_id/created_at/id 降序索引；用户活动收藏及回收站部分索引 |
 | collection_revisions | id, user_id, collection_id, content_version, document, intent, original_url?, manual_title?, attachment_ids jsonb, created_at | UNIQUE(collection_id,content_version)；快照属于对应用户 |
 | uploads | id, user_id, staging_key, final_key?, provider_version?, filename, declared_size bigint, actual_size?, mime_type, sha256 bytea?, status enum(pending,verifying,ready,attached,rejected,expired), error_code?, expires_at, staging_cleaned_at?, created_at, updated_at | staging_key、final_key 分别唯一；ready、attached 须有最终键、与声明一致的大小及 32 字节 SHA-256；用户/状态/到期索引 |
 | attachments | id, user_id, collection_id, upload_id, object_key, provider_version?, filename, mime_type, size_bytes bigint, sha256, position int, removed_at?, created_at | upload_id 唯一且同用户；有效附件在收藏内 position 取 0 至 8 且唯一，同一语句可交换位置；object_key 唯一 |
@@ -47,6 +47,17 @@
 收藏类型由内容派生，可同时包含 text、url、image，筛选采用包含匹配。手动标题优先于生成标题，原文首段或域名作为最终回退。照片和原图只引用稳定对象键，带签名的地址在读取时生成。
 
 项目首期通过暂停或完成状态管理生命周期。标签层级最多 3 层，路径按父级组合。去除空白、Unicode NFC 和英文大小写折叠用于用户内标签匹配，显示名称保留用户输入。标签重命名冲突返回 409。首期标签数量与层级由接口验证。
+
+## 回访与时间
+
+| 表 | 字段 | 约束与索引 |
+| --- | --- | --- |
+| resurface_days | user_id, local_date date | 账号和当地日期为主键。即使当天结果为空，也保留日期标记 |
+| resurface_items | user_id, local_date, collection_id, position, reason, hidden | 按账号引用收藏和日期，位置 1 至 3 且当天唯一。永久删除级联清除候选，日期标记保留 |
+
+迁移 009 保留已有收藏和已读状态，`last_opened_at` 初始为空。用户主动打开有效详情时，按账号写入当前查看时间，且时间不倒退。该写入不改变已读、收藏版本、更新时间或变更流水。D-05 使用独立查看时间，历史记录缺失时用收藏创建时间判断。普通读取和后台刷新不记行为。
+
+重现开关默认开启。第一次请求在同一事务内登记本账号当地日期并保存最多三条候选，只记录收藏 ID、顺序、原因和单卡隐藏状态。并发请求以日期唯一约束复用已提交结果。读取时重新核对归属和可见性，失效或隐藏的卡片不补位。新日期生成时清除该账号已不可能为当前日期的旧记录。
 
 ## 提取、整理与费用
 

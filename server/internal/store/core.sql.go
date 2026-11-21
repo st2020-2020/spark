@@ -47,7 +47,7 @@ func (q *Queries) GetSession(ctx context.Context, tokenDigest []byte) (GetSessio
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email_normalized, password_hash, status, role, ai_enabled, ai_policy_version, created_at, updated_at, ai_consent_at, ai_consent_version, image_consent_version, image_consented_at, image_policy_version FROM users WHERE email_normalized = $1
+SELECT id, email_normalized, password_hash, status, role, ai_enabled, ai_policy_version, created_at, updated_at, ai_consent_at, ai_consent_version, image_consent_version, image_consented_at, image_policy_version, resurface_enabled FROM users WHERE email_normalized = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, emailNormalized string) (User, error) {
@@ -68,6 +68,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, emailNormalized string) (U
 		&i.ImageConsentVersion,
 		&i.ImageConsentedAt,
 		&i.ImagePolicyVersion,
+		&i.ResurfaceEnabled,
 	)
 	return i, err
 }

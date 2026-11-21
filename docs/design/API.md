@@ -1,6 +1,6 @@
 # 接口契约与联调说明
 
-接口版本 v1，机器契约见 [openapi.json](../../contracts/openapi.json)。其中 52 个操作覆盖首发账号、项目、收藏、附件、整理、搜索和管理后台。接口当前为待实现设计，未来桌面同步接口在 M6 扩展。
+接口版本 v1，机器契约见 [openapi.json](../../contracts/openapi.json)。当前契约覆盖账号、项目、收藏、附件、整理、搜索、回访和管理后台。未来桌面同步接口在 M6 扩展。
 
 ## 请求与响应
 
@@ -14,7 +14,7 @@
 | 401 | session_expired、authentication_failed | 登录或重新验证 |
 | 403 | forbidden、csrf_failed、ai_disabled | 展示权限或设置说明 |
 | 404 | not_found | 返回列表，保留正在编辑的草稿 |
-| 409 | content_conflict、decision_conflict、resource_conflict、idempotency_mismatch、duplicate_resource、invite_unavailable | 展示当前版本或重新选择，保留用户输入 |
+| 409 | content_conflict、decision_conflict、resource_conflict、idempotency_mismatch、duplicate_resource、invite_unavailable、resurface_day_changed | 展示当前版本或重新选择，保留用户输入 |
 | 410 | upload_expired、import_expired | 重新建立上传或导入预览 |
 | 413 | request_too_large | 压缩或减少输入 |
 | 422 | validation_failed、unsupported_document、invalid_attachment、registration_failed | 展示字段错误 |
@@ -116,6 +116,18 @@ GET /collections 默认 scope=active，按 created_at DESC、id DESC 稳定排�
 搜索 q 去除首尾空白，以空白拆分最多 10 个词，按字面子串匹配，各词取交集，英文大小写不敏感。对 SQL 通配字符做字面转义。中文连续短语按原短语匹配，候选字段包括标题、原文、用途、网址、当前版本提取结果与标签。
 
 首发搜索按收藏时间倒序；结果返回实际命中的纯文本片段，前端安全高亮。过滤 project_id、tag_id、type、read、日期范围与 scope 取交集。分页期间新增内容可能出现在重新加载后的首页，接口不承诺跨请求快照。
+
+## 灵光日历与今日重现
+
+`GET /me/activity?from=&to=&tz=` 聚合当前账号未删除的收藏。日期为 `YYYY-MM-DD`，起日包含、止日不包含，一次 1 至 31 个自然日。时区由浏览器传入 IANA 名称。响应 `days` 包含零条日期，每天返回 `date`、`count`、`created_from` 和 `created_to`。两个时间为当地相邻日期的起点，可直接用于默认活动列表的日期筛选。夏令时或整天跳过的历史时区由服务端解析。
+
+`GET /collections` 与 `GET /search` 的 `created_from` 和 `created_to` 为 RFC3339 时间，分别为包含下界和不包含上界，可以单独传入。相同边界返回空结果，逆序返回 `400 invalid_request`。范围与账号、回收站范围及其他筛选共同生效。
+
+`POST /collections/{id}/opened` 仅在用户主动打开有效收藏详情时发出，需要 CSRF，成功返回 `204`。本人回收站收藏仍可通过普通详情读取，记录主动查看返回 `409 collection_in_trash`。其他账号或已登记永久删除的收藏返回 `404`。预取、刷新和 SSE 补读沿用只读详情。
+
+`GET /me/resurface?tz=` 返回当地 `date` 和最多三条 `{collection, reason}`，其中 `collection` 为 `CollectionSummary`。依次选取满 7 天仍待归类的收藏、属于进行中项目且满 30 天未打开的收藏、往年同月同日的收藏。前两组优先较早的记录，往年同日优先最近一年的记录。同账号同当地日期固定选取结果，读取时省略已删除或隐藏的卡片，无候选时 `items` 为空。
+
+`GET /me/resurface/preferences` 读取 `{enabled}`，默认启用，`PUT` 可更新。关闭后重现接口返回空数组，恢复开启时复用今日已有结果。`PUT /me/resurface/{id}/hidden?date=&tz=` 按结果的日期隐藏单卡，成功或同日重复隐藏返回 `204`，超出当天返回 `409 resurface_day_changed`，当前账号当日无该卡时返回 `404`。隐藏和偏好写入均需要 CSRF。
 
 ## 管理接口与配额
 
