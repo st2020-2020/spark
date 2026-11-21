@@ -38,3 +38,8 @@
 @media (max-width: 767px) {
   .sp-mention [role="option"], .sp-command-list [role="option"] { min-height: 44px; }
 }
+.sp-share-images { min-width: 0; border: 0; padding: 0; margin: 0; }
+.sp-share-images legend { color: var(--sp-muted); font-size: var(--sp-text-sm); }
+.sp-share-images label { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-inline-end: 12px; }
+.sp-image-note { margin-block-start: 1rem; }
+.sp-image-note p { margin-block-start: 4px; }

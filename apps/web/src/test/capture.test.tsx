@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Collection } from '../api/types';
+import { ApiProvider } from '../context/ApiContext';
 import { AppProviders, AppRoutes } from '../App';
 import { createTestAdapter } from '../test-adapter/mockServer';
 import { shareText } from '../lib/shareCard';
@@ -184,6 +185,45 @@ describe('capture and recall', () => {
     expect(shareText(c, true, true)).toEqual({ body: '旅行笔记', date: expect.any(String), projects: '私人项目', source: 'https://example.test/read' });
   });
 
+  it('requires all selected thumbnails before export and permits explicit text-only sharing', async () => {
+    const api = createTestAdapter();
+    const thumbnail = vi.spyOn(api, 'getThumbnail').mockResolvedValue(new Blob())
+      .mockRejectedValueOnce(new Error('unavailable'));
+    const image = new Image();
+    const decode = vi.spyOn(card, 'decodeThumbnail').mockResolvedValue(image);
+    const renderCard = vi.spyOn(card, 'renderShareCard').mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
+    const url = URL.createObjectURL, revoke = URL.revokeObjectURL;
+    URL.createObjectURL = () => 'blob:card'; URL.revokeObjectURL = vi.fn();
+    const c = { document: EMPTY_DOCUMENT, projects: [], created_at: '2026-11-21',
+      image_notes: [{ attachment_id: 'a', text: '手动修改的图片笔记' }],
+      attachments: [{ id: 'b', position: 1, filename: 'private-b' }, { id: 'a', position: 0, filename: 'private-a' }],
+    } as unknown as Collection;
+    try {
+      render(<ApiProvider api={api}><ShareCard collection={c} onClose={() => {}} /></ApiProvider>);
+      await screen.findByRole('alert');
+      expect(screen.queryByRole('link', { name: '下载 PNG' })).toBeNull();
+      expect(renderCard).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole('button', { name: '重新生成' }));
+      await screen.findByRole('link', { name: '下载 PNG' });
+      expect(thumbnail.mock.calls.map(args => args[0])).toEqual(['a', 'a', 'b']);
+      expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), [image, image]);
+      await userEvent.click(screen.getByLabelText('第 2 张'));
+      await waitFor(() => expect(renderCard).toHaveBeenLastCalledWith(expect.anything(), [image]));
+      expect(thumbnail).toHaveBeenCalledTimes(3);
+      expect(screen.queryByText(/private-/)).toBeNull();
+      cleanup();
+      thumbnail.mockRejectedValueOnce(new Error('offline'));
+      render(<ApiProvider api={api}><ShareCard collection={c} onClose={() => {}} /></ApiProvider>);
+      await userEvent.click(await screen.findByRole('button', { name: '仅文字' }));
+      await screen.findByRole('link', { name: '下载 PNG' });
+      expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), []);
+    } finally {
+      cleanup();
+      thumbnail.mockRestore(); decode.mockRestore(); renderCard.mockRestore();
+      URL.createObjectURL = url; URL.revokeObjectURL = revoke;
+    }
+  });
+
   it('keeps the PNG available after system share cancellation', async () => {
     const renderCard = vi.spyOn(card, 'renderShareCard').mockResolvedValue(new Blob(['preview'], { type: 'image/png' }));
     const share = vi.fn().mockRejectedValue(new DOMException('cancel', 'AbortError'));
@@ -198,7 +238,7 @@ describe('capture and recall', () => {
     try {
       const { unmount } = render(<ShareCard onClose={() => {}} collection={{
         document: { ...EMPTY_DOCUMENT, content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '手稿' }] }] } },
-        created_at: '2026-11-21', projects: [],
+        created_at: '2026-11-21', projects: [], attachments: [],
       } as unknown as Collection} />);
       await userEvent.click(await screen.findByRole('button', { name: '系统分享' }));
       expect(share).toHaveBeenCalledOnce();

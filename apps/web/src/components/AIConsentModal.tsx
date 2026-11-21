@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Modal } from './Modal';
 
-export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-material-v1';
+export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-notes-v1';
 
 export function AIConsentModal({
   open,
@@ -56,11 +56,11 @@ export function AIConsentModal({
           </li>
           <li>
             <strong>图片识别结果：</strong>
-            同时开启图片理解时，第三方文字模型还可使用这条收藏已识别的图中文字和 AI 画面描述生成项目建议。文字模型不会收到原图。发送原图给 DeepSeek 识别需要单独开启图片理解。
+            同时开启图片理解时，第三方文字模型还可使用这条收藏已识别的图中文字和 AI 画面描述，自动归入匹配的进行中项目；没有合适项目且能识别出明确主题时，可新建主题项目并归入。你可以移除或更改归属。文字模型不会收到原图。发送原图给 DeepSeek 识别需要单独开启图片理解。
           </li>
           <li>
             <strong>处理用途：</strong>
-            生成标题、摘要和至多一条带依据的项目建议，项目由你确认。模型也可从匹配的已有标签中选择并自动打标，保留你的人工决定。
+            生成标题和摘要。仅用文字整理时，项目建议仍由你确认。模型也可从匹配的已有标签中选择并自动打标，保留你的人工决定。
           </li>
           <li>
             <strong>第三方服务范围：</strong>

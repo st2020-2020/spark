@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { type InfiniteData, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import type { CollectionPage, CollectionSummary, OrganizationEvent, SearchHit } from '../api/types';
+import type { Collection, CollectionPage, CollectionSummary, OrganizationEvent, SearchHit } from '../api/types';
 import { useRecordOpened } from '../components/CollectionLink';
 import { isOrganizationActiveStatus, pendingSuggestionKey, pendingSuggestionOptions } from '../lib/organization';
 import { useApi } from './ApiContext';
@@ -89,6 +89,8 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
       refetchType: 'active',
     });
     void queryClient.invalidateQueries({ queryKey: ['project-collections'], refetchType: 'active' });
+    void queryClient.invalidateQueries({ queryKey: ['projects'] });
+    void queryClient.invalidateQueries({ queryKey: ['project'] });
     void queryClient.invalidateQueries({ queryKey: ['me', 'usage'], refetchType: 'active' });
     void queryClient.invalidateQueries({ queryKey: ['me', 'image-analysis'], refetchType: 'active' });
     void refreshSession();
@@ -147,52 +149,60 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
         return;
       }
 
-      // Refresh only the affected collection detail (or targeted item state) without reloading full list pages.
-      const hadDetailMounted =
-        queryClient.getQueryState(['collection', event.collection_id]) !== undefined;
-      const isInAnyLoadedList = queryClient
-        .getQueriesData<ListData>(listCaches)
-        .some(([, data]) =>
-          Boolean(
-            data &&
-              'pages' in data &&
-              data.pages.some((p) => p.items.some((i) => summaryOf(i).id === event.collection_id)),
-          ),
-        );
-
-      if (hadDetailMounted || isInAnyLoadedList) {
-        const generation = subscriptionGeneration.current;
-        void queryClient.cancelQueries({ queryKey: detailKey, exact: true }).then(() => {
-          if (subscriptionGeneration.current !== generation) return undefined;
-          return queryClient.fetchQuery({ queryKey: detailKey, queryFn: ({ signal }) => api.getCollection(event.collection_id, signal) });
-        })
-          .then((fresh) => {
-            if (!fresh || subscriptionGeneration.current !== generation) return;
-            const sortedAttachments = [...fresh.attachments].sort(
-              (a, b) => a.position - b.position,
-            );
-            const patchItem = (item: CollectionSummary): CollectionSummary => ({
-              ...item,
-              display_title: fresh.display_title,
-              projects: fresh.projects,
-              tags: fresh.tags,
-              organization_status: fresh.organization.status,
-              has_suggestion: fresh.has_suggestion,
-              original_url: fresh.original_url ?? undefined,
-              cover_attachment_id: sortedAttachments[0]?.id,
-              attachment_count: sortedAttachments.length,
-              read_at: fresh.read_at,
-              updated_at: fresh.updated_at,
-              resource_version: fresh.resource_version,
-            });
-            queryClient.setQueriesData<ListData>(listCaches, old =>
-              patchInfiniteCollectionItem(old, fresh.id, patchItem),
-            );
-          })
-          .catch(() => {
-            // Non-fatal: cache already patched with status/has_suggestion
-          });
+      // The event has no project IDs. A previously empty project page can gain its first item.
+      const previous = queryClient.getQueryData<Collection>(detailKey);
+      const autoProjects = new Set(previous?.projects.filter(p => p.decision === 'auto').map(p => p.project_id));
+      for (const [, data] of queryClient.getQueriesData<ListData>(listCaches)) {
+        for (const page of data?.pages ?? []) {
+          const row = page.items.find(item => summaryOf(item).id === event.collection_id);
+          if (row) summaryOf(row).projects.forEach(p => { if (p.decision === 'auto') autoProjects.add(p.project_id); });
+        }
       }
+      const generation = subscriptionGeneration.current;
+      void queryClient.cancelQueries({ queryKey: detailKey, exact: true }).then(() => {
+        if (subscriptionGeneration.current !== generation) return undefined;
+        return queryClient.fetchQuery({ queryKey: detailKey, queryFn: ({ signal }) => api.getCollection(event.collection_id, signal) });
+      })
+        .then((fresh) => {
+          if (!fresh || subscriptionGeneration.current !== generation) return;
+          fresh.projects.forEach(p => { if (p.decision === 'auto') autoProjects.add(p.project_id); });
+          if (autoProjects.size || ['created', 'linked'].includes(fresh.organization.image_archive_status ?? '')) {
+            void queryClient.invalidateQueries({ queryKey: ['projects'] });
+            for (const id of autoProjects) {
+              void queryClient.invalidateQueries({ queryKey: ['project', id] });
+              void queryClient.invalidateQueries({ queryKey: ['project-collections', id] });
+            }
+            void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified', 'all'] });
+            void queryClient.invalidateQueries({ queryKey: ['collections', 'all'], predicate: query => {
+              const filters = query.queryKey[2];
+              return !!filters && typeof filters === 'object' && 'projectId' in filters &&
+                typeof filters.projectId === 'string' && autoProjects.has(filters.projectId);
+            } });
+          }
+          const sortedAttachments = [...fresh.attachments].sort(
+            (a, b) => a.position - b.position,
+          );
+          const patchItem = (item: CollectionSummary): CollectionSummary => ({
+            ...item,
+            display_title: fresh.display_title,
+            projects: fresh.projects,
+            tags: fresh.tags,
+            organization_status: fresh.organization.status,
+            has_suggestion: fresh.has_suggestion,
+            original_url: fresh.original_url ?? undefined,
+            cover_attachment_id: sortedAttachments[0]?.id,
+            attachment_count: sortedAttachments.length,
+            read_at: fresh.read_at,
+            updated_at: fresh.updated_at,
+            resource_version: fresh.resource_version,
+          });
+          queryClient.setQueriesData<ListData>(listCaches, old =>
+            patchInfiniteCollectionItem(old, fresh.id, patchItem),
+          );
+        })
+        .catch(() => {
+          // Non-fatal: cache already patched with status/has_suggestion
+        });
 
       void queryClient.invalidateQueries({ queryKey: ['tags', 'list'], refetchType: 'active' });
       void queryClient.invalidateQueries({ queryKey: ['collections', 'all'], predicate: query => {

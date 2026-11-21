@@ -1476,6 +1476,13 @@ export function createTestAdapter(): TestAdapter {
       return pub;
     },
 
+    async getThumbnail(attachmentId, signal) {
+      const user = requireUser(false);
+      const att = attachments.get(attachmentId);
+      if (!att || att.user_id !== user.id) throw new ApiError({ status: 404, code: 'not_found', message: '附件不存在' });
+      return (await fetch(att.dataUrl, { signal })).blob();
+    },
+
     async getDownload(attachmentId) {
       const user = requireUser(false);
       const att = attachments.get(attachmentId);
@@ -2318,6 +2325,18 @@ export function createTestAdapter(): TestAdapter {
       saveIdempotency(user.id, 'restartOrganization', idempotencyKey, { id }, nextOrg);
       scheduleMockOrganization(col, user);
       return nextOrg;
+    },
+
+    async updateImageNote(id, body) {
+      const user = requireUser(true);
+      const col = collections.find(c => c.user_id === user.id && c.attachments.some(a => a.id === id));
+      const note = col?.image_notes?.find(n => n.attachment_id === id);
+      if (!col || !note) throw new ApiError({ status: 404, code: 'not_found', message: '图片说明不存在' });
+      if (col.deleted_at) throw new ApiError({ status: 409, code: 'collection_in_trash', message: '收藏已移入回收站' });
+      if (note.version !== body.base_version) throw new ApiError({ status: 409, code: 'image_note_conflict', message: '图片说明已更新' });
+      col.image_notes = col.image_notes?.flatMap(n => n !== note ? [n] : body.text.trim()
+        ? [{ ...n, text: body.text.trim(), state: 'edited', version: n.version + 1 }] : []);
+      return toPublicCollection(col);
     },
 
     async retryImageAnalysis(attachmentId, body, key) {

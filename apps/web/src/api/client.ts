@@ -17,6 +17,7 @@ import type {
   Extraction,
   ExtractionList,
   ImageRetryRequest,
+  ImageNoteUpdate,
   FailureList,
   Health,
   ActivityQuery,
@@ -126,6 +127,7 @@ export interface SparkApi {
   ): Promise<void>;
   completeUpload(id: string): Promise<Upload>;
   getUpload(id: string): Promise<Upload>;
+  getThumbnail(attachmentId: string, signal?: AbortSignal): Promise<Blob>;
   getDownload(attachmentId: string): Promise<DownloadGrant>;
 
   createCollection(body: CollectionCreate, idempotencyKey: string): Promise<Collection>;
@@ -147,6 +149,7 @@ export interface SparkApi {
   updateTagDecisions(id: string, body: TagDecisionUpdate): Promise<Collection>;
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
+  updateImageNote(attachmentId: string, body: ImageNoteUpdate): Promise<Collection>;
   retryImageAnalysis(attachmentId: string, body: ImageRetryRequest, idempotencyKey: string): Promise<Extraction>;
   getExtractions(id: string): Promise<ExtractionList>;
   refreshUrlExtraction(id: string, idempotencyKey: string): Promise<Extraction>;
@@ -508,6 +511,12 @@ export function createRealApiClient(): SparkApi {
         requiresCsrf: true,
       }),
     getUpload: (id) => request<Upload>('GET', `/uploads/${encodeURIComponent(id)}`),
+    getThumbnail: async (attachmentId, signal) => {
+      const response = await fetchResponse('GET', `/attachments/${encodeURIComponent(attachmentId)}/thumbnail`, { signal });
+      const thumbnail = await response.blob();
+      if (thumbnail.type !== 'image/jpeg' || !thumbnail.size) throw new Error('未取得图片缩略图。');
+      return thumbnail;
+    },
     getDownload: (attachmentId) =>
       request<DownloadGrant>('GET', `/attachments/${encodeURIComponent(attachmentId)}/download`),
 
@@ -576,6 +585,9 @@ export function createRealApiClient(): SparkApi {
         requiresCsrf: true,
         idempotencyKey,
       }),
+    updateImageNote: (id, body) => request<Collection>('PATCH', `/attachments/${encodeURIComponent(id)}/image-note`, {
+      body, requiresCsrf: true,
+    }),
     retryImageAnalysis: (attachmentId, body, idempotencyKey) =>
       request<Extraction>('POST', `/attachments/${encodeURIComponent(attachmentId)}/image-analysis/retry`, {
         body, requiresCsrf: true, idempotencyKey,

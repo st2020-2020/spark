@@ -352,7 +352,7 @@ export function CollectionCard({
             to={`/projects/${p.project_id}`}
             className={`sp-tape ${projectToneClass(p.project_id)}`}
           >
-            <span className="sp-truncate">{p.name}</span>
+            <span className="sp-truncate">{p.decision === 'auto' && '自动归入 · '}{p.name}</span>
           </Link>
         ))}
 
