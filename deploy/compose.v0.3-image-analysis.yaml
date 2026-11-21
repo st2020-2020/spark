@@ -21,6 +21,8 @@ services:
     environment:
       SPARK_ENV: ${SPARK_ENV:-production}
       DATABASE_URL: ${SPARK_IMAGE_WORKER_DATABASE_URL:-postgres://spark:${SPARK_DB_PASSWORD:-${SPARK_DEV_DB_PASSWORD:-missing}}@postgres:5432/${SPARK_DB_NAME:-spark}?sslmode=disable}
+      SPARK_AI_ENABLED: ${SPARK_AI_ENABLED:-false}
+      SPARK_AI_TRIAL_USER_IDS: ${SPARK_AI_TRIAL_USER_IDS:-}
       SPARK_IMAGE_ANALYSIS_ADMIN_ID: ${SPARK_IMAGE_ANALYSIS_ADMIN_ID:-}
       SPARK_IMAGE_ANALYSIS_ENABLED: ${SPARK_IMAGE_ANALYSIS_ENABLED:-false}
       SPARK_IMAGE_ANALYSIS_KEY_FILE: /run/secrets/spark-image-analysis-key
