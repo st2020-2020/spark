@@ -10,7 +10,10 @@
       "maxLength": 80
     },
     "summary": {
-      "type": "string",
+      "type": [
+        "string",
+        "null"
+      ],
       "maxLength": 180
     },
     "tag_candidates": {
@@ -25,19 +28,28 @@
             "maxLength": 24
           },
           "tag_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid"
           },
-          "parent_id": {
-            "type": "string",
-            "format": "uuid"
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/Evidence"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "name"
         ]
       },
-      "maxItems": 5
+      "maxItems": 3
     },
     "project_candidates": {
       "type": "array",
@@ -55,28 +67,7 @@
             "maxLength": 300
           },
           "evidence": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "source_id": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "quote": {
-                  "type": "string",
-                  "minLength": 1,
-                  "maxLength": 300
-                }
-              },
-              "required": [
-                "source_id",
-                "quote"
-              ]
-            },
-            "minItems": 1,
-            "maxItems": 5
+            "$ref": "#/definitions/Evidence"
           },
           "confidence": {
             "type": "number",
@@ -94,13 +85,16 @@
       "maxItems": 5
     },
     "topic_candidate": {
-      "type": "object",
+      "type": [
+        "object",
+        "null"
+      ],
       "additionalProperties": false,
       "properties": {
         "name": {
           "type": "string",
           "minLength": 1,
-          "maxLength": 80
+          "maxLength": 100
         },
         "reason": {
           "type": "string",
@@ -108,28 +102,7 @@
           "maxLength": 300
         },
         "evidence": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-              "source_id": {
-                "type": "string",
-                "minLength": 1
-              },
-              "quote": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 300
-              }
-            },
-            "required": [
-              "source_id",
-              "quote"
-            ]
-          },
-          "minItems": 1,
-          "maxItems": 5
+          "$ref": "#/definitions/Evidence"
         }
       },
       "required": [
@@ -143,5 +116,31 @@
     "title",
     "tag_candidates",
     "project_candidates"
-  ]
+  ],
+  "definitions": {
+    "Evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "quote": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "source_id",
+          "quote"
+        ]
+      },
+      "minItems": 1,
+      "maxItems": 5
+    }
+  }
 }

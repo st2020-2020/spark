@@ -387,7 +387,7 @@ func TestImageArchiveDropsUnsubstantiatedTopicAndExpiredAuthorization(t *testing
 			})
 			saved := saveOrganizationImage(t, app, owner, uid, objects, "保留原文")
 			id := saved["id"].(string)
-			state := "failed"
+			state := "partial"
 			if revoke {
 				select {
 				case <-entered:
@@ -399,6 +399,9 @@ func TestImageArchiveDropsUnsubstantiatedTopicAndExpiredAuthorization(t *testing
 				state = "superseded"
 			}
 			row := waitOrganization(t, owner, id, state)
+			if !revoke && row["organization"].(map[string]any)["error_code"] != "invalid_topic_candidate" {
+				t.Fatal("invalid topic did not preserve the otherwise usable organization")
+			}
 			if len(row["projects"].([]any)) != 0 || len(owner.do("GET", "/projects", nil, "").want(t, 200)["items"].([]any)) != 0 ||
 				string(jsonBytes(row["document"])) != string(jsonBytes(saved["document"])) || textCalls.Load() != 1 {
 				t.Fatal("missing evidence or stale authorization changed the project or source content")
