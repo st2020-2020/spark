@@ -5,7 +5,11 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Modal } from './Modal';
 
-export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-notes-v1';
+export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-notes-v2';
+
+export function allowsImageFiling(version?: string) {
+  return version === SPARK_AI_CONSENT_VERSION || version === 'spark-ai-image-notes-v1';
+}
 
 export function AIConsentModal({
   open,
@@ -60,7 +64,7 @@ export function AIConsentModal({
           </li>
           <li>
             <strong>处理用途：</strong>
-            生成标题和摘要。仅用文字整理时，项目建议仍由你确认。模型也可从匹配的已有标签中选择并自动打标，保留你的人工决定。
+            生成标题和摘要。仅用文字整理时，项目建议仍由你确认。系统会按笔记内容自动打上最多 3 个标签。已有同名标签会复用，需要时创建新标签。你可以调整或移除标签。
           </li>
           <li>
             <strong>第三方服务范围：</strong>

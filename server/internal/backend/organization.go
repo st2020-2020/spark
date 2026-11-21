@@ -79,10 +79,10 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	if reason != "" {
 		return "", reason, nil
 	}
-	if imageEvent && consent != textImageNotesConsentVersion {
+	if imageEvent && !allowsImageArchive(consent) {
 		return "", "", nil
 	}
-	archive := consent == textImageNotesConsentVersion
+	archive := allowsImageArchive(consent)
 	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role, archive)
 	if err != nil {
 		return "", "", err

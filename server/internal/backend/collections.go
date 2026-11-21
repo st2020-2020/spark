@@ -489,7 +489,7 @@ func (s *Server) collectionView(row collectionRow) collectionRow {
 			status := contract.OrganizationImageMaterialStatus("consent_required")
 			row.Organization.ImageMaterialStatus = &status
 		}
-		if row.UserAIConsent != textImageNotesConsentVersion {
+		if !allowsImageArchive(row.UserAIConsent) {
 			status := contract.OrganizationImageArchiveStatus("consent_required")
 			row.Organization.ImageArchiveStatus = &status
 		}

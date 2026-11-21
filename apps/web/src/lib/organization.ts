@@ -287,12 +287,14 @@ export function classifyOrganizationDisplay(params: {
   }
 
   if (organization.status === 'partial') {
-    if (errCode === 'project_changed') {
+    if (errCode === 'project_changed' || errCode === 'invalid_topic_candidate') {
       return {
         kind: 'partial',
         badgeLabel: '部分完成',
         pillTone: 'warning',
-        description: '项目已更新，本次项目建议未应用，可重新整理',
+        description: errCode === 'project_changed'
+          ? '项目已更新，本次项目建议未应用，可重新整理'
+          : '已保留整理结果。本次未能确定合适的项目名称，你可以手动选择项目。',
         canTrigger: true,
         triggerLabel: '重新整理',
         noProjectSuggestion: false,
