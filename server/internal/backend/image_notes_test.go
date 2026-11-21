@@ -303,3 +303,106 @@ func TestImageArchiveUsesOCRButNotReplacedOrRemovedDescriptions(t *testing.T) {
 		t.Fatal("manual organization did not use the remaining OCR exactly once")
 	}
 }
+
+func TestImageRecoveryArchivesOnceWhenUsableMaterialArrives(t *testing.T) {
+	app, addr := testBackend(t)
+	owner, uid, objects, storage := setupImageOrganization(t, app, addr)
+	enableImageArchiving(t, owner)
+	var imageCalls, textCalls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		verifyImageModelRequest(t, r)
+		if imageCalls.Add(1) == 1 {
+			modelReply(w, "length", `{"description":"未闭合`, map[string]int{"prompt_tokens": 200, "completion_tokens": 512})
+			return
+		}
+		modelReply(w, "stop", `{"text":"合成编号731","description":"模型画面说明"}`, map[string]int{"prompt_tokens": 200, "completion_tokens": 30})
+	}))
+	t.Cleanup(provider.Close)
+	startImageTestWorker(t, app, storage, provider.URL)
+	startImageTextOrganization(t, app, func(w http.ResponseWriter, r *http.Request) {
+		textCalls.Add(1)
+		result := topicFromImage(t, r, "手动恢复的图片主题")
+		modelReply(w, "stop", string(jsonBytes(result)), map[string]int{"prompt_tokens": 100, "completion_tokens": 40})
+	})
+
+	saved := saveOrganizationImage(t, app, owner, uid, objects, "")
+	id := saved["id"].(string)
+	attachment := saved["attachments"].([]any)[0].(map[string]any)["id"].(string)
+	unusable := waitForImageStatus(t, owner, id, "failed")
+	waitOrganization(t, owner, id, "skipped")
+	if textCalls.Load() != 0 {
+		t.Fatal("an empty truncation consumed a text call")
+	}
+	path := "/attachments/" + attachment + "/image-analysis/retry"
+	body := map[string]any{"base_extraction_id": unusable["id"], "consent_version": "deepseek-image-retry-v1"}
+	key := uuid.NewString()
+	recovery := owner.do("POST", path, body, key).want(t, 202)
+	row := waitOrganization(t, owner, id, "succeeded")
+	if row["organization"].(map[string]any)["image_archive_status"] != "created" || len(row["image_notes"].([]any)) != 1 {
+		t.Fatal("recovery did not produce the body and automatic project")
+	}
+	for _, replayKey := range []string{key, uuid.NewString()} {
+		if replay := owner.do("POST", path, body, replayKey).want(t, 202); replay["id"] != recovery["id"] {
+			t.Fatal("duplicate recovery introduced a new extraction")
+		}
+	}
+	if imageCalls.Load() != 2 || textCalls.Load() != 1 {
+		t.Fatalf("recovery dispatched more work than intended: %d image calls, %d text calls", imageCalls.Load(), textCalls.Load())
+	}
+}
+
+func TestImageArchiveDropsUnsubstantiatedTopicAndExpiredAuthorization(t *testing.T) {
+	for _, revoke := range []bool{false, true} {
+		name := "unsubstantiated topic"
+		if revoke {
+			name = "revoked image authorization"
+		}
+		t.Run(name, func(t *testing.T) {
+			app, addr := testBackend(t)
+			owner, uid, objects, storage := setupImageOrganization(t, app, addr)
+			enableImageArchiving(t, owner)
+			var imageCalls, textCalls atomic.Int32
+			startNoteImageWorker(t, app, storage, &imageCalls, `{"text":"合成编号731","description":"模型画面说明"}`)
+			entered, resume := make(chan struct{}), make(chan struct{})
+			release := sync.OnceFunc(func() { close(resume) })
+			defer release()
+			startImageTextOrganization(t, app, func(w http.ResponseWriter, r *http.Request) {
+				textCalls.Add(1)
+				result := topicFromImage(t, r, "不应创建的主题")
+				if revoke {
+					close(entered)
+					select {
+					case <-resume:
+					case <-r.Context().Done():
+						return
+					}
+				} else {
+					topic := result["topic_candidate"].(map[string]any)
+					evidence := topic["evidence"].([]modelEvidence)
+					if len(evidence) > 0 {
+						evidence[0].Quote = "图面上不存在的内容"
+					}
+				}
+				modelReply(w, "stop", string(jsonBytes(result)), map[string]int{"prompt_tokens": 100, "completion_tokens": 40})
+			})
+			saved := saveOrganizationImage(t, app, owner, uid, objects, "保留原文")
+			id := saved["id"].(string)
+			state := "failed"
+			if revoke {
+				select {
+				case <-entered:
+				case <-time.After(6 * time.Second):
+					t.Fatal("controlled model call did not begin")
+				}
+				owner.do("PUT", "/me/image-analysis", map[string]any{"enabled": false}, "").want(t, 200)
+				release()
+				state = "superseded"
+			}
+			row := waitOrganization(t, owner, id, state)
+			if len(row["projects"].([]any)) != 0 || len(owner.do("GET", "/projects", nil, "").want(t, 200)["items"].([]any)) != 0 ||
+				string(jsonBytes(row["document"])) != string(jsonBytes(saved["document"])) || textCalls.Load() != 1 {
+				t.Fatal("missing evidence or stale authorization changed the project or source content")
+			}
+		})
+	}
+}
