@@ -558,6 +558,7 @@ export function createTestAdapter(): TestAdapter {
       ai_trial_eligible: mockAiTrialEligible,
       ai_platform_enabled: mockAiPlatformEnabled,
       purge_enabled: !mockPurgeBehavior.unconfigured,
+      url_extraction_enabled: !mockUrlExtractionBehavior.unconfigured,
     };
   }
 
@@ -1056,6 +1057,7 @@ export function createTestAdapter(): TestAdapter {
         ai_trial_eligible: mockAiTrialEligible,
         ai_platform_enabled: mockAiPlatformEnabled,
       purge_enabled: !mockPurgeBehavior.unconfigured,
+      url_extraction_enabled: !mockUrlExtractionBehavior.unconfigured,
       };
     },
 

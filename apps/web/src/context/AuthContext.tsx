@@ -22,6 +22,7 @@ interface AuthState {
   aiTrialEligible: boolean;
   aiPlatformEnabled: boolean;
   purgeEnabled: boolean;
+  urlExtractionEnabled: boolean;
   isLoading: boolean;
   sessionError: string | null;
 }
@@ -51,6 +52,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     aiTrialEligible: true,
     aiPlatformEnabled: true,
     purgeEnabled: false,
+    urlExtractionEnabled: false,
     isLoading: true,
     sessionError: null,
   });
@@ -84,6 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         aiTrialEligible: session.ai_trial_eligible ?? true,
         aiPlatformEnabled: session.ai_platform_enabled ?? true,
         purgeEnabled: session.purge_enabled === true,
+        urlExtractionEnabled: session.url_extraction_enabled === true,
         isLoading: false,
         sessionError: null,
       });
@@ -107,6 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         aiTrialEligible: false,
         aiPlatformEnabled: false,
         purgeEnabled: false,
+        urlExtractionEnabled: false,
         isLoading: false,
         sessionError: message,
       });

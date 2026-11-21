@@ -99,7 +99,7 @@ function draftFields(draft: EditDraft, col: Collection) {
 export function CollectionDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const api = useApi();
-  const { user, aiTrialEligible, aiPlatformEnabled, purgeEnabled } = useAuth();
+  const { user, aiTrialEligible, aiPlatformEnabled, purgeEnabled, urlExtractionEnabled } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -867,7 +867,7 @@ export function CollectionDetailPage() {
                 isRefreshing={refreshUrlMutation.isPending}
                 isCheckingStatus={extractionsQuery.isFetching}
                 refreshError={urlRefreshError}
-                onRefresh={!isInTrash ? () => refreshUrlMutation.mutate() : undefined}
+                onRefresh={!isInTrash && urlExtractionEnabled ? () => refreshUrlMutation.mutate() : undefined}
                 onCheckStatus={!isInTrash ? () => void extractionsQuery.refetch() : undefined}
               />
             )}

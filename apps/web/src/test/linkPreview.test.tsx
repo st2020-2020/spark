@@ -49,6 +49,21 @@ async function loginAsAdmin(user: ReturnType<typeof userEvent.setup>, adapter = 
 }
 
 describe('LinkPreviewCard & T07 link preview flows', () => {
+  it.each([false, undefined])('keeps the saved preview and original link when URL extraction availability is %s', async enabled => {
+    const api = createTestAdapter();
+    const session = await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    vi.spyOn(api, 'currentSession').mockResolvedValue({ ...session, url_extraction_enabled: enabled });
+    const url = 'https://docs.example.test/retained';
+    const collection = await api.createCollection({ id: crypto.randomUUID(), document: EMPTY_DOCUMENT,
+      original_url: url, intent: '', upload_ids: [], project_ids: [], tag_ids: [] }, 'saved');
+    api.setMockCollectionExtractions(collection.id, [{ id: 'cached', content_version: collection.content_version,
+      source_kind: 'url', source_id: url, status: 'succeeded', source_title: '已有预览',
+      updated_at: new Date().toISOString() }]);
+    renderWithAdapter([`/collections/${collection.id}`], api);
+    expect(await screen.findByRole('link', { name: '已有预览' })).toHaveAttribute('href', url);
+    expect(screen.queryByRole('button', { name: '重新获取' })).toBeNull();
+  });
+
   it('renders queued, succeeded, silent fallback states and ignores unsafe URLs', () => {
     const { rerender } = render(
       <LinkPreviewCard

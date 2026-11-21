@@ -1062,6 +1062,8 @@ export interface components {
             ai_platform_enabled?: boolean;
             /** @description 是否开放登记新的永久删除。字段缺失视为关闭。 */
             purge_enabled?: boolean;
+            /** @description 是否开放网页信息提取和手动重新抓取。字段缺失视为关闭。 */
+            url_extraction_enabled?: boolean;
         };
         Session: {
             /** Format: uuid */
