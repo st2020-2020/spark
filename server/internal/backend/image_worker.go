@@ -28,17 +28,18 @@ type imageWorker struct {
 	river.WorkerDefaults[imageAnalysisArgs]
 	pool    *pgxpool.Pool
 	storage ImageObjectReader
+	adminID string
 	model   *ImageModel
 	// Serialize the memory-intensive decode while allowing overlapping HTTP jobs.
 	visualCopySlot chan struct{}
 }
 
-func StartImageWorker(ctx context.Context, pool *pgxpool.Pool, storage ImageObjectReader, model *ImageModel) (*river.Client[pgx.Tx], error) {
+func StartImageWorker(ctx context.Context, pool *pgxpool.Pool, storage ImageObjectReader, model *ImageModel, adminID string) (*river.Client[pgx.Tx], error) {
 	if storage == nil || model == nil {
 		return nil, errors.New("image analysis requires private object storage and a provider")
 	}
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &imageWorker{pool: pool, storage: storage, model: model, visualCopySlot: make(chan struct{}, 1)})
+	river.AddWorker(workers, &imageWorker{pool: pool, storage: storage, model: model, adminID: adminID, visualCopySlot: make(chan struct{}, 1)})
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Schema: db.RiverSchema(pool), Workers: workers,
 		Queues:     map[string]river.QueueConfig{imageAnalysisQueue: {MaxWorkers: 2}},
@@ -61,18 +62,18 @@ type imageJob struct {
 	Eligible                   bool
 }
 
-func loadImageJob(ctx context.Context, q querier, args imageAnalysisArgs) (imageJob, error) {
+func (w *imageWorker) loadImageJob(ctx context.Context, q querier, args imageAnalysisArgs) (imageJob, error) {
 	var job imageJob
 	err := q.QueryRow(ctx, `SELECT e.status,a.object_key,coalesce(a.provider_version,''),a.mime_type,a.size_bytes,a.sha256,
-		coalesce(u.status='active' AND u.image_consent_version=$5
+		coalesce(`+imageAccountAllowedSQL+` AND u.status='active' AND u.image_consent_version=$6
 		 AND u.image_policy_version=e.image_user_policy_version AND c.ai_policy_version=e.image_collection_policy_version
 		 AND NOT c.ai_excluded AND c.deleted_at IS NULL AND c.purge_requested_at IS NULL AND a.removed_at IS NULL,false)
 		FROM extractions e JOIN users u ON u.id=e.user_id
 		JOIN collections c ON (c.user_id,c.id)=(e.user_id,e.collection_id)
 		JOIN attachments a ON (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id)
-		WHERE e.user_id=$1 AND e.collection_id=$2 AND e.id=$3 AND e.source_kind='image'
-		  AND e.extractor_version=$4 AND e.image_user_policy_version IS NOT NULL`,
-		args.UserID, args.CollectionID, args.ExtractionID, imageExtractorVersion, imageConsentVersion).
+		WHERE e.user_id=$1 AND e.collection_id=$3 AND e.id=$4 AND e.source_kind='image'
+		  AND e.extractor_version=$5 AND e.image_user_policy_version IS NOT NULL`,
+		args.UserID, w.adminID, args.CollectionID, args.ExtractionID, imageExtractorVersion, imageConsentVersion).
 		Scan(&job.Status, &job.Key, &job.Version, &job.MIME, &job.Size, &job.SHA, &job.Eligible)
 	return job, err
 }
@@ -99,7 +100,7 @@ func (w *imageWorker) Work(ctx context.Context, delivery *river.Job[imageAnalysi
 		}
 	}()
 
-	job, err := loadImageJob(ctx, conn, args)
+	job, err := w.loadImageJob(ctx, conn, args)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
@@ -141,7 +142,7 @@ func (w *imageWorker) Work(ctx context.Context, delivery *river.Job[imageAnalysi
 	if err != nil {
 		return finishUndispatchedImage(ctx, conn, args, "queued", "blocked", "image_token_limit")
 	}
-	reservation, err := beginImageDispatch(ctx, conn, args)
+	reservation, err := w.beginImageDispatch(ctx, conn, args)
 	if err != nil || reservation == "" {
 		return err
 	}
@@ -164,7 +165,7 @@ func (w *imageWorker) Work(ctx context.Context, delivery *river.Job[imageAnalysi
 				return err
 			}
 		}
-		current, err := loadImageJob(settle, tx, args)
+		current, err := w.loadImageJob(settle, tx, args)
 		if err != nil {
 			return err
 		}
@@ -192,13 +193,13 @@ func readImageObject(ctx context.Context, storage ImageObjectReader, job imageJo
 	return data, nil
 }
 
-func beginImageDispatch(ctx context.Context, conn *pgxpool.Conn, args imageAnalysisArgs) (string, error) {
+func (w *imageWorker) beginImageDispatch(ctx context.Context, conn *pgxpool.Conn, args imageAnalysisArgs) (string, error) {
 	var reservation string
 	err := pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
 		if _, err := store.New(tx).LockUserChanges(ctx, idPG(args.UserID)); err != nil {
 			return err
 		}
-		job, err := loadImageJob(ctx, tx, args)
+		job, err := w.loadImageJob(ctx, tx, args)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}

@@ -39,6 +39,8 @@ func TestImageConsentIsSeparateFromTextAI(t *testing.T) {
 		t.Fatalf("image consent should default off: %v", prefs)
 	}
 	client.do("PUT", path, map[string]any{"enabled": true, "consent_version": "text-v1"}, "").want(t, 422)
+	client.do("PUT", path, map[string]any{"enabled": true, "consent_version": imageConsentVersion}, "").want(t, 403)
+	app.Config.ImageAnalysisEnabled = true
 	if prefs := client.do("PUT", path, map[string]any{"enabled": true, "consent_version": "deepseek-images-v1"}, "").want(t, 200); prefs["enabled"] != true {
 		t.Fatalf("image consent should be explicit: %v", prefs)
 	}
@@ -370,7 +372,7 @@ func startImageTestWorker(t *testing.T, app *Server, storage ImageObjectReader, 
 		t.Fatal(err)
 	}
 	t.Cleanup(model.Close)
-	worker, err := StartImageWorker(context.Background(), app.Pool, storage, model)
+	worker, err := StartImageWorker(context.Background(), app.Pool, storage, model, app.Config.ImageAdminID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,4 +462,64 @@ func modelReply(w http.ResponseWriter, finish, content string, usage map[string]
 		out["usage"] = usage
 	}
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func TestImageTrialRequiresSelectedAdministrator(t *testing.T) {
+	app, base := testBackend(t)
+	app.Config.ImageAnalysisEnabled = true
+	admin := imageTestAccount(t, app, base, "selected-admin")
+	other := imageTestAccount(t, app, base, "other-admin")
+	objects, _, storage := newUploadStorageFixture(t)
+	app.Assets = storage
+	enableImageTestAccount(other)
+	stale := saveImageCollection(t, app, other, objects)
+	id := admin.do("GET", "/auth/session", nil, "").want(t, 200)["user"].(map[string]any)["id"].(string)
+	app.Config.ImageAdminID = id
+	path := "/me/image-analysis"
+	consent := map[string]any{"enabled": true, "consent_version": imageConsentVersion}
+	if other.do("GET", path, nil, "").want(t, 200)["available"] != false {
+		t.Fatal("other admin eligible")
+	}
+	other.do("PUT", path, consent, "").want(t, 403)
+	newer := saveImageCollection(t, app, other, objects)
+	if len(imageExtractions(t, other, newer.id)) != 0 {
+		t.Fatal("other admin queued new work")
+	}
+	enableImageTestAccount(admin)
+	own := saveImageCollection(t, app, admin, objects)
+	if len(imageExtractions(t, admin, own.id)) != 1 {
+		t.Fatal("selected admin did not enqueue")
+	}
+	if _, err := app.Pool.Exec(t.Context(), "UPDATE users SET role='user' WHERE id=$1", id); err != nil {
+		t.Fatal(err)
+	}
+	if admin.do("GET", path, nil, "").want(t, 200)["available"] != false {
+		t.Fatal("demoted account eligible")
+	}
+	admin.do("PUT", path, consent, "").want(t, 403)
+	var calls atomic.Int32
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); w.WriteHeader(500) }))
+	t.Cleanup(model.Close)
+	startImageTestWorker(t, app, storage, model.URL)
+	waitForImageStatus(t, other, stale.id, "skipped")
+	waitForImageStatus(t, admin, own.id, "skipped")
+	var reservations int
+	if err := app.Pool.QueryRow(t.Context(), "SELECT count(*) FROM usage_reservations").Scan(&reservations); err != nil || reservations != 0 || calls.Load() != 0 {
+		t.Fatal("ineligible job reached reservation or dispatch", err)
+	}
+	other.do("PUT", path, map[string]any{"enabled": false}, "").want(t, 200)
+}
+
+func TestImageAdminProductionConfiguration(t *testing.T) {
+	for _, value := range []string{"", "all", uuid.Nil.String(), uuid.NewString() + "," + uuid.NewString()} {
+		t.Setenv("SPARK_IMAGE_ANALYSIS_ADMIN_ID", value)
+		if _, err := ImageAdminID("production", true); err == nil {
+			t.Fatal("accepted invalid administrator scope")
+		}
+	}
+	id := uuid.NewString()
+	t.Setenv("SPARK_IMAGE_ANALYSIS_ADMIN_ID", id)
+	if got, err := ImageAdminID("production", true); err != nil || got != id {
+		t.Fatal("valid administrator rejected", err)
+	}
 }

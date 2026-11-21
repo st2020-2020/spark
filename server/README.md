@@ -48,7 +48,7 @@ dc ps
 
 模型收到重新编码的视觉副本。JPEG、PNG 和 WebP 应用 EXIF 方向后剥离元数据，GIF 在副本符合大小限制时保留帧与时间。副本超出 5 MiB 时使用有界的静态副本。原始 OSS 对象及收藏下载保持原样。
 
-图片理解按平台开关、账号的独立图片授权、单条排除与共享额度决定是否派发。`SPARK_AI_TRIAL_USER_IDS` 只限定文字整理。需要限定为测试账号的首次真实图片试用，应在隔离环境使用合成图片和小额预算。
+图片理解按平台开关、账号的独立图片授权、单条排除与共享额度决定是否派发。`SPARK_AI_TRIAL_USER_IDS` 只限定文字整理。生产 API 和图片 Worker 启用时都要求配置相同的 `SPARK_IMAGE_ANALYSIS_ADMIN_ID`，仅该 UUID 对应的在任管理员可以开启并使用。更换账号先停图片 Worker，再用同一配置重建 API 与图片 Worker；既有图片授权始终可以撤回。
 
 只有用户通过独立图片授权后新绑定的附件才派发。每图向 `deepseek-flash` 发送一次内联图片和固定提示，显式关闭思考，上限为输入 1536 token 和输出 512 token，按高峰未命中价预留 7168 微元。发送后无法确认用量的记录维持 `uncertain` 并占用预留。供应商报告超出批准上限时保留待核对额度并阻止该配置继续派发。合成端点用于验证协议和预算行为。厂商账单、识别质量及试用额度在真实试用前核定。[DeepSeek 图像理解](https://api-docs.deepseek.com/zh-cn/guides/vision/) [DeepSeek 价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)
 

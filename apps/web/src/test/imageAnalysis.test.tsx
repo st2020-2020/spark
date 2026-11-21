@@ -352,7 +352,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     adapter.setMockImageAnalysisBehavior({ available: false });
     cleanup();
     renderWithAdapter(['/settings'], adapter);
-    expect(await screen.findByText(/当前平台暂未启用图片理解服务/)).toBeInTheDocument();
+    expect(await screen.findByText(/当前账号暂未开放图片理解/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '开启图片理解' })).not.toBeInTheDocument();
   });
 });

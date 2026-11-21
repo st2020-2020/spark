@@ -25,6 +25,10 @@ func runImages() error {
 	if env != "production" && env != "development" {
 		return errors.New("SPARK_ENV must be development or production")
 	}
+	adminID, err := backend.ImageAdminID(env, true)
+	if err != nil {
+		return err
+	}
 	storage, err := asset.Load(env)
 	if err != nil {
 		return err
@@ -51,7 +55,7 @@ func runImages() error {
 	}
 	working, cancelWorking := context.WithCancel(context.Background())
 	defer cancelWorking()
-	worker, err := backend.StartImageWorker(working, pool, storage, model)
+	worker, err := backend.StartImageWorker(working, pool, storage, model, adminID)
 	if err != nil {
 		return err
 	}

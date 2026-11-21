@@ -51,7 +51,7 @@ export function ImageAnalysisSettingsCard() {
                 {prefsQuery.isLoading && '正在读取图片理解授权状态…'}
                 {prefsQuery.isError && getFriendlyErrorMessage(prefsQuery.error)}
                 {prefs && !isAvailable && (
-                  '当前平台暂未启用图片理解服务，已保存图片仍会完整保存原图并支持查看。'
+                  '当前账号暂未开放图片理解，仍可保存和查看原图。'
                 )}
                 {prefs && isAvailable && isEnabled && (
                   <>

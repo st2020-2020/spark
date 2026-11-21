@@ -15,6 +15,8 @@ const (
 	imageExtractorVersion = "deepseek-flash-image-v1"
 	imageAnalysisQueue    = "image_analysis"
 	imageJobLockSalt      = 43
+	// All callers bind $2 to the administrator configured for this process.
+	imageAccountAllowedSQL = "($2::text = '' OR (u.role = 'admin' AND u.id::text = $2))"
 )
 
 type imageAnalysisArgs struct {
@@ -36,9 +38,9 @@ func (s *Server) getImagePreferences(c *gin.Context) (any, error) {
 
 func (s *Server) imagePreferences(ctx context.Context, q querier, uid string) (contract.ImageAnalysisPreferences, error) {
 	out := contract.ImageAnalysisPreferences{
-		Available: s.Config.ImageAnalysisEnabled, RequiredConsentVersion: imageConsentVersion,
+		RequiredConsentVersion: imageConsentVersion,
 	}
-	err := q.QueryRow(ctx, `SELECT coalesce(image_consent_version=$2,false) FROM users WHERE id=$1`, uid, imageConsentVersion).Scan(&out.Enabled)
+	err := q.QueryRow(ctx, `SELECT coalesce(u.image_consent_version=$3,false), $4::boolean AND `+imageAccountAllowedSQL+` FROM users u WHERE u.id=$1`, uid, s.Config.ImageAdminID, imageConsentVersion, s.Config.ImageAnalysisEnabled).Scan(&out.Enabled, &out.Available)
 	return out, err
 }
 
@@ -58,6 +60,13 @@ func (s *Server) setImagePreferences(c *gin.Context) (any, error) {
 	defer tx.Rollback(ctx)
 	var consent any
 	if req.Enabled {
+		prefs, err := s.imagePreferences(ctx, tx, uid)
+		if err != nil {
+			return nil, err
+		}
+		if !prefs.Available {
+			return nil, problem(403, "image_analysis_unavailable", "当前账号暂未开放图片理解。")
+		}
 		consent = imageConsentVersion
 	}
 	if _, err := tx.Exec(ctx, `UPDATE users SET image_consent_version=$2::text,
@@ -82,13 +91,13 @@ func (s *Server) enqueueImageAnalysis(ctx context.Context, tx pgx.Tx, uid, id st
 		status, err := tx.Exec(ctx, `INSERT INTO extractions
 			(id,user_id,collection_id,content_version,source_kind,source_id,attachment_id,extractor_version,
 			 image_user_policy_version,image_collection_policy_version)
-			SELECT $5,c.user_id,c.id,c.content_version,'image',a.id::text,a.id,$6,u.image_policy_version,c.ai_policy_version
+			SELECT $6,c.user_id,c.id,c.content_version,'image',a.id::text,a.id,$7,u.image_policy_version,c.ai_policy_version
 			FROM collections c JOIN users u ON u.id=c.user_id
 			JOIN attachments a ON (a.user_id,a.collection_id)=(c.user_id,c.id)
-			WHERE c.user_id=$1 AND c.id=$2 AND a.id=$3 AND a.removed_at IS NULL
+			WHERE c.user_id=$1 AND c.id=$3 AND a.id=$4 AND a.removed_at IS NULL
 			  AND c.deleted_at IS NULL AND c.purge_requested_at IS NULL AND NOT c.ai_excluded
-			  AND u.status='active' AND u.image_consent_version=$4
-			ON CONFLICT DO NOTHING`, uid, id, attachment, imageConsentVersion, jobID, imageExtractorVersion)
+			  AND u.status='active' AND u.image_consent_version=$5 AND `+imageAccountAllowedSQL+`
+			ON CONFLICT DO NOTHING`, uid, s.Config.ImageAdminID, id, attachment, imageConsentVersion, jobID, imageExtractorVersion)
 		if err != nil {
 			return err
 		}

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type Config struct {
@@ -15,6 +17,7 @@ type Config struct {
 	Container                                bool
 	AIEnabled                                bool
 	ImageAnalysisEnabled                     bool
+	ImageAdminID                             string
 	URLExtractEnabled                        bool
 	PurgeEnabled                             bool
 	AITrial                                  AITrialScope
@@ -35,6 +38,10 @@ func LoadConfig() (Config, error) {
 		c.MailMode = "disabled"
 	}
 	var err error
+	c.ImageAdminID, err = ImageAdminID(c.Env, c.ImageAnalysisEnabled)
+	if err != nil {
+		return c, err
+	}
 	c.AITrial, err = ParseAITrialScope(c.Env, os.Getenv("SPARK_AI_TRIAL_USER_IDS"))
 	if err != nil {
 		return c, err
@@ -76,6 +83,19 @@ func LoadConfig() (Config, error) {
 		return c, errors.New("DATABASE_URL is required")
 	}
 	return c, nil
+}
+
+// ImageAdminID permits unrestricted synthetic accounts only in development.
+func ImageAdminID(env string, enabled bool) (string, error) {
+	id := os.Getenv("SPARK_IMAGE_ANALYSIS_ADMIN_ID")
+	if id == "" && (!enabled || env == "development") {
+		return "", nil
+	}
+	parsed, err := uuid.Parse(id)
+	if err != nil || parsed == uuid.Nil || parsed.String() != id {
+		return "", errors.New("SPARK_IMAGE_ANALYSIS_ADMIN_ID must identify one administrator by canonical UUID")
+	}
+	return id, nil
 }
 func isLoopback(s string) bool {
 	ip := net.ParseIP(s)

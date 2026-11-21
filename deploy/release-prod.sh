@@ -495,6 +495,8 @@ fi
 img_enabled="$(env_val SPARK_IMAGE_ANALYSIS_ENABLED)"
 if [[ "$WITH_IMAGE_ANALYSIS" == "true" ]]; then
   [[ "$img_enabled" == "true" ]] || { echo "--with-image-analysis requires SPARK_IMAGE_ANALYSIS_ENABLED=true in $ENV_FILE" >&2; exit 1; }
+  img_admin="$(env_val SPARK_IMAGE_ANALYSIS_ADMIN_ID)"
+  [[ "$img_admin" =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ && "$img_admin" != "00000000-0000-0000-0000-000000000000" ]] || { echo "image analysis requires one configured administrator UUID" >&2; exit 1; }
   img_key="$(env_val SPARK_IMAGE_ANALYSIS_KEY_HOST_PATH)"
   [[ -n "$img_key" ]] || img_key="/etc/spark/image-analysis/api-key"
   check_secret_mode "Image analysis API key" "$img_key"
