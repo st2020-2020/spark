@@ -190,7 +190,15 @@ func (s *Server) newSession(ctx context.Context, tx pgx.Tx, c *gin.Context, u us
 	return sess, err
 }
 func (s *Server) sessionResult(v *signedIn) any {
-	return gin.H{"user": v.User, "csrf_token": v.CSRF, "expires_at": v.Expires, "ai_trial_eligible": s.Organizer.Trial.allows(v.User.ID), "ai_platform_enabled": s.Organizer.Enabled, "purge_enabled": s.Config.PurgeEnabled}
+	return gin.H{
+		"user":                   v.User,
+		"csrf_token":             v.CSRF,
+		"expires_at":             v.Expires,
+		"ai_trial_eligible":      s.Organizer.Trial.allows(v.User.ID),
+		"ai_platform_enabled":    s.Organizer.Enabled,
+		"purge_enabled":          s.Config.PurgeEnabled,
+		"url_extraction_enabled": s.Config.URLExtractEnabled,
+	}
 }
 func (s *Server) rate(ctx context.Context, key string, limit int, window time.Duration) error {
 	now := time.Now().UTC().Truncate(window)
