@@ -142,6 +142,12 @@ func writeExport(ctx context.Context, tx pgx.Tx, uid string, z *zip.Writer, form
 				return count, convErr
 			}
 			_, err = fmt.Fprintf(entry, "\n## 正文\n\n%s\n", body)
+			for _, note := range c.ImageNotes {
+				if err != nil {
+					break
+				}
+				_, err = fmt.Fprintf(entry, "\n%s\n", markdownEscape.Replace(note.Text))
+			}
 		}
 		if err != nil {
 			return count, err

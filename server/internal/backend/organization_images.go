@@ -2,14 +2,20 @@ package backend
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"time"
 )
 
 const (
-	textImageConsentVersion = "spark-ai-image-material-v1"
-	organizationImagePoll   = 2 * time.Second
+	textImageConsentVersion      = "spark-ai-image-material-v1"
+	textImageNotesConsentVersion = "spark-ai-image-notes-v1"
+	organizationImagePoll        = 2 * time.Second
 )
+
+func allowsTextImageMaterial(consent string) bool {
+	return consent == textImageConsentVersion || consent == textImageNotesConsentVersion
+}
 
 type ImageOrganizationScope struct {
 	Enabled bool
@@ -77,6 +83,17 @@ func (i textInput) imagePolicyVersion() int64 {
 		}
 	}
 	return 0
+}
+
+func imageExtractionIDs(sources []textSource) []string {
+	ids := make([]string, 0, len(sources))
+	for _, source := range sources {
+		if source.image.ExtractionID != "" {
+			ids = append(ids, source.image.ExtractionID)
+		}
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
 }
 
 // Re-check the actual submitted prefixes and extraction identity, not a

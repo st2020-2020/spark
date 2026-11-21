@@ -36,10 +36,14 @@ const collectionJSON = `to_jsonb(c)||jsonb_build_object(
  'user_ai_enabled',(SELECT ai_enabled FROM users WHERE id=c.user_id),
  'user_ai_consent',(SELECT COALESCE(ai_consent_version,'') FROM users WHERE id=c.user_id),
  'user_role',(SELECT role FROM users WHERE id=c.user_id),
+ 'image_notes',` + imageNotesJSON + `,
  'has_image_material',EXISTS(SELECT 1 FROM organization_image_materials m WHERE (m.user_id,m.collection_id)=(c.user_id,c.id)),
  'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,
  'stages',CASE WHEN r.image_waiting AND r.status<>'queued' THEN '[{"name":"extract_images","status":"skipped","attempts":0}]'::jsonb ELSE r.stages END,
  'error_code',r.error_code,'updated_at',r.updated_at,
+ 'image_archive_status',CASE WHEN EXISTS(SELECT 1 FROM collection_projects ap
+   WHERE (ap.user_id,ap.collection_id,ap.run_id)=(r.user_id,r.collection_id,r.id) AND ap.decision='auto')
+   THEN r.image_archive_status END,
  'image_material_status',CASE
   WHEN r.status='queued' AND r.image_waiting THEN 'waiting'
   WHEN r.status IN ('succeeded','partial') AND EXISTS(SELECT 1 FROM organization_current_image_runs ir
@@ -480,9 +484,15 @@ func (s *Server) collectionView(row collectionRow) collectionRow {
 		}
 	}
 	if s.Organizer.Enabled && s.Organizer.Trial.allows(row.UserID) && row.UserAIEnabled &&
-		row.HasImageMaterial && s.Organizer.Images.allows(row.UserID, row.UserRole) && row.UserAIConsent != textImageConsentVersion {
-		status := contract.OrganizationImageMaterialStatus("consent_required")
-		row.Organization.ImageMaterialStatus = &status
+		row.HasImageMaterial && s.Organizer.Images.allows(row.UserID, row.UserRole) {
+		if !allowsTextImageMaterial(row.UserAIConsent) {
+			status := contract.OrganizationImageMaterialStatus("consent_required")
+			row.Organization.ImageMaterialStatus = &status
+		}
+		if row.UserAIConsent != textImageNotesConsentVersion {
+			status := contract.OrganizationImageArchiveStatus("consent_required")
+			row.Organization.ImageArchiveStatus = &status
+		}
 	}
 	return row
 }

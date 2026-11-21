@@ -88,6 +88,16 @@ type Collection struct {
 	LastOpenedAt     pgtype.Timestamptz
 }
 
+type CollectionImageNote struct {
+	UserID             pgtype.UUID
+	CollectionID       pgtype.UUID
+	AttachmentID       pgtype.UUID
+	SourceExtractionID pgtype.UUID
+	Text               string
+	State              string
+	Version            int64
+}
+
 type CollectionProject struct {
 	UserID         pgtype.UUID
 	CollectionID   pgtype.UUID
@@ -313,6 +323,8 @@ type OrganizationRun struct {
 	UpdatedAt               pgtype.Timestamptz
 	ImageWaiting            bool
 	ImageUserPolicyVersion  pgtype.Int8
+	ImageExtractionIds      []string
+	ImageArchiveStatus      pgtype.Text
 }
 
 type Project struct {
