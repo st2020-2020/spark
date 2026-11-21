@@ -52,6 +52,7 @@ export type ExpectedProjectSuggestion = components['schemas']['ExpectedProjectSu
 export type ProjectAssociation = components['schemas']['ProjectAssociation'];
 export type ProjectUndoReceipt = components['schemas']['ProjectUndoReceipt'];
 export type UndoProjectDecision = components['schemas']['UndoProjectDecision'];
+export type TagDecisionUpdate = components['schemas']['TagDecisionUpdate'];
 export type TagAssociation = components['schemas']['TagAssociation'];
 export type AssociationUpdate = components['schemas']['AssociationUpdate'];
 export type Stage = components['schemas']['Stage'];

@@ -35,6 +35,8 @@ type userView struct {
 	Status          string `json:"status"`
 	AIEnabled       bool   `json:"ai_enabled"`
 	AIPolicyVersion int64  `json:"ai_policy_version"`
+	Palette         string `json:"palette"`
+	Theme           string `json:"theme"`
 }
 
 func current(c *gin.Context) *signedIn { return c.MustGet("session").(*signedIn) }
@@ -147,7 +149,7 @@ func (s *Server) authenticate(c *gin.Context) {
 		s.fail(c, problem(401, "session_expired", "请重新登录。"))
 		return
 	}
-	c.Set("session", &signedIn{ID: row.ID.String(), Token: token, CSRF: csrf, Expires: row.ExpiresAt.Time, User: userView{ID: row.UserID.String(), Email: row.EmailNormalized, Role: row.Role, Status: row.Status, AIEnabled: row.AiEnabled, AIPolicyVersion: row.AiPolicyVersion}})
+	c.Set("session", &signedIn{ID: row.ID.String(), Token: token, CSRF: csrf, Expires: row.ExpiresAt.Time, User: userView{ID: row.UserID.String(), Email: row.EmailNormalized, Role: row.Role, Status: row.Status, AIEnabled: row.AiEnabled, AIPolicyVersion: row.AiPolicyVersion, Palette: row.Palette, Theme: row.Theme}})
 	c.Next()
 }
 func (s *Server) csrf(c *gin.Context) {

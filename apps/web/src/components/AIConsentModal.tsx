@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Modal } from './Modal';
 
-export const SPARK_AI_CONSENT_VERSION = 'spark-ai-v1';
+export const SPARK_AI_CONSENT_VERSION = 'spark-ai-tags-v1';
 
 export function AIConsentModal({
   open,
@@ -17,7 +17,7 @@ export function AIConsentModal({
   onEnabled?: () => void;
 }) {
   const api = useApi();
-  const { setUser } = useAuth();
+  const { applyAiPreferences } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -28,7 +28,7 @@ export function AIConsentModal({
         consent_version: SPARK_AI_CONSENT_VERSION,
       }),
     onSuccess: (updatedUser) => {
-      setUser(updatedUser);
+      applyAiPreferences(updatedUser);
       onClose();
       void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
       pushToast({ message: '已开启 AI 自动整理' });
@@ -48,11 +48,11 @@ export function AIConsentModal({
         <ul className="sp-consent-list">
           <li>
             <strong>发送资料范围：</strong>
-            仅发送未排除单条的收藏文字正文、用途说明与关联网址；不发送账号密码、会话密钥或已排除收藏。
+            发送本条正文和用途说明，以及用于匹配的项目资料。正文或用途中出现已有标签名称时，也会发送相应标签的名称和标识。已排除的收藏不会发送。
           </li>
           <li>
             <strong>处理用途：</strong>
-            用于生成建议标题、简短摘要，以及至多一条带原文依据的项目建议；首批仅提供建议，需由你手动确认或忽略。
+            生成标题、摘要和至多一条带依据的项目建议，项目由你确认。模型也可从匹配的已有标签中选择并自动打标，保留你的人工决定。
           </li>
           <li>
             <strong>第三方服务范围：</strong>

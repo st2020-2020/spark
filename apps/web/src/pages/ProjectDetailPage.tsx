@@ -199,7 +199,7 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      <CollectionComposer defaultProjectId={project.id} />
+      <CollectionComposer key={project.id} defaultProjectId={project.id} />
 
       <div className="sp-list-toolbar">
         <div className="sp-search-bar">

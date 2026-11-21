@@ -12,8 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// Merge two ordered keyset streams. A collection may have accumulated any
-// number of decisions over its lifetime, so those are paged independently.
+// Merge the collection, project-decision, and tag-decision streams.
+// Decisions are paged independently to keep the export's memory bounded.
 func writeExport(ctx context.Context, tx pgx.Tx, uid string, z *zip.Writer, format string, at time.Time) (int, error) {
 	s := exportSnapshot{ctx, tx, uid}
 	var data io.Writer
@@ -47,6 +47,19 @@ func writeExport(ctx context.Context, tx pgx.Tx, uid string, z *zip.Writer, form
 		first = false
 	}
 	if data != nil {
+		if _, err = io.WriteString(data, `],"tags":[`); err != nil {
+			return 0, err
+		}
+		first = true
+		for tag, err := range s.tags() {
+			if err != nil {
+				return 0, err
+			}
+			if err = writeExportJSON(data, tag, first); err != nil {
+				return 0, err
+			}
+			first = false
+		}
 		if _, err = io.WriteString(data, `],"collections":[`); err != nil {
 			return 0, err
 		}
@@ -54,6 +67,9 @@ func writeExport(ctx context.Context, tx pgx.Tx, uid string, z *zip.Writer, form
 	next, stop := iter.Pull2(s.decisions())
 	defer stop()
 	d, linkErr, ok := next()
+	nextTag, stopTags := iter.Pull2(s.tagDecisions())
+	defer stopTags()
+	tag, tagErr, hasTag := nextTag()
 	count := 0
 	for c, err := range s.collections() {
 		if err != nil {
@@ -91,6 +107,33 @@ func writeExport(ctx context.Context, tx pgx.Tx, uid string, z *zip.Writer, form
 				return count, linkErr
 			}
 		}
+		if tagErr != nil {
+			return count, tagErr
+		}
+		if data != nil {
+			_, err = io.WriteString(data, `],"tags":[`)
+		} else if hasTag && tag.collectionID == c.ID {
+			_, err = io.WriteString(entry, "\n标签决定：\n")
+		}
+		if err != nil {
+			return count, err
+		}
+		firstTag := true
+		for hasTag && tag.collectionID == c.ID {
+			if data != nil {
+				err = writeExportJSON(data, tag.TagAssociation, firstTag)
+			} else {
+				_, err = fmt.Fprintf(entry, "- %s（%s）\n", mdLine(tag.Path), tag.Decision)
+			}
+			if err != nil {
+				return count, err
+			}
+			firstTag = false
+			tag, tagErr, hasTag = nextTag()
+			if tagErr != nil {
+				return count, tagErr
+			}
+		}
 		if data != nil {
 			_, err = io.WriteString(data, "]}")
 		} else {
@@ -107,6 +150,9 @@ func writeExport(ctx context.Context, tx pgx.Tx, uid string, z *zip.Writer, form
 	}
 	if linkErr != nil {
 		return count, linkErr
+	}
+	if tagErr != nil {
+		return count, tagErr
 	}
 	if data != nil {
 		_, err = io.WriteString(data, "]}")

@@ -80,6 +80,7 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
     }
     lastSyncAtRef.current = now;
     void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'active' });
+    void queryClient.invalidateQueries({ queryKey: ['tags', 'list'], refetchType: 'active' });
     void queryClient.invalidateQueries({ queryKey: ['collection'], refetchType: 'active' });
     void queryClient.invalidateQueries({
       queryKey: ['collection-extractions'],
@@ -216,6 +217,11 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
           });
       }
 
+      void queryClient.invalidateQueries({ queryKey: ['tags', 'list'], refetchType: 'active' });
+      void queryClient.invalidateQueries({ queryKey: ['collections', 'all'], predicate: query => {
+        const filters = query.queryKey[2];
+        return !!filters && typeof filters === 'object' && 'tagId' in filters && !!filters.tagId;
+      } });
       const cachedPending = queryClient.getQueryData<CollectionPage>([
         'collections',
         'pending-suggestions',

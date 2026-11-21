@@ -39,6 +39,9 @@ import { RichTextEditor } from '../components/RichTextEditor';
 import { SafeDocumentView } from '../components/SafeDocumentView';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { UploadQueueTray } from '../components/UploadQueueTray';
+import { MentionPicker, type MentionChoice } from '../components/MentionPicker';
+import { CollectionTags } from '../components/Tags';
+import { ShareCard } from '../components/ShareCard';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -64,6 +67,8 @@ import { purgeStatusLabel, resolvePurgeActionError } from '../lib/purge';
 
 interface EditDraft {
   baseContentVersion: number;
+  baseDecisionVersion?: number;
+  additions?: MentionChoice[];
   document: SparkDocument;
   intent: string;
   originalUrl: string;
@@ -85,6 +90,8 @@ export function CollectionDetailPage() {
   const userId = user?.id ?? '';
   const editDraftScope = `edit:${id}`;
 
+  const [creatingTag, setCreatingTag] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
@@ -248,6 +255,7 @@ export function CollectionDetailPage() {
     } else {
       setEditDraft({
         baseContentVersion: col.content_version,
+        baseDecisionVersion: col.decision_version,
         document: col.document,
         intent: col.intent,
         originalUrl: col.original_url ?? '',
@@ -324,7 +332,14 @@ export function CollectionDetailPage() {
         throw new Error(`每条收藏最多只能包含 ${MAX_ATTACHMENTS_PER_COLLECTION} 张图片。`);
       }
 
-      return api.updateCollection(collection.id, {
+      // Body and association decisions have independent version checks in the API.
+      const additions = editDraft.additions ?? [];
+      const sameBody = editDraft.baseContentVersion === collection.content_version &&
+        JSON.stringify(editDraft.document) === JSON.stringify(collection.document) &&
+        editDraft.intent.trim() === collection.intent && trimmedUrl === (collection.original_url ?? '') &&
+        editDraft.manualTitle.trim() === (collection.manual_title ?? '') && !editUploader.readyUploadIds.length &&
+        JSON.stringify(editDraft.keptAttachmentIds) === JSON.stringify(collection.attachments.map(a => a.id));
+      let saved = sameBody && additions.length ? collection : await api.updateCollection(collection.id, {
         base_content_version: overrideBaseVersion ?? editDraft.baseContentVersion,
         document: docSupport.supported ? editDraft.document : undefined,
         intent: editDraft.intent.trim(),
@@ -333,6 +348,29 @@ export function CollectionDetailPage() {
         attachment_ids: editDraft.keptAttachmentIds,
         upload_ids: editUploader.readyUploadIds,
       });
+      if (!additions.length) return saved;
+      let remaining = additions;
+      let version = editDraft.baseDecisionVersion ?? collection.decision_version;
+      try {
+        for (const kind of ['@', '#'] as const) {
+          const operations = remaining.filter(a => a.kind === kind).map(a => ({ id: a.id, action: 'include' as const }));
+          if (!operations.length) continue;
+          const request = { base_decision_version: version, operations };
+          saved = kind === '@' ? await api.updateProjectDecisions(id, request) : await api.updateTagDecisions(id, request);
+          version = saved.decision_version;
+          remaining = remaining.filter(a => a.kind !== kind);
+        }
+      } catch (err) {
+        queryClient.setQueryData(['collection', id], saved);
+        const actual = await collectionQuery.refetch();
+        editUploader.clearAll();
+        setEditDraft(d => d && ({ ...d, baseContentVersion: saved.content_version,
+          document: saved.document,
+          keptAttachmentIds: saved.attachments.map(a => a.id), additions: remaining,
+          baseDecisionVersion: actual.data?.decision_version ?? version }));
+        throw new Error('正文已保存，部分关联尚未保存。请核对关联后重试。' + getFriendlyErrorMessage(err));
+      }
+      return saved;
     },
     onSuccess: (updated) => {
       editUploader.clearAll();
@@ -343,6 +381,7 @@ export function CollectionDetailPage() {
       setEditError(null);
       removeDraft(userId, editDraftScope);
       pushToast({ message: '已保存修改' });
+      void queryClient.invalidateQueries({ queryKey: ['tags'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -402,6 +441,7 @@ export function CollectionDetailPage() {
       return api.trashCollection(id, { base_resource_version: collection.resource_version });
     },
     onSuccess: (trashed) => {
+      void queryClient.invalidateQueries({ queryKey: ['tags'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -417,6 +457,7 @@ export function CollectionDetailPage() {
           void queryClient.invalidateQueries({ queryKey: ['projects'] });
           void queryClient.invalidateQueries({ queryKey: ['project'] });
           void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+          void queryClient.invalidateQueries({ queryKey: ['tags'] });
           pushToast({ message: '已恢复收藏' });
         },
       });
@@ -431,6 +472,7 @@ export function CollectionDetailPage() {
       return api.restoreCollection(id, { base_resource_version: collection.resource_version });
     },
     onSuccess: (restored) => {
+      void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setPurgeError(null);
       queryClient.setQueryData(['collection', id], restored);
       void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
@@ -691,6 +733,7 @@ export function CollectionDetailPage() {
 
         {!isInTrash && (
           <div className="sp-detail-actions">
+            {!isEditing && <button className="sp-btn--quiet" onClick={() => setSharing(true)}>生成卡片</button>}
             <button
               type="button"
               className="sp-btn--quiet"
@@ -725,6 +768,7 @@ export function CollectionDetailPage() {
         )}
       </div>
 
+      {sharing && !isInTrash && <ShareCard key={collection.id} collection={collection} onClose={() => setSharing(false)} />}
       {isInTrash && (
         <div className="sp-stack sp-trash-notice">
           <div className="sp-banner sp-banner--warning" role="status">
@@ -886,8 +930,14 @@ export function CollectionDetailPage() {
 
               <div className="sp-field">
                 <span className="sp-label">正文与图片</span>
-                <div className="sp-detail-editor">
+                <div className="sp-detail-editor" data-pending-images={editUploader.items.length || undefined}>
                   <RichTextEditor
+                    suggestions={editor => <MentionPicker editor={editor} onBusy={setCreatingTag} onChoose={choice =>
+                      setEditDraft(d => {
+                        if (!d || d.additions?.some(a => a.id === choice.id && a.kind === choice.kind)) return d;
+                        return { ...d, baseDecisionVersion: d.baseDecisionVersion ?? collection.decision_version,
+                          additions: [...(d.additions ?? []), choice] };
+                      })} />}
                     value={editDraft.document}
                     onChange={(doc) => setEditDraft((d) => (d ? { ...d, document: doc } : d))}
                     onFilesAdded={(files) => editUploader.addFiles(files)}
@@ -926,7 +976,12 @@ export function CollectionDetailPage() {
                         </button>
                       </>
                     }
-                    betweenEditorAndToolbar={
+                    betweenEditorAndToolbar={<>
+                      {editDraft.additions?.length ? <div className="sp-composer-chips">{editDraft.additions.map(a =>
+                        <button type="button" className={a.kind === '@' ? `sp-tape ${projectToneClass(a.id)}` : 'sp-tag'} disabled={saveEditMutation.isPending} key={a.id} aria-label={`移除待保存关联 ${a.name}`}
+                          onClick={() => setEditDraft(d => d && ({ ...d, additions: d.additions?.filter(x => x !== a) }))}>
+                          {a.kind}{a.name} ×
+                        </button>)}</div> : null}
                       <UploadQueueTray
                         keptAttachments={editDraft.keptAttachmentIds
                           .map((aid) => collection.attachments.find((a) => a.id === aid))
@@ -966,7 +1021,7 @@ export function CollectionDetailPage() {
                         }
                         disabled={saveEditMutation.isPending}
                       />
-                    }
+                    </>}
                   />
                 </div>
               </div>
@@ -977,6 +1032,7 @@ export function CollectionDetailPage() {
                 </label>
                 <textarea
                   id="edit-intent"
+                  disabled={saveEditMutation.isPending}
                   rows={2}
                   className="sp-textarea"
                   value={editDraft.intent}
@@ -990,6 +1046,7 @@ export function CollectionDetailPage() {
                 </label>
                 <input
                   id="edit-original-url"
+                  disabled={saveEditMutation.isPending}
                   type="url"
                   inputMode="url"
                   className="sp-input"
@@ -1006,6 +1063,7 @@ export function CollectionDetailPage() {
                 </label>
                 <input
                   id="edit-manual-title"
+                  disabled={saveEditMutation.isPending}
                   type="text"
                   maxLength={200}
                   className="sp-input"
@@ -1021,14 +1079,14 @@ export function CollectionDetailPage() {
                   {editCharCount.toLocaleString()} / {MAX_TEXT_AND_INTENT_CHARS.toLocaleString()} 字
                 </span>
                 <div className="sp-form-actions">
-                  <button type="button" className="sp-btn" onClick={cancelEditing}>
+                  <button type="button" className="sp-btn" disabled={saveEditMutation.isPending || creatingTag} onClick={cancelEditing}>
                     取消
                   </button>
                   <button
                     type="button"
                     className="sp-btn sp-btn--primary"
                     disabled={
-                      saveEditMutation.isPending ||
+                      saveEditMutation.isPending || creatingTag ||
                       editUploader.hasInFlight ||
                       editUploader.hasFailed
                     }
@@ -1079,6 +1137,7 @@ export function CollectionDetailPage() {
           </section>
         )}
 
+        <CollectionTags key={collection.id} collection={collection} />
         {/* Project associations */}
         <section className="sp-section">
           <div className="sp-section-head">

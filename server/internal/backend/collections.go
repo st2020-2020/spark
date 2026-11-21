@@ -43,6 +43,11 @@ const collectionJSON = `to_jsonb(c)||jsonb_build_object(
  WHERE (e.user_id,e.collection_id,e.content_version,e.source_id)=(c.user_id,c.id,c.content_version,c.original_url)
    AND c.deleted_at IS NULL AND e.source_kind='url' AND e.extractor_version='` + urlExtractorVersion + `'),
  'has_suggestion',EXISTS (SELECT 1 FROM organization_pending_suggestions sp WHERE (sp.user_id,sp.collection_id)=(c.user_id,c.id)),
+ 'tags',COALESCE((
+ SELECT jsonb_agg(jsonb_build_object('tag_id',t.id,'path',t.name,'decision',ct.decision) ORDER BY t.normalized_name,t.id)
+ FROM collection_tags ct JOIN tags t ON (t.user_id,t.id)=(ct.user_id,ct.tag_id)
+ WHERE (ct.user_id,ct.collection_id)=(c.user_id,c.id)
+ ),'[]'::jsonb),
  'projects',COALESCE(
  (SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('project_id',p.id,'name',p.name,'decision',cp.decision,'reason',cp.reason,'evidence',cp.evidence,'project_version',cp.project_version,'suggestion_run_id',CASE WHEN cp.decision='suggested' THEN cp.run_id END)) ORDER BY p.id)
  FROM collection_projects cp JOIN projects p ON p.user_id=cp.user_id AND p.id=cp.project_id
@@ -75,7 +80,6 @@ func scanCollection(row pgx.Row, extraColumns ...any) (collectionRow, error) {
 			out.DisplayTitle = out.Attachments[0].Filename
 		}
 	}
-	out.Tags = []contract.TagAssociation{}
 	code := "integration_not_configured"
 	if !out.UserAIEnabled {
 		code = "ai_disabled"
@@ -126,8 +130,12 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(req.TagIds) > 0 {
-		return nil, problem(422, "validation_failed", "本批次尚未开放标签。")
+	seenTags := make(map[uuid.UUID]bool, len(req.TagIds))
+	for _, tag := range req.TagIds {
+		if seenTags[tag] {
+			return nil, problem(422, "validation_failed", "创建时不能重复指定同一标签。")
+		}
+		seenTags[tag] = true
 	}
 	plain, originalURL, err := validateContent(req.Document, req.Intent, value(req.OriginalUrl), len(req.UploadIds) > 0)
 	if err != nil {
@@ -160,11 +168,20 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 				return nil, notFound
 			}
 		}
+		if err := checkOwnedTags(ctx, tx, uid, req.TagIds); err != nil {
+			return nil, err
+		}
 		if _, err = tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded)); err != nil {
 			return nil, err
 		}
 		for _, pid := range req.ProjectIds {
 			if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision) VALUES($1,$2,$3,'manual')`, uid, id, pid.String()); err != nil {
+				return nil, err
+			}
+		}
+		if len(req.TagIds) > 0 {
+			if _, err = tx.Exec(ctx, `INSERT INTO collection_tags(user_id,collection_id,tag_id,decision)
+				SELECT $1,$2,id,'manual' FROM unnest($3::uuid[]) AS tag(id)`, uid, id, req.TagIds); err != nil {
 				return nil, err
 			}
 		}
@@ -274,7 +291,14 @@ func (s *Server) updateCollection(c *gin.Context) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE collections SET document=$3,plain_text=$4,intent=$5,original_url=$6,manual_title=$7,content_version=content_version+1,resource_version=resource_version+1,updated_at=now() WHERE user_id=$1 AND id=$2`, uid, id, jsonBytes(row.Document), plain, row.Intent, rawURL, value(row.ManualTitle)); err != nil {
+		autoTags, err := tx.Exec(ctx, `DELETE FROM collection_tags WHERE user_id=$1 AND collection_id=$2 AND decision='auto'`, uid, id)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE collections SET document=$3,plain_text=$4,intent=$5,original_url=$6,manual_title=$7,
+			content_version=content_version+1,resource_version=resource_version+1,
+			decision_version=decision_version+CASE WHEN $8 THEN 1 ELSE 0 END,updated_at=now()
+			WHERE user_id=$1 AND id=$2`, uid, id, jsonBytes(row.Document), plain, row.Intent, rawURL, value(row.ManualTitle), autoTags.RowsAffected() > 0); err != nil {
 			return nil, err
 		}
 		if err := s.enqueueImageAnalysis(ctx, tx, uid, id, attachments); err != nil {
@@ -414,7 +438,7 @@ func summary(row collectionRow) contract.CollectionSummary {
 	}
 	result := contract.CollectionSummary{
 		Id: row.Id, DisplayTitle: row.DisplayTitle, Excerpt: shortText(row.PlainText, 200),
-		ContentTypes: types, Projects: row.Projects, Tags: row.Tags,
+		ContentTypes: types, Projects: row.Projects, Tags: slices.DeleteFunc(slices.Clone(row.Tags), func(t contract.TagAssociation) bool { return t.Decision == "rejected" }),
 		OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status),
 		HasSuggestion:      row.HasSuggestion, ReadAt: row.ReadAt, CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion, LinkPreview: row.LinkPreview,

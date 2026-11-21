@@ -14,7 +14,7 @@
 | 401 | session_expired、authentication_failed | 登录或重新验证 |
 | 403 | forbidden、csrf_failed、ai_disabled | 展示权限或设置说明 |
 | 404 | not_found | 返回列表，保留正在编辑的草稿 |
-| 409 | content_conflict、decision_conflict、resource_conflict、idempotency_mismatch、duplicate_resource、invite_unavailable、resurface_day_changed | 展示当前版本或重新选择，保留用户输入 |
+| 409 | content_conflict、decision_conflict、resource_conflict、idempotency_mismatch、duplicate_resource、invite_unavailable、resurface_day_changed、tag_conflict | 展示当前版本或重新选择，保留用户输入 |
 | 410 | upload_expired、import_expired | 重新建立上传或导入预览 |
 | 413 | request_too_large | 压缩或减少输入 |
 | 422 | validation_failed、unsupported_document、invalid_attachment、registration_failed | 展示字段错误 |
@@ -76,6 +76,18 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 ## 导出本人数据
 
 `GET /me/export?format=markdown|json` 需要有效会话及对应的 `X-CSRF-Token` 请求头，返回 ZIP 下载。项目与未删除收藏来自当前账号的同一个数据库快照。导出按账号限流，每十分钟可发起一次。429 响应通过 `Retry-After` 返回实际剩余秒数；客户端可据此显示可再次导出的时间。具体参数和响应头见 [OpenAPI](../../contracts/openapi.json)。
+
+## 标签与外观偏好
+
+`GET /tags` 返回本账号标签，支持 `q`、`cursor` 和 `limit`。联想按规范名做字面包含匹配，`collection_count` 仅统计未删除且仍有效的关联。v0.6 标签为平级，`Tag.path` 与显示名一致。`GET /projects` 支持按项目名查询，可和 `state=active` 一起联想。
+
+`POST /tags` 接受 `{name}`，需要 CSRF 与幂等键。先去首尾空白并做 Unicode NFC，长度 1 至 24 个字符。用户内规范名按 Unicode 大小写折叠去重，同名返回 `409 duplicate_resource`。`PATCH /tags/{id}` 接受 `{name,expected_name}`，`DELETE /tags/{id}?expected_name=` 成功返回 204，原名称不符返回 `409 tag_conflict`。删除清除该标签的所有关联并保留收藏正文。
+
+文字自动整理仅在当前授权版本为 `spark-ai-tags-v1` 时发送匹配标签并应用结果。旧授权继续使用原有的文字整理范围；用户可在设置页查看新版说明后主动更新。
+
+新建收藏使用 `tag_ids` 指定已有标签。修改标签用 `PATCH /collections/{id}/tags`，与项目共用 `base_decision_version`，支持 include、exclude、reset。详情返回用于编辑的全部决定，卡片、标签计数和筛选只显示有效关联。`GET /collections` 和 `GET /search` 均可按 `tag_id` 筛选，关键词命中有效标签时来源标记为 `tag`。JSON 导出保留标签目录及收藏的标签决定，Markdown 在收藏内列出标签决定。
+
+登录、注册和 `GET /auth/session` 的 `user` 返回 `palette` 与 `theme`。可使用 `PATCH /me/preferences` 单独更新任意一项，配色取 `mint`、`sea`、`matcha`、`sakura`，明暗取 `system`、`light`、`dark`，默认 `mint` 和 `system`。旧客户端原有的 AI 设置请求仍有效，两个偏好组互不覆盖。
 
 ## 附件时序
 

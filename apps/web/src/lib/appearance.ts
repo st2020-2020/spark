@@ -1,4 +1,4 @@
-// Appearance = color palette × light/dark mode, both stored per browser in localStorage.
+// Appearance = color palette × light/dark mode, from the account when signed in, otherwise from this browser.
 // The CSS side lives in styles/tokens.css and keys off <html data-palette> and <html data-mode>.
 
 export type ThemePref = 'system' | 'light' | 'dark';
@@ -60,35 +60,23 @@ function resolveMode(pref: ThemePref): 'light' | 'dark' {
 }
 
 /** Writes the resolved attributes to <html> and keeps the browser chrome color in step. */
+let accountAppearance: { palette: PaletteId; theme: ThemePref } | null = null;
+
+export function showAccountAppearance(value: typeof accountAppearance) {
+  accountAppearance = value;
+  syncDocument();
+}
+
 function syncDocument(): void {
   const root = document.documentElement;
-  root.setAttribute('data-palette', readPalette());
-  root.setAttribute('data-mode', resolveMode(readThemePref()));
+  root.setAttribute('data-palette', accountAppearance?.palette ?? readPalette());
+  root.setAttribute('data-mode', resolveMode(accountAppearance?.theme ?? readThemePref()));
 
   const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
   if (meta) {
     const bg = getComputedStyle(root).getPropertyValue('--sp-bg').trim();
     if (bg) meta.content = bg;
   }
-}
-
-function store(key: string, value: string | null): void {
-  try {
-    if (value === null) window.localStorage.removeItem(key);
-    else window.localStorage.setItem(key, value);
-  } catch {
-    // The choice still applies for this page view even if it cannot be remembered.
-  }
-}
-
-export function applyThemePreference(pref: ThemePref): void {
-  store(THEME_KEY, pref === 'system' ? null : pref);
-  syncDocument();
-}
-
-export function applyPalette(id: PaletteId): void {
-  store(PALETTE_KEY, id === DEFAULT_PALETTE ? null : id);
-  syncDocument();
 }
 
 let systemListenerAttached = false;
@@ -101,6 +89,6 @@ export function initAppearance(): void {
   if (!query) return;
   systemListenerAttached = true;
   query.addEventListener('change', () => {
-    if (readThemePref() === 'system') syncDocument();
+    if ((accountAppearance?.theme ?? readThemePref()) === 'system') syncDocument();
   });
 }

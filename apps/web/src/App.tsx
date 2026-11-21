@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { SparkApi } from './api/client';
 import { ApiError } from './api/errors';
@@ -42,7 +42,7 @@ function AuthenticatedShell() {
   const wide = location.pathname.startsWith('/admin');
   return (
     <OrganizationEventsProvider>
-      <AppShell wide={wide}>
+      <AppShell key={user.id} wide={wide}>
         <Outlet />
       </AppShell>
     </OrganizationEventsProvider>
@@ -64,6 +64,11 @@ function PublicOnly({ children }: { children: ReactNode }) {
     return <Navigate to="/inbox" replace />;
   }
   return <>{children}</>;
+}
+
+function CollectionDetailRoute() {
+  const { id } = useParams();
+  return <CollectionDetailPage key={id} />;
 }
 
 export function AppRoutes() {
@@ -101,7 +106,7 @@ export function AppRoutes() {
         <Route path="/collections" element={<CollectionsPage />} />
         <Route path="/unclassified" element={<UnclassifiedPage />} />
         <Route path="/unclassified/triage" element={<TriagePage />} />
-        <Route path="/collections/:id" element={<CollectionDetailPage />} />
+        <Route path="/collections/:id" element={<CollectionDetailRoute />} />
         <Route path="/trash" element={<TrashPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/admin" element={<AdminPage />} />

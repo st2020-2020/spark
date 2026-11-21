@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { SlidersHorizontal, X } from 'lucide-react';
 import type { CollectionType } from '../api/types';
@@ -13,6 +13,8 @@ export function CollectionsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const urlQ = searchParams.get('q') ?? '';
+  const location = useLocation();
+  const tagId = searchParams.get('tag_id') ?? '';
   const projectId = searchParams.get('project_id') ?? '';
   const typeFilter = (searchParams.get('type') as CollectionType | null) ?? '';
   const readFilter = searchParams.get('read') ?? '';
@@ -36,12 +38,11 @@ export function CollectionsPage() {
         const nextParams = new URLSearchParams(searchParams);
         if (nextTrimmed) nextParams.set('q', nextTrimmed);
         else nextParams.delete('q');
-        setSearchParams(nextParams, { replace: true });
+        setSearchParams(nextParams, { replace: true, state: location.state });
       }
     }, 300);
     return () => window.clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [inputQ]);
+  }, [inputQ, searchParams, setSearchParams, location.state]);
 
   const projectsQuery = useQuery({
     queryKey: ['projects', 'all-for-select'],
@@ -49,14 +50,14 @@ export function CollectionsPage() {
   });
 
   const listOrSearchQuery = useInfiniteQuery({
-    queryKey: ['collections', 'all', { q: debouncedQ, projectId, typeFilter, readFilter }],
+    queryKey: ['collections', 'all', { q: debouncedQ, tagId, projectId, typeFilter, readFilter }],
     queryFn: async ({ pageParam, signal }) => {
       const readVal = readFilter === 'false' ? false : readFilter === 'true' ? true : undefined;
       if (debouncedQ) {
         const res = await api.searchCollections(
           {
             q: debouncedQ,
-            project_id: projectId || undefined,
+            project_id: projectId || undefined, tag_id: tagId || undefined,
             type: typeFilter || undefined,
             read: readVal,
             scope: 'active',
@@ -72,7 +73,7 @@ export function CollectionsPage() {
       }
       const res = await api.listCollections(
         {
-          project_id: projectId || undefined,
+          project_id: projectId || undefined, tag_id: tagId || undefined,
           type: typeFilter || undefined,
           read: readVal,
           scope: 'active',
@@ -94,7 +95,7 @@ export function CollectionsPage() {
     const next = new URLSearchParams(searchParams);
     if (value) next.set(key, value);
     else next.delete(key);
-    setSearchParams(next, { replace: true });
+    setSearchParams(next, { replace: true, state: next.has('tag_id') ? location.state : null });
   };
 
   const clearAllFilters = () => {
@@ -105,7 +106,7 @@ export function CollectionsPage() {
 
   const projects = projectsQuery.data?.items ?? [];
   const activeProjectName = projects.find((p) => p.id === projectId)?.name;
-  const hasFilters = Boolean(debouncedQ || projectId || typeFilter || readFilter);
+  const hasFilters = Boolean(debouncedQ || tagId || projectId || typeFilter || readFilter);
   const hits = listOrSearchQuery.data?.pages.flatMap((p) => p.items) ?? [];
 
   return (
@@ -180,8 +181,11 @@ export function CollectionsPage() {
         </div>
       )}
 
-      {(projectId || typeFilter || readFilter) && (
+      {(tagId || projectId || typeFilter || readFilter) && (
         <div className="sp-active-filters">
+          {tagId && <button className="sp-tag" aria-label="清除标签筛选" onClick={() => setFilterParam('tag_id', '')}>
+            #{location.state?.tagName ?? hits.flatMap(h => h.collection.tags).find(t => t.tag_id === tagId)?.path ?? '已选标签'} ×
+          </button>}
           {projectId && (
             <span className="sp-pill sp-pill--green">
               <span>项目：{activeProjectName ?? '已选项目'}</span>

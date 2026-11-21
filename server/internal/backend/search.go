@@ -54,6 +54,17 @@ func (s *Server) search(c *gin.Context) (any, error) {
 				snippets = append(snippets, gin.H{"field": field.name, "text": snip})
 			}
 		}
+		for _, tag := range row.Tags {
+			if tag.Decision == "rejected" {
+				continue
+			}
+			for _, term := range terms {
+				if strings.Contains(tagKey(tag.Path), tagKey(term)) {
+					snippets = append(snippets, gin.H{"field": "tag", "text": tag.Path})
+					break
+				}
+			}
+		}
 		items = append(items, gin.H{"collection": summary(row), "snippets": snippets})
 	}
 	out := gin.H{"items": items}
@@ -102,8 +113,9 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 	if project := c.Query("project_id"); project != "" {
 		add(`EXISTS(SELECT 1 FROM collection_projects cp WHERE cp.user_id=c.user_id AND cp.collection_id=c.id AND cp.project_id=$%d::uuid AND cp.decision IN ('manual','confirmed','auto'))`, project)
 	}
-	if c.Query("tag_id") != "" {
-		where = append(where, "false")
+	if tagID := c.Query("tag_id"); tagID != "" {
+		add(`EXISTS (SELECT FROM collection_tags ct WHERE (ct.user_id,ct.collection_id)=(c.user_id,c.id)
+			AND ct.tag_id=$%d::uuid AND ct.decision<>'rejected')`, tagID)
 	}
 	if c.Query("type") == "image" {
 		where = append(where, "EXISTS (SELECT 1 FROM attachments a WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL)")
@@ -152,9 +164,12 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 			   AND e.source_kind='image' AND e.extractor_version='` + imageExtractorVersion + `' AND e.status IN ('succeeded','partial')
 			) images ON true `
 		for _, term := range terms {
-			args = append(args, term)
-			n := len(args)
-			where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0 OR strpos(lower(page.source_text),$%d)>0 OR strpos(lower(images.image_text),$%d)>0 OR strpos(lower(images.description),$%d)>0)`, title, n, n, n, n, n, n, n))
+			args = append(args, term, tagKey(term))
+			n := len(args) - 1
+			where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0 OR strpos(lower(page.source_text),$%d)>0 OR strpos(lower(images.image_text),$%d)>0 OR strpos(lower(images.description),$%d)>0
+				OR EXISTS(SELECT FROM collection_tags ct JOIN tags t ON (t.user_id,t.id)=(ct.user_id,ct.tag_id)
+					WHERE (ct.user_id,ct.collection_id)=(c.user_id,c.id) AND ct.decision<>'rejected'
+					  AND strpos(t.normalized_name,$%d)>0))`, title, n, n, n, n, n, n, n, n+1))
 		}
 	}
 	if filter := c.Query("has_suggestion"); filter != "" {

@@ -314,7 +314,7 @@
     "/me/preferences": {
       "patch": {
         "operationId": "updatePreferences",
-        "summary": "更新 AI 偏好",
+        "summary": "更新账号的 AI 或外观偏好",
         "tags": [
           "me"
         ],
@@ -364,7 +364,8 @@
               }
             }
           }
-        }
+        },
+        "description": "只更新显式提供的偏好。原有 AI 请求保持兼容；修改外观不改变 AI 同意状态。"
       }
     },
     "/me/activity": {
@@ -1084,6 +1085,15 @@
                 "completed"
               ]
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "description": "按项目名称字面包含匹配，不区分大小写。"
           }
         ]
       }
@@ -1201,7 +1211,7 @@
     "/tags": {
       "post": {
         "operationId": "createTag",
-        "summary": "创建层级标签",
+        "summary": "创建当前账号的平级标签",
         "tags": [
           "tags"
         ],
@@ -1265,7 +1275,7 @@
       },
       "get": {
         "operationId": "listTags",
-        "summary": "搜索用户标签",
+        "summary": "分页搜索当前账号的标签",
         "tags": [
           "tags"
         ],
@@ -1391,6 +1401,63 @@
             }
           }
         }
+      },
+      "delete": {
+        "operationId": "deleteTag",
+        "summary": "按原名称条件删除标签及其关联",
+        "description": "删除标签和相关决定，保留收藏正文。原名称已变更时返回 409。",
+        "tags": [
+          "tags"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expected_name",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 24
+            }
+          }
+        ]
       }
     },
     "/uploads": {
@@ -2604,7 +2671,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AssociationUpdate"
+                "$ref": "#/components/schemas/TagDecisionUpdate"
               }
             }
           }
@@ -4144,6 +4211,12 @@
           "ai_policy_version": {
             "type": "integer",
             "minimum": 1
+          },
+          "palette": {
+            "$ref": "#/components/schemas/Palette"
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme"
           }
         },
         "required": [
@@ -4352,11 +4425,15 @@
           "consent_version": {
             "type": "string",
             "maxLength": 100
+          },
+          "palette": {
+            "$ref": "#/components/schemas/Palette"
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme"
           }
         },
-        "required": [
-          "ai_enabled"
-        ]
+        "minProperties": 1
       },
       "ActivityDay": {
         "type": "object",
@@ -4614,11 +4691,8 @@
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 24
-          },
-          "parent_id": {
-            "type": "string",
-            "format": "uuid"
+            "maxLength": 96,
+            "description": "去除首尾空白并按 Unicode NFC 规范化后，须为 1 至 24 个 Unicode 字符。"
           }
         },
         "required": [
@@ -4634,20 +4708,18 @@
             "minLength": 1,
             "maxLength": 24
           },
-          "parent_id": {
-            "type": "string",
-            "format": "uuid"
-          },
           "id": {
             "type": "string",
             "format": "uuid"
           },
           "path": {
-            "type": "string"
+            "type": "string",
+            "description": "v0.6 平级标签的显示名称。"
           },
           "collection_count": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "关联此标签的本人未删除收藏数量。"
           }
         },
         "required": [
@@ -6165,7 +6237,8 @@
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 24
+            "maxLength": 96,
+            "description": "去除首尾空白并按 Unicode NFC 规范化后，须为 1 至 24 个 Unicode 字符。"
           },
           "expected_name": {
             "type": "string",
@@ -6364,6 +6437,64 @@
         "required": [
           "operation_key",
           "base_decision_version"
+        ]
+      },
+      "Palette": {
+        "type": "string",
+        "enum": [
+          "mint",
+          "sea",
+          "matcha",
+          "sakura"
+        ]
+      },
+      "Theme": {
+        "type": "string",
+        "enum": [
+          "system",
+          "light",
+          "dark"
+        ]
+      },
+      "TagDecisionUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_decision_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "include",
+                    "exclude",
+                    "reset"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "action"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "base_decision_version",
+          "operations"
         ]
       }
     }

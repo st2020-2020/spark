@@ -14,7 +14,7 @@
 
 | 表 | 字段 | 约束与索引 |
 | --- | --- | --- |
-| users | id, email_normalized text, password_hash text, status enum(active,disabled), role enum(user,admin), ai_enabled bool, ai_policy_version int, ai_consent_at?, ai_consent_version?, resurface_enabled bool, created_at, updated_at | 邮箱唯一；默认 user；密码采用成熟库的 Argon2id 编码，参数随部署评测固定 |
+| users | id, email_normalized text, password_hash text, status enum(active,disabled), role enum(user,admin), ai_enabled bool, ai_policy_version int, ai_consent_at?, ai_consent_version?, resurface_enabled bool, palette, theme, created_at, updated_at | 邮箱唯一；默认 user；密码采用成熟库的 Argon2id 编码，参数随部署评测固定 |
 | email_challenges | id, email_normalized, purpose enum(register,password_reset), code_digest, expires_at, attempts int, consumed_at?, created_at | 过期索引；验证码摘要采用服务端秘密密钥计算；服务端生成高熵 challenge ID |
 | mail_outbox | challenge_id, encrypted_payload?, expires_at, delivered_at?, delivery_state | 与挑战共用主键。开发取码与真实投递分开；真实投递的终态清除密文 |
 | sessions | id, user_id, token_digest, csrf_digest, expires_at, last_seen_at, revoked_at?, device_label, created_at | token_digest 唯一；user_id 与有效状态索引 |
@@ -38,15 +38,19 @@
 | collection_revisions | id, user_id, collection_id, content_version, document, intent, original_url?, manual_title?, attachment_ids jsonb, created_at | UNIQUE(collection_id,content_version)；快照属于对应用户 |
 | uploads | id, user_id, staging_key, final_key?, provider_version?, filename, declared_size bigint, actual_size?, mime_type, sha256 bytea?, status enum(pending,verifying,ready,attached,rejected,expired), error_code?, expires_at, staging_cleaned_at?, created_at, updated_at | staging_key、final_key 分别唯一；ready、attached 须有最终键、与声明一致的大小及 32 字节 SHA-256；用户/状态/到期索引 |
 | attachments | id, user_id, collection_id, upload_id, object_key, provider_version?, filename, mime_type, size_bytes bigint, sha256, position int, removed_at?, created_at | upload_id 唯一且同用户；有效附件在收藏内 position 取 0 至 8 且唯一，同一语句可交换位置；object_key 唯一 |
-| tags | id, user_id, name varchar(24), normalized_name, parent_id?, created_at, updated_at | 用户内 UNIQUE(user_id,parent_id,normalized_name) 使用 NULLS NOT DISTINCT 或等效根节点约束；父标签同用户；校验循环 |
-| collection_tags | user_id, collection_id, tag_id, decision enum(manual,confirmed,auto,rejected), run_id?, created_at, updated_at | 复合主键(collection_id,tag_id)，两侧均同用户 |
+| tags | id, user_id, name varchar(24), normalized_name, created_at, updated_at | 用户内规范名唯一；账号、创建时间和 ID 的索引用于分页 |
+| collection_tags | user_id, collection_id, tag_id, decision enum(manual,confirmed,auto,rejected), run_id?, created_at, updated_at | 复合主键(collection_id,tag_id)，收藏、标签及 AI 运行均属于同账号；标签或收藏物理删除时删除关联 |
 | collection_projects | user_id, collection_id, project_id, decision enum(manual,confirmed,auto,rejected,suggested), reason?, evidence jsonb, project_version?, run_id?, created_at, updated_at | 复合主键(collection_id,project_id)，两侧均同用户；user_id/project_id/decision 索引 |
 
 原文和用途合计按 Unicode 字符数计 50,000，标题最多 200 字。空白正文只有在带有效网址或至少一个已确认附件时可保存。首发自动提取一个主要网址，按显式 original_url 优先、正文第一个有效 HTTP(S) 链接次之；正文其他链接仍完整保存。
 
 收藏类型由内容派生，可同时包含 text、url、image，筛选采用包含匹配。手动标题优先于生成标题，原文首段或域名作为最终回退。照片和原图只引用稳定对象键，带签名的地址在读取时生成。
 
-项目首期通过暂停或完成状态管理生命周期。标签层级最多 3 层，路径按父级组合。去除空白、Unicode NFC 和英文大小写折叠用于用户内标签匹配，显示名称保留用户输入。标签重命名冲突返回 409。首期标签数量与层级由接口验证。
+项目通过暂停或完成状态管理生命周期。v0.6 标签为账号内平级条目，名称去首尾空白并做 NFC，显示名保留大小写。唯一性和标签关键词匹配使用 Unicode 大小写折叠后的规范名。标签关联独立于收藏正文。重命名按原显示名检查冲突，删除一并移除关联并递增受影响收藏的决定版本和资源版本。
+
+收藏创建时指定的标签为人工决定。标签和项目写入共用账号写锁及收藏决定版本，整组变更在同一事务提交。仅在用户确认文字与标签处理说明（`spark-ai-tags-v1`）后，整理任务才从提交材料中匹配本账号已有的标签名，使用同一次整理调用和原有计费预留。应用时再次核验名称与归属，已有人工决定优先。重整只替换自动标签，收藏内容版本变化时清除旧版本的自动标签，人工决定保留。
+
+迁移 010 新增标签和外观偏好。既有账号默认 `mint` 配色和 `system` 明暗，同时保留 AI、回访与已有收藏数据。
 
 ## 回访与时间
 

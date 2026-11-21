@@ -150,7 +150,7 @@ func (s *Server) applyProjectDecisions(c *gin.Context, tx pgx.Tx, req contract.A
 			return contract.Collection{}, err
 		}
 	}
-	result, err := s.finishProjectDecisions(ctx, tx, uid, id)
+	result, err := s.finishCollectionDecisions(ctx, tx, uid, id)
 	if err != nil || key == "" {
 		return result, err
 	}
@@ -164,9 +164,9 @@ func (s *Server) applyProjectDecisions(c *gin.Context, tx pgx.Tx, req contract.A
 	return result, nil
 }
 
-func nextProjectDecision(before *projectDecision, current, action string) (*projectDecision, bool) {
+func nextManualDecision(current, action string) (string, bool) {
 	if action == "reset" {
-		return nil, current == "manual" || current == "confirmed" || current == "rejected"
+		return "", current == "manual" || current == "confirmed" || current == "rejected"
 	}
 	decision := "manual"
 	switch {
@@ -175,7 +175,15 @@ func nextProjectDecision(before *projectDecision, current, action string) (*proj
 	case current == "auto" || current == "suggested" || current == "confirmed":
 		decision = "confirmed"
 	}
-	if decision == current {
+	return decision, decision != current
+}
+
+func nextProjectDecision(before *projectDecision, current, action string) (*projectDecision, bool) {
+	decision, changed := nextManualDecision(current, action)
+	if decision == "" {
+		return nil, changed
+	}
+	if !changed {
 		return before, false
 	}
 	after := projectDecision{Evidence: json.RawMessage(`[]`)}
@@ -243,7 +251,7 @@ func writeProjectDecision(ctx context.Context, tx pgx.Tx, uid, id, projectID str
 	return err
 }
 
-func (s *Server) finishProjectDecisions(ctx context.Context, tx pgx.Tx, uid, id string) (contract.Collection, error) {
+func (s *Server) finishCollectionDecisions(ctx context.Context, tx pgx.Tx, uid, id string) (contract.Collection, error) {
 	var version int64
 	if err := tx.QueryRow(ctx, `UPDATE collections SET decision_version=decision_version+1,
 		resource_version=resource_version+1,updated_at=now() WHERE user_id=$1 AND id=$2
@@ -316,7 +324,7 @@ func (s *Server) undoProjectDecisions(c *gin.Context) (any, error) {
 			return nil, err
 		}
 	}
-	result, err := s.finishProjectDecisions(ctx, tx, uid, id)
+	result, err := s.finishCollectionDecisions(ctx, tx, uid, id)
 	if err != nil {
 		return nil, err
 	}

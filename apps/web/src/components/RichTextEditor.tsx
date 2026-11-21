@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { EditorContent, useEditor } from '@tiptap/react';
+import { EditorContent, useEditor, type Editor } from '@tiptap/react';
 import Bold from '@tiptap/extension-bold';
 import BulletList from '@tiptap/extension-bullet-list';
 import Document from '@tiptap/extension-document';
@@ -71,6 +71,7 @@ interface RichTextEditorProps {
   ariaLabel?: string;
   disabled?: boolean;
   resetToken?: number;
+  suggestions?: (editor: Editor) => ReactNode;
   leadingTools?: ReactNode;
   extraMoreItems?: (closeMenu: () => void) => ReactNode;
   betweenEditorAndToolbar?: ReactNode;
@@ -91,6 +92,7 @@ export function RichTextEditor({
   ariaLabel = '收藏正文编辑器',
   disabled = false,
   resetToken = 0,
+  suggestions,
   leadingTools,
   extraMoreItems,
   betweenEditorAndToolbar,
@@ -150,6 +152,7 @@ export function RichTextEditor({
     editorProps: {
       attributes: {
         role: 'textbox',
+        tabindex: '0',
         'aria-multiline': 'true',
         'aria-label': ariaLabel,
       },
@@ -430,6 +433,7 @@ export function RichTextEditor({
         <EditorContent editor={editor} className="sp-composer-editor" />
       </div>
 
+      {editor && !disabled && suggestions?.(editor)}
       {betweenEditorAndToolbar}
 
       <div className="sp-editor-toolbar" ref={toolbarRef} role="toolbar" aria-label="编辑与格式工具栏">

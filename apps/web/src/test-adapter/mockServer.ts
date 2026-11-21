@@ -345,6 +345,7 @@ export function createTestAdapter(): TestAdapter {
     return {
       id: u.id,
       email: u.email,
+      palette: u.palette ?? 'mint', theme: u.theme ?? 'system',
       role: u.role,
       status: u.status,
       ai_enabled: u.ai_enabled,
@@ -1112,8 +1113,12 @@ export function createTestAdapter(): TestAdapter {
     },
     async updatePreferences(body) {
       const user = requireUser(true);
-      user.ai_enabled = body.ai_enabled;
-      user.ai_policy_version += 1;
+      if (body.ai_enabled !== undefined) {
+        user.ai_enabled = body.ai_enabled;
+        user.ai_policy_version += 1;
+      }
+      if (body.palette) user.palette = body.palette;
+      if (body.theme) user.theme = body.theme;
       return toPublicUser(user);
     },
 
@@ -1224,6 +1229,7 @@ export function createTestAdapter(): TestAdapter {
       refreshProjectCounts(user.id);
       let items = projects
         .filter((p) => p.user_id === user.id)
+        .filter(p => !query?.q || p.name.toLowerCase().includes(query.q.toLowerCase()))
         .filter((p) => !query?.state || p.state === query.state)
         .map(({ user_id: _u, ...rest }) => rest);
       if (query?.limit) {
@@ -1273,22 +1279,20 @@ export function createTestAdapter(): TestAdapter {
       const replay = checkIdempotency<Tag>(user.id, 'createTag', idempotencyKey, body);
       if (replay) return replay;
 
-      const trimmed = body.name.trim();
+      const trimmed = body.name.trim().normalize('NFC');
+      if (!trimmed || [...trimmed].length > 24) throw new ApiError({ status: 422, code: 'invalid_request', message: '标签名须为 1–24 字' });
       const existing = tags.find(
         (t) =>
           t.user_id === user.id &&
-          t.name.toLowerCase() === trimmed.toLowerCase() &&
-          t.parent_id === body.parent_id,
+          t.name.toLowerCase() === trimmed.toLowerCase(),
       );
       if (existing) {
-        const { user_id: _u, ...pub } = existing;
-        return pub;
+        throw new ApiError({ status: 409, code: 'duplicate_resource', message: '标签已存在' });
       }
       const tag: Tag & { user_id: string } = {
         id: generateUuid(),
         user_id: user.id,
         name: trimmed,
-        parent_id: body.parent_id,
         path: trimmed,
         collection_count: 0,
       };
@@ -1300,12 +1304,15 @@ export function createTestAdapter(): TestAdapter {
 
     async listTags(query) {
       const user = requireUser(false);
-      const q = query?.q?.trim().toLowerCase();
+      const q = query?.q?.trim().normalize('NFC').toLowerCase();
       const items = tags
         .filter((t) => t.user_id === user.id)
         .filter((t) => !q || t.name.toLowerCase().includes(q) || t.path.toLowerCase().includes(q))
-        .map(({ user_id: _u, ...rest }) => rest);
-      return { items };
+        .map(({ user_id: _u, ...rest }) => ({ ...rest, collection_count: collections.filter(c =>
+          c.user_id === user.id && !c.deleted_at && c.tags.some(t => t.tag_id === rest.id && t.decision !== 'rejected')).length }));
+      const start = Number(query?.cursor ?? 0);
+      const end = start + (query?.limit ?? 30);
+      return { items: items.slice(start, end), next_cursor: end < items.length ? String(end) : undefined };
     },
 
     async renameTag(id, body) {
@@ -2438,7 +2445,7 @@ export function createTestAdapter(): TestAdapter {
 
       for (const c of sorted) {
         const plain = derivePlainText(c.document);
-        const tagText = c.tags.map((t) => t.path).join(' ');
+        const tagText = c.tags.filter(t => t.decision !== 'rejected').map((t) => t.path).join(' ');
         const activeAttachmentIds = new Set(c.attachments.map((a) => a.id));
         const urlExtText = c.extractions
           .filter((e) => e.source_kind === 'url')

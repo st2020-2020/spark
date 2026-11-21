@@ -207,3 +207,42 @@ func TestUpgradeAddsRevisitWithoutChangingOldCollections(t *testing.T) {
 		t.Fatalf("permanent deletion should remove the card and retain the daily selection marker: %v", err)
 	}
 }
+
+func TestUpgradeAddsAccountTagsAndAppearance(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:9] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,9)`)
+	owner, other, collection, tag := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash,ai_enabled,resurface_enabled)
+		VALUES($1,'v9-owner@example.test','synthetic',true,false),($2,'v9-other@example.test','synthetic',false,true)`, owner, other)
+	execTestSQL(t, pool, `INSERT INTO collections(id,user_id,document,plain_text,intent,last_opened_at)
+		VALUES($1,$2,'{}','旧正文','旧用途','2026-11-01 UTC')`, collection, owner)
+	for range 2 {
+		if err := Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var preserved bool
+	if err := pool.QueryRow(ctx, `SELECT u.palette='mint' AND u.theme='system' AND u.ai_enabled AND NOT u.resurface_enabled
+		AND c.plain_text='旧正文' AND c.intent='旧用途' AND c.last_opened_at='2026-11-01 UTC'
+		FROM collections c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, collection).Scan(&preserved); err != nil || !preserved {
+		t.Fatalf("v9 upgrade changed existing data or appearance defaults: %v", err)
+	}
+	execTestSQL(t, pool, `INSERT INTO tags(id,user_id,name,normalized_name) VALUES($1,$2,'标签','标签')`, tag, other)
+	_, err := pool.Exec(ctx, `INSERT INTO collection_tags(user_id,collection_id,tag_id,decision)
+		VALUES($1,$2,$3,'manual')`, owner, collection, tag)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+		t.Fatalf("cross-account tag association was not rejected: %v", err)
+	}
+}

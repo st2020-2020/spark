@@ -69,6 +69,7 @@ func purgeDatabase(ctx context.Context, tx pgx.Tx, row store.DeletionLedger) err
 		{"extractions", "DELETE FROM extractions WHERE user_id=$1 AND collection_id=$2"},
 		{"revisions", "DELETE FROM collection_revisions WHERE user_id=$1 AND collection_id=$2"},
 		{"current organization", "DELETE FROM organization_current WHERE user_id=$1 AND collection_id=$2"},
+		{"tag decisions", "DELETE FROM collection_tags WHERE user_id=$1 AND collection_id=$2"},
 		{"project decisions", "DELETE FROM collection_projects WHERE user_id=$1 AND collection_id=$2"},
 		{"organization runs", "DELETE FROM organization_runs WHERE user_id=$1 AND collection_id=$2"},
 		{"attached uploads", `WITH removed AS (

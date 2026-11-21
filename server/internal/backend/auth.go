@@ -185,7 +185,7 @@ func (s *Server) register(c *gin.Context) (any, error) {
 	if status != "active" || !available {
 		return nil, problem(409, "invite_unavailable", "邀请码不可用。")
 	}
-	u := userView{ID: uuid.NewString(), Email: email, Role: "user", Status: "active", AIPolicyVersion: 1}
+	u := userView{ID: uuid.NewString(), Email: email, Role: "user", Status: "active", AIPolicyVersion: 1, Palette: "mint", Theme: "system"}
 	if _, err = tx.Exec(ctx, `INSERT INTO users(id,email_normalized,password_hash) VALUES($1,$2,$3)`, u.ID, email, hash); err != nil {
 		var pe *pgconn.PgError
 		if errors.As(err, &pe) && pe.Code == "23505" {
@@ -265,7 +265,7 @@ func (s *Server) login(c *gin.Context) (any, error) {
 	if currentHash != hash || status != "active" {
 		return nil, problem(401, "authentication_failed", "邮箱或密码不正确。")
 	}
-	u := userView{ID: user.ID.String(), Email: email, Role: user.Role, Status: user.Status, AIEnabled: user.AiEnabled, AIPolicyVersion: user.AiPolicyVersion}
+	u := userView{ID: user.ID.String(), Email: email, Role: user.Role, Status: user.Status, AIEnabled: user.AiEnabled, AIPolicyVersion: user.AiPolicyVersion, Palette: user.Palette, Theme: user.Theme}
 	sess, err := s.newSession(ctx, tx, c, u)
 	if err != nil {
 		return nil, err
