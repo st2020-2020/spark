@@ -4,6 +4,7 @@ import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
 import { AIConsentModal } from '../components/AIConsentModal';
 import { ImageAnalysisSettingsCard } from '../components/ImageAnalysisSettingsCard';
+import { ResurfaceSetting } from '../components/Resurface';
 import { DataExport } from '../components/DataExport';
 import { PageHeader } from '../components/PageHeader';
 import { useApi } from '../context/ApiContext';
@@ -89,6 +90,8 @@ export function SettingsPage() {
             </button>
           </div>
         </section>
+
+        <ResurfaceSetting />
 
         <section className="sp-card" aria-label="界面外观">
           <h2 className="sp-card-title">主题配色</h2>

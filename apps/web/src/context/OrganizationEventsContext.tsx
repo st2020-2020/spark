@@ -9,6 +9,7 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 import { type InfiniteData, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Collection, CollectionPage, CollectionSummary, OrganizationEvent } from '../api/types';
+import { useRecordOpened } from '../components/CollectionLink';
 import { isOrganizationActiveStatus } from '../lib/organization';
 import { useApi } from './ApiContext';
 import { useAuth } from './AuthContext';
@@ -52,6 +53,7 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const recordOpened = useRecordOpened();
   const location = useLocation();
 
   const notifiedSuggestionsRef = useRef<Set<string>>(new Set());
@@ -254,13 +256,14 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
                 return;
               }
             }
+            recordOpened(event.collection_id);
             navigateRef.current(targetPath);
           },
         },
         12000,
       );
     },
-    [api, applyEventStatusToCaches, pushToast, queryClient, rememberSuggestionNotified],
+    [api, applyEventStatusToCaches, pushToast, queryClient, recordOpened, rememberSuggestionNotified],
   );
 
   const handleEventRef = useRef(handleOrganizationEvent);

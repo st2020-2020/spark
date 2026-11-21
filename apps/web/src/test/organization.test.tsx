@@ -37,6 +37,7 @@ describe('Platform AI organization & UI states', () => {
     const user = userEvent.setup();
     const adapter = createTestAdapter();
     const subscribeSpy = vi.spyOn(adapter, 'subscribeOrganizationEvents');
+    const openedSpy = vi.spyOn(adapter, 'recordCollectionOpened');
     renderApp(['/login'], adapter);
     expect(adapter.getOrganizationSubscriberCount()).toBe(0);
     await loginAsAdmin(user);
@@ -94,9 +95,11 @@ describe('Platform AI organization & UI states', () => {
     // Actionable completion prompt arrives via SSE when has_suggestion === true
     await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
     const toastActionBtn = await screen.findByRole('button', { name: '查看并确认' });
+    expect(openedSpy).not.toHaveBeenCalled();
 
     // Click toast CTA to jump straight to collection detail
     await user.click(toastActionBtn);
+    expect(openedSpy).toHaveBeenCalledTimes(1);
     await screen.findByText('已整理');
     expect(getOrgSpy).not.toHaveBeenCalled();
     expect(getCollectionSpy).toHaveBeenCalledTimes(2);

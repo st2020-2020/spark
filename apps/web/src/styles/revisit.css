@@ -1,0 +1,88 @@
+.sp-calendar {
+  min-width: 0;
+  padding: 12px 4px 0;
+  color: var(--sp-fg);
+}
+.sp-sidebar > .sp-calendar { margin-top: auto; }
+.sp-sidebar > .sp-calendar + .sp-sidebar-footer { margin-top: 0; padding-top: 12px; }
+.sp-drawer-panel > .sp-calendar { padding: 8px 6px 14px; }
+.sp-calendar-head, .sp-calendar-switch, .sp-resurface-actions, .sp-revisit-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sp-calendar-head { justify-content: space-between; }
+.sp-calendar h2 {
+  margin: 0;
+  font-size: var(--sp-text-ui);
+}
+.sp-calendar-switch { gap: 2px; font-size: var(--sp-text-xs); }
+.sp-calendar-switch button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 28px;
+  color: var(--sp-muted);
+}
+.sp-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+  margin-top: 6px;
+  text-align: center;
+  font-size: var(--sp-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.sp-calendar-grid > span { color: var(--sp-muted); }
+.sp-calendar-grid a {
+  display: grid;
+  place-items: center;
+  min-height: 24px;
+  border-radius: var(--sp-radius-xs);
+  color: var(--sp-fg);
+  background: var(--sp-surface);
+  text-decoration: none;
+}
+.sp-calendar-grid a[data-level="1"] { background: color-mix(in srgb, var(--sp-primary) 16%, var(--sp-surface)); }
+.sp-calendar-grid a[data-level="2"] { background: color-mix(in srgb, var(--sp-primary) 35%, var(--sp-surface)); }
+.sp-calendar-grid a[data-level="3"] { background: var(--sp-primary); color: var(--sp-on-primary); }
+.sp-calendar-grid a:is(:hover, [aria-current]) { box-shadow: inset 0 0 0 2px var(--sp-primary); }
+.sp-calendar-grid a[aria-current], .sp-calendar-grid a:focus-visible { outline: 2px solid var(--sp-fg); outline-offset: 1px; }
+.sp-calendar-count { margin: 6px 0 0; color: var(--sp-muted); font-size: var(--sp-text-xs); }
+.sp-resurface { margin: 20px 0; }
+.sp-resurface-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 4px 3px 8px;
+  scroll-snap-type: x proximity;
+}
+.sp-resurface-note {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 min(82%, 17rem);
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-card);
+  background: var(--sp-surface);
+  scroll-snap-align: start;
+}
+.sp-resurface-note h3, .sp-resurface-excerpt {
+  margin: 4px 0 8px;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.sp-resurface-note h3 { font-size: var(--sp-text-md); }
+.sp-resurface-note .sp-help { margin: 0; }
+.sp-resurface-excerpt, .sp-resurface-actions { font-size: var(--sp-text-sm); }
+.sp-resurface-actions { flex-wrap: wrap; margin-top: auto; padding-top: 8px; }
+.sp-resurface-actions button { color: var(--sp-muted); margin-inline-start: auto; }
+.sp-revisit-setting { margin-top: 12px; }
+.sp-revisit-setting input { accent-color: var(--sp-primary); }
+@media (max-width: 767px) {
+  .sp-calendar-grid a, .sp-calendar-switch button { min-height: 36px; }
+}

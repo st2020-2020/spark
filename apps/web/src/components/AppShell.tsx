@@ -24,6 +24,7 @@ import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
 import { projectToneClass } from '../lib/projectTone';
 import { BrandLink, SparkGlyph } from './Brand';
+import { ActivityCalendar } from './ActivityCalendar';
 import { QuickCaptureSheet } from './QuickCaptureSheet';
 
 function prefersReducedMotion(): boolean {
@@ -357,6 +358,8 @@ export function AppShell({
 
           {renderPrimaryAndProjectsNav()}
 
+          <ActivityCalendar key={user?.id} />
+
           <div
             className="sp-sidebar-footer"
             ref={accountWrapRef}
@@ -496,6 +499,7 @@ export function AppShell({
               </button>
             </div>
 
+            <ActivityCalendar key={user?.id} onSelect={() => setDrawerOpen(false)} />
             <Link to="/settings" className="sp-drawer-account">
               <span className="sp-avatar sp-avatar--lg" aria-hidden="true">
                 {userInitial}

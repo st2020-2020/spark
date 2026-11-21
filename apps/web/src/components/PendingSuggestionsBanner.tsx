@@ -1,3 +1,4 @@
+import { CollectionLink } from './CollectionLink';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -106,14 +107,14 @@ export function PendingSuggestionsBanner() {
             return (
               <li key={col.id} className="sp-pending-suggestion-item">
                 <div className="sp-pending-suggestion-main">
-                  <Link
-                    to={`/collections/${col.id}`}
+                  <CollectionLink
+                    id={col.id}
                     className="sp-pending-suggestion-title sp-break-anywhere"
                   >
                     {col.display_title && col.display_title !== '未命名收藏'
                       ? col.display_title
                       : col.excerpt}
-                  </Link>
+                  </CollectionLink>
                   {firstSuggested && (
                     <div className="sp-row">
                       <span className="sp-pill sp-pill--spark">
@@ -158,9 +159,9 @@ export function PendingSuggestionsBanner() {
                       </button>
                     </>
                   )}
-                  <Link to={`/collections/${col.id}`} className="sp-btn sp-btn--sm sp-btn--quiet">
+                  <CollectionLink id={col.id} className="sp-btn sp-btn--sm sp-btn--quiet">
                     详情
-                  </Link>
+                  </CollectionLink>
                 </div>
               </li>
             );

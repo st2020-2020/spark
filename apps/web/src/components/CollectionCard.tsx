@@ -1,3 +1,4 @@
+import { CollectionLink, useRecordOpened } from './CollectionLink';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -54,6 +55,7 @@ export function CollectionCard({
   const api = useApi();
   const { pushToast } = useToast();
   const navigate = useNavigate();
+  const recordOpened = useRecordOpened();
   const location = useLocation();
   const queryClient = useQueryClient();
 
@@ -162,8 +164,8 @@ export function CollectionCard({
         {showOrgStatus &&
           (collection.organization_status === 'failed' ||
           collection.organization_status === 'blocked' ? (
-            <Link
-              to={`/collections/${collection.id}`}
+            <CollectionLink
+              id={collection.id}
               state={detailState}
               className={`sp-pill ${
                 collection.organization_status === 'failed'
@@ -172,7 +174,7 @@ export function CollectionCard({
               }`}
             >
               {organizationStatusLabel(collection.organization_status)}
-            </Link>
+            </CollectionLink>
           ) : (
             <span className="sp-pill">
               {organizationStatusLabel(collection.organization_status)}
@@ -227,6 +229,7 @@ export function CollectionCard({
                   className="sp-menu-item"
                   onClick={() => {
                     setMenuOpen(false);
+                    recordOpened(collection.id);
                     navigate(`/collections/${collection.id}`, { state: { ...detailState, edit: true } });
                   }}
                 >
@@ -252,13 +255,13 @@ export function CollectionCard({
 
       {showTitle && (
         <h3 className="sp-note-title">
-          <Link to={`/collections/${collection.id}`} state={detailState}>
+          <CollectionLink id={collection.id} state={detailState}>
             {searchQuery ? (
               <HighlightText text={collection.display_title} query={searchQuery} />
             ) : (
               collection.display_title
             )}
-          </Link>
+          </CollectionLink>
         </h3>
       )}
 
@@ -335,14 +338,14 @@ export function CollectionCard({
           </Link>
         ))}
 
-        <Link
-          to={`/collections/${collection.id}`}
+        <CollectionLink
+          id={collection.id}
           state={detailState}
           className="sp-note-open"
         >
           查看全文
           <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
-        </Link>
+        </CollectionLink>
       </div>
     </article>
   );
