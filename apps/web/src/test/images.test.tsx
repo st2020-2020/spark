@@ -65,6 +65,77 @@ async function waitForUploadReady(filename: string) {
 }
 
 describe('v0.3-T04 multi-image upload & presentation', () => {
+  it('recovers an image-only quick capture after closing and reloading, and saves without another PUT', async () => {
+    const user = userEvent.setup();
+    const api = createTestAdapter();
+    const { user: account } = await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const put = vi.spyOn(api, 'uploadFileBytes');
+    const get = vi.spyOn(api, 'getUpload');
+    const create = vi.spyOn(api, 'createCollection');
+    const mounted = renderWithAdapter(['/projects'], api);
+    const open = async () => {
+      await user.click((await screen.findAllByRole('button', { name: '记一条' }))[0]);
+      return within(await screen.findByRole('dialog', { name: '记一条' }));
+    };
+    let sheet = await open();
+    await user.upload(sheet.getByLabelText('选择图片文件'), makeImageFile('纸本.png'));
+    await waitForUploadReady('纸本.png');
+    await user.click(sheet.getByRole('button', { name: '关闭弹窗' }));
+    const key = `spark:draft:v1:${account.id}:inbox`;
+    const images = JSON.parse(localStorage.getItem(key)!).images;
+    expect(images).toEqual([{ uploadId: expect.any(String), name: '纸本.png', size: 64 }]);
+    mounted.unmount();
+    renderWithAdapter(['/projects'], api);
+    sheet = await open();
+    await waitForUploadReady('纸本.png');
+    expect(get).toHaveBeenCalledWith(images[0].uploadId);
+    await user.click(sheet.getByRole('button', { name: '保存收藏' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '记一条' })).toBeNull());
+    expect(create.mock.calls[0][0].upload_ids).toEqual([images[0].uploadId]);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
+  it('asks before closing an incomplete upload and keeps its filename for reselection', async () => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    vi.spyOn(api, 'uploadFileBytes').mockImplementation((_grant, _file, _progress, signal) =>
+      new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))));
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    renderWithAdapter(['/projects'], api);
+    const capture = (await screen.findAllByRole('button', { name: '记一条' }))[0];
+    await ui.click(capture);
+    await ui.upload(screen.getByLabelText('选择图片文件'), makeImageFile('未完成.png'));
+    await ui.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: '记一条' })).toBeVisible();
+    await ui.click(screen.getByRole('button', { name: '关闭弹窗' }));
+    expect(screen.queryByRole('dialog', { name: '记一条' })).toBeNull();
+    await ui.click(capture);
+    await screen.findByText('上次上传未完成，请移除后重新选择图片。');
+    expect(screen.getByRole('button', { name: '保存收藏' })).toBeDisabled();
+    confirm.mockRestore();
+  });
+
+  it.each(['expired', 'rejected'] as const)('retains a %s restored image until explicitly removed', async status => {
+    const user = userEvent.setup();
+    const api = createTestAdapter();
+    const { user: account } = await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const uploadId = crypto.randomUUID();
+    const key = `spark:draft:v1:${account.id}:inbox`;
+    localStorage.setItem(key, JSON.stringify({ collectionId: crypto.randomUUID(), idempotencyKey: 'test-key',
+      document: EMPTY_DOCUMENT, intent: '', originalUrl: '', manualTitle: '', projectIds: [], tagIds: [], aiExcluded: false,
+      images: [{ uploadId, name: '原图.png', size: 64 }] }));
+    vi.spyOn(api, 'getUpload').mockResolvedValue({ id: uploadId, status, expires_at: new Date().toISOString() });
+    renderWithAdapter(['/inbox'], api);
+    expect(await screen.findByText(/请移除后重新选择图片/)).toBeVisible();
+    expect(screen.getByRole('button', { name: '保存收藏' })).toBeDisabled();
+    expect(JSON.parse(localStorage.getItem(key)!).images[0].uploadId).toBe(uploadId);
+    await user.click(screen.getByRole('button', { name: '移除图片 原图.png' }));
+    expect(screen.queryByText('原图.png')).toBeNull();
+    expect(localStorage.getItem(key)).toBeNull();
+  });
+
   it('validates MIME, 5 MiB limit, 9-image cap, and supports picker, paste and drop', async () => {
     const user = userEvent.setup({ applyAccept: false });
     await loginAsAdmin(user);

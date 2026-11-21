@@ -124,7 +124,13 @@ export function CollectionComposer({
   const saveBtnRef = useRef<HTMLButtonElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingCollapseAfterSaveRef = useRef(false);
-  const uploader = useImageUploader(api, { accountKey: userId });
+  const uploader = useImageUploader(api, { accountKey: userId, draftImages: initialDraft.images,
+    draftCollectionId: initialDraft.collectionId });
+  const hasLocalFiles = uploader.items.some(item => item.file && item.status !== 'ready');
+  const images = useMemo(() => uploader.items.map(item => ({
+    name: item.name, size: item.size,
+    uploadId: item.restored || item.status === 'ready' ? item.uploadId : undefined,
+  })), [uploader.items]);
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -223,7 +229,7 @@ export function CollectionComposer({
       intent,
       originalUrl,
       manualTitle,
-      projectIds, tagIds, associationNames: names,
+      projectIds, tagIds, associationNames: names, images,
       aiExcluded,
       updatedAt: new Date().toISOString(),
     });
@@ -238,7 +244,7 @@ export function CollectionComposer({
     intent,
     originalUrl,
     manualTitle,
-    projectIds, tagIds, names,
+    projectIds, tagIds, names, images,
     aiExcluded,
   ]);
 
@@ -397,7 +403,7 @@ export function CollectionComposer({
 
   return (
     <section
-      data-pending-images={uploader.items.length || undefined}
+      data-pending-images={hasLocalFiles || (storageWarning && isDirty) || undefined}
       className={`sp-composer ${effectiveActivated ? 'sp-composer--active' : ''} ${
         variant === 'sheet' ? 'sp-composer--sheet' : ''
       }`}
@@ -549,6 +555,7 @@ export function CollectionComposer({
         }
         betweenEditorAndToolbar={
           <>
+            {hasLocalFiles && <p className="sp-help">上传完成前离开，未就绪的图片需要重新选择。</p>}
             <UploadQueueTray
               pendingItems={uploader.items}
               validationError={uploader.validationError}

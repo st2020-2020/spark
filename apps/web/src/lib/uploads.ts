@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { DraftImage } from './drafts';
 import type { SparkApi } from '../api/client';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { generateIdempotencyKey, generateUuid } from './idempotency';
@@ -16,7 +17,11 @@ export type AllowedImageMime = (typeof ALLOWED_IMAGE_MIME_TYPES)[number];
 
 export interface PendingUploadItem {
   localId: string;
-  file: File;
+  file?: File;
+  name: string;
+  size: number;
+  restored?: boolean;
+  alreadyAttached?: boolean;
   previewUrl: string;
   progress: number;
   status: 'uploading' | 'verifying' | 'ready' | 'failed';
@@ -28,6 +33,8 @@ export interface PendingUploadItem {
 }
 
 export interface UseImageUploaderOptions {
+  draftImages?: DraftImage[];
+  draftCollectionId?: string;
   existingCount?: number;
   accountKey?: string;
 }
@@ -173,7 +180,19 @@ export function useImageUploader(
   const existingCountRef = useRef(normalizedOptions.existingCount);
   existingCountRef.current = normalizedOptions.existingCount;
 
-  const [items, setItems] = useState<PendingUploadItem[]>([]);
+  // The composer is keyed by account/project. Only this mount's draft may seed its queue.
+  const [initialItems] = useState<PendingUploadItem[]>(() => {
+    const images = typeof optionsOrExistingCount === 'object' ? optionsOrExistingCount.draftImages : undefined;
+    if (!Array.isArray(images)) return [];
+    return images.slice(0, MAX_ATTACHMENTS_PER_COLLECTION).map(image => ({
+      localId: generateUuid(), name: image.name, size: image.size, uploadId: image.uploadId,
+      restored: true, previewUrl: '', progress: 0, requestKey: '',
+      status: image.uploadId ? 'verifying' : 'failed',
+      error: image.uploadId ? undefined : '上次上传未完成，请移除后重新选择图片。',
+    }));
+  });
+  const draftCollectionId = typeof optionsOrExistingCount === 'object' ? optionsOrExistingCount.draftCollectionId : undefined;
+  const [items, setItems] = useState<PendingUploadItem[]>(initialItems);
   const [validationError, setValidationError] = useState<string | null>(null);
   const itemsRef = useRef(items);
   itemsRef.current = items;
@@ -212,9 +231,42 @@ export function useImageUploader(
     };
   }, [abortAllControllers]);
 
+  const checkRestored = useCallback(async (item: PendingUploadItem) => {
+    if (!item.uploadId) return;
+    const epoch = epochRef.current;
+    const update = (patch: Partial<PendingUploadItem>) => {
+      if (epoch === epochRef.current) setItems(previous =>
+        previous.map(row => row.localId === item.localId ? { ...row, ...patch } : row));
+    };
+    update({ status: 'verifying', error: undefined });
+    try {
+      const upload = await api.getUpload(item.uploadId);
+      if (epoch !== epochRef.current) return;
+      // A lost create response can leave our uploads attached. Only the same draft's
+      // collection can authorize replay of its original idempotent create request.
+      if (upload.status === 'attached' && draftCollectionId) {
+        await api.getCollection(draftCollectionId);
+        update({ status: 'ready', alreadyAttached: true });
+      } else if (upload.status === 'ready') {
+        update({ status: 'ready', size: upload.size_bytes ?? item.size });
+      } else {
+        update({ status: 'failed', errorCode: undefined, error: '图片上传已失效或未通过校验，请移除后重新选择图片。' });
+      }
+    } catch (error) {
+      const unavailable = isApiErrorCode(error, 'not_found') || isApiErrorCode(error, 'forbidden');
+      update({ status: 'failed', errorCode: unavailable ? undefined : 'recheck',
+        error: unavailable ? '图片已无法访问，请移除后重新选择图片。' : '暂时无法核对图片，请重新核对。' });
+    }
+  }, [api, draftCollectionId]);
+
+  useEffect(() => {
+    for (const item of initialItems) if (item.uploadId) void checkRestored(item);
+  }, [checkRestored, initialItems]);
+
   const runUpload = useCallback(
     async (item: PendingUploadItem, mimeType: AllowedImageMime) => {
       const { localId, file } = item;
+      if (!file) return;
       controllersRef.current.get(localId)?.abort();
       const controller = new AbortController();
       controllersRef.current.set(localId, controller);
@@ -332,6 +384,8 @@ export function useImageUploader(
             localId,
             requestKey: generateIdempotencyKey(),
             file,
+            name: file.name,
+            size: file.size,
             previewUrl,
             progress: 0,
             status: 'uploading',
@@ -357,6 +411,10 @@ export function useImageUploader(
     (localId: string) => {
       const target = itemsRef.current.find((i) => i.localId === localId);
       if (!target) return;
+      if (!target.file) {
+        if (target.restored && target.uploadId) void checkRestored(target);
+        return;
+      }
       const check = validateImageFile(target.file);
       if (!check.ok) {
         setValidationError(check.message);
@@ -364,7 +422,7 @@ export function useImageUploader(
       }
       void runUpload(target, check.mimeType);
     },
-    [runUpload],
+    [runUpload, checkRestored],
   );
 
   const cancelItem = useCallback((localId: string) => {
