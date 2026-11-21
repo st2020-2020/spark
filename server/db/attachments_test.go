@@ -221,7 +221,7 @@ func testExtractionStorage(t *testing.T, pool *pgxpool.Pool, q *store.Queries, o
 		t.Fatalf("list queued extraction: %v", err)
 	}
 	update := store.UpdateCurrentExtractionParams{ID: job.ID, UserID: owner, CollectionID: collection, ContentVersion: 1,
-		ExpectedUpdatedAt: rows[0].UpdatedAt, Status: "running", EvidenceMeta: []byte("{}")}
+		ExpectedUpdatedAt: rows[0].Extraction.UpdatedAt, Status: "running", EvidenceMeta: []byte("{}")}
 	running, err := q.UpdateCurrentExtraction(ctx, update)
 	if err != nil {
 		t.Fatal(err)

@@ -1776,7 +1776,7 @@
             }
           }
         ],
-        "description": "须单独确认将该附件的视觉副本再次发给 DeepSeek。每个符合条件的附件至多登记一个恢复作业。若作业因额度不足且从未派发，可用当前恢复作业 ID 和新幂等键重排同一作业。重复请求返回当前结果。",
+        "description": "须单独确认将该附件的视觉副本再次发给 DeepSeek。空截断和符合条件的旧版已结算解析失败可登记一次当前版本恢复。额度不足且从未派发的恢复作业可用当前 ID 和新幂等键重排。重复请求返回当前结果。",
         "requestBody": {
           "required": true,
           "content": {
@@ -5639,7 +5639,7 @@
           "base_extraction_id": {
             "type": "string",
             "format": "uuid",
-            "description": "首次重新识别使用空截断提取 ID；因额度不足未派发时使用当前恢复作业 ID。"
+            "description": "使用当前可恢复的提取 ID，包括空截断、旧版已结算解析失败或额度不足且未派发的恢复作业。"
           },
           "consent_version": {
             "type": "string",
@@ -5720,7 +5720,7 @@
           },
           "image_retry_available": {
             "type": "boolean",
-            "description": "未登记恢复的空截断图片，或因额度不足且从未派发的恢复作业可返回 true。服务端仍核验开关、独立授权和额度。"
+            "description": "未恢复的空截断、符合条件的旧版已结算解析失败、额度不足且未派发的恢复作业可返回 true。服务端还需核验开关、独立授权和额度。"
           }
         },
         "required": [

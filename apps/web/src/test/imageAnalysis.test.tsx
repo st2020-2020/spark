@@ -325,14 +325,16 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(panel.queryByText(/图片中未识别出有效文字/)).toBeNull();
   });
 
-  it('only submits a confirmed single-image recovery, reuses its key after a lost response and follows SSE', async () => {
+  it.each(['truncated', 'settled legacy format failure'])('only submits a confirmed recovery for %s, replays a lost response and follows SSE', async reason => {
     const ui = userEvent.setup();
     const api = createTestAdapter();
     await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
     await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
     const col = await createImageAttachmentCollection(api, { filename: '合成蓝图.png' });
     const old: Extraction = { id: crypto.randomUUID(), source_id: col.attachments[0].id, source_kind: 'image',
-      status: 'partial', truncated: true, image_retry_available: true, content_version: 1, updated_at: new Date().toISOString() };
+      ...(reason === 'truncated' ? { status: 'partial' as const, truncated: true } :
+        { status: 'failed' as const, error_code: 'invalid_model_output' }),
+      image_retry_available: true, content_version: 1, updated_at: new Date().toISOString() };
     api.setMockCollectionExtractions(col.id, [old]);
     let accept!: () => void;
     const recover = api.retryImageAnalysis.bind(api);
@@ -355,6 +357,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     const dialog = within(screen.getByRole('dialog', { name: '重新识别这张图片' }));
     expect(dialog.getByText(/DeepSeek/)).toHaveTextContent('合成蓝图.png');
     expect(dialog.getByText(/额度/)).toBeVisible();
+    if (reason !== 'truncated') expect(dialog.getByText(/已结算/)).toHaveTextContent('再次使用');
     await ui.click(dialog.getByRole('button', { name: '取消' }));
     expect(retry).not.toHaveBeenCalled();
 
@@ -375,12 +378,49 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     await act(async () => accept());
     await panel.findByText('正在分析图片');
     expect(panel.queryByRole('button', { name: '重新识别这张图片' })).toBeNull();
-    api.setMockCollectionExtractions(col.id, [{ ...queued, status: 'succeeded', text: '标高 32' }]);
+    const output = reason === 'truncated' ? { text: '标高 32' } : { image_description: '合成蓝图的测量标记' };
+    api.setMockCollectionExtractions(col.id, [{ ...queued, status: 'succeeded', ...output }]);
     act(() => api.emitMockOrganizationEvent({ collection_id: col.id, status: col.organization.status, has_suggestion: false }));
-    await panel.findByText('标高 32');
+    const singleResult = reason === 'truncated' ? '标高 32' : '合成蓝图的测量标记';
+    await panel.findByText(singleResult);
+    expect(panel.queryByText(reason === 'truncated' ? 'AI 画面描述' : '图中文字')).toBeNull();
+    cleanup();
+    renderWithAdapter(['/collections/' + col.id], api);
+    const reloaded = within(await screen.findByLabelText('图片理解结果'));
+    await reloaded.findByText(singleResult);
+    expect(reloaded.queryByRole('button', { name: '重新识别这张图片' })).toBeNull();
     expect(retry).toHaveBeenCalledTimes(2);
     expect(organize).not.toHaveBeenCalled();
     expect(imageConsent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['invalid_model_output', '无法解析'],
+    ['image_provider_empty_output', '返回了空内容'],
+    ['image_provider_content_filtered', '内容过滤'],
+    ['image_provider_interrupted', '生成中断'],
+    ['image_response_read_failed', '读取'],
+    ['image_response_invalid', '响应格式'],
+    ['image_provider_choice_invalid', '结果结构'],
+    ['image_provider_content_invalid', '识别内容格式有误'],
+    ['image_provider_finish_invalid', '结束状态'],
+    ['usage_uncertain', '用量待核对'],
+    ['unknown_future_code', '原图'],
+  ])('explains %s without offering an unverified paid action', async (code, message) => {
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    const col = await createImageAttachmentCollection(api);
+    api.setMockCollectionExtractions(col.id, [{ id: crypto.randomUUID(), source_id: col.attachments[0].id,
+      source_kind: 'image', status: 'failed', error_code: code, content_version: 1, updated_at: new Date().toISOString(),
+      image_retry_available: code !== 'invalid_model_output',
+      text: code === 'image_provider_content_filtered' ? '未通过校验的合成片段' : undefined }]);
+    renderWithAdapter(['/collections/' + col.id], api);
+    const panel = within(await screen.findByLabelText('图片理解结果'));
+    await panel.findByText('识别失败');
+    expect(panel.getByText(new RegExp(message))).toBeVisible();
+    expect(screen.queryByText(/未通过校验的合成片段/)).toBeNull();
+    expect(panel.queryByRole('button', { name: '重新识别这张图片' })).toBeNull();
   });
 
   it('requeues only an undispatched quota-blocked recovery with a fresh intent key and its current ID', async () => {

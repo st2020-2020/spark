@@ -11,6 +11,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const canRecoverLegacyImageProviderFailure = `-- name: CanRecoverLegacyImageProviderFailure :one
+SELECT EXISTS(SELECT 1 FROM legacy_image_provider_failures WHERE user_id=$1 AND id=$2)
+`
+
+type CanRecoverLegacyImageProviderFailureParams struct {
+	UserID pgtype.UUID
+	ID     pgtype.UUID
+}
+
+func (q *Queries) CanRecoverLegacyImageProviderFailure(ctx context.Context, arg CanRecoverLegacyImageProviderFailureParams) (bool, error) {
+	row := q.db.QueryRow(ctx, canRecoverLegacyImageProviderFailure, arg.UserID, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const ensureCurrentExtraction = `-- name: EnsureCurrentExtraction :execrows
 WITH target AS (
  SELECT c.id, c.user_id, c.content_version FROM collections c
@@ -62,49 +78,6 @@ func (q *Queries) EnsureCurrentExtraction(ctx context.Context, arg EnsureCurrent
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const getAttachmentImageExtraction = `-- name: GetAttachmentImageExtraction :one
-SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version FROM extractions e
-WHERE e.user_id=$1 AND e.collection_id=$2 AND e.attachment_id=$3
- AND e.source_kind='image' AND e.extractor_version=$4 AND e.image_user_policy_version IS NOT NULL
-`
-
-type GetAttachmentImageExtractionParams struct {
-	UserID           pgtype.UUID
-	CollectionID     pgtype.UUID
-	AttachmentID     pgtype.UUID
-	ExtractorVersion string
-}
-
-func (q *Queries) GetAttachmentImageExtraction(ctx context.Context, arg GetAttachmentImageExtractionParams) (Extraction, error) {
-	row := q.db.QueryRow(ctx, getAttachmentImageExtraction,
-		arg.UserID,
-		arg.CollectionID,
-		arg.AttachmentID,
-		arg.ExtractorVersion,
-	)
-	var i Extraction
-	err := row.Scan(
-		&i.ID,
-		&i.UserID,
-		&i.CollectionID,
-		&i.ContentVersion,
-		&i.SourceKind,
-		&i.SourceID,
-		&i.AttachmentID,
-		&i.Status,
-		&i.Text,
-		&i.SourceTitle,
-		&i.EvidenceMeta,
-		&i.ErrorCode,
-		&i.ExtractorVersion,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ImageUserPolicyVersion,
-		&i.ImageCollectionPolicyVersion,
-	)
-	return i, err
 }
 
 const getCurrentURLExtraction = `-- name: GetCurrentURLExtraction :one
@@ -194,25 +167,26 @@ func (q *Queries) InsertImageRecovery(ctx context.Context, arg InsertImageRecove
 	return i, err
 }
 
-const listCurrentExtractions = `-- name: ListCurrentExtractions :many
-SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version FROM extractions e JOIN collections c
- ON (c.user_id, c.id) = (e.user_id, e.collection_id)
-WHERE e.user_id = $1 AND e.collection_id = $2 AND c.deleted_at IS NULL
- AND ((e.source_kind='url' AND e.content_version=c.content_version AND e.source_id=c.original_url)
- OR (e.source_kind='image' AND (e.image_user_policy_version IS NOT NULL OR e.content_version=c.content_version)
-  AND EXISTS (SELECT 1 FROM current_image_extractions i WHERE i.user_id=e.user_id AND i.id=e.id)
-  AND EXISTS (SELECT 1 FROM attachments a
-   WHERE (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id) AND a.removed_at IS NULL)))
-ORDER BY e.source_kind, e.source_id, e.created_at DESC, e.id
+const listAttachmentImageExtractions = `-- name: ListAttachmentImageExtractions :many
+SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version FROM extractions e
+WHERE e.user_id=$1 AND e.collection_id=$2 AND e.attachment_id=$3
+ AND e.source_kind='image' AND e.extractor_version=ANY($4::text[]) AND e.image_user_policy_version IS NOT NULL
 `
 
-type ListCurrentExtractionsParams struct {
+type ListAttachmentImageExtractionsParams struct {
 	UserID       pgtype.UUID
 	CollectionID pgtype.UUID
+	AttachmentID pgtype.UUID
+	Versions     []string
 }
 
-func (q *Queries) ListCurrentExtractions(ctx context.Context, arg ListCurrentExtractionsParams) ([]Extraction, error) {
-	rows, err := q.db.Query(ctx, listCurrentExtractions, arg.UserID, arg.CollectionID)
+func (q *Queries) ListAttachmentImageExtractions(ctx context.Context, arg ListAttachmentImageExtractionsParams) ([]Extraction, error) {
+	rows, err := q.db.Query(ctx, listAttachmentImageExtractions,
+		arg.UserID,
+		arg.CollectionID,
+		arg.AttachmentID,
+		arg.Versions,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -238,6 +212,68 @@ func (q *Queries) ListCurrentExtractions(ctx context.Context, arg ListCurrentExt
 			&i.UpdatedAt,
 			&i.ImageUserPolicyVersion,
 			&i.ImageCollectionPolicyVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentExtractions = `-- name: ListCurrentExtractions :many
+SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version, EXISTS(SELECT 1 FROM legacy_image_provider_failures f WHERE (f.user_id,f.id)=(e.user_id,e.id)) AS legacy_image_retry
+FROM extractions e JOIN collections c
+ ON (c.user_id, c.id) = (e.user_id, e.collection_id)
+WHERE e.user_id = $1 AND e.collection_id = $2 AND c.deleted_at IS NULL
+ AND ((e.source_kind='url' AND e.content_version=c.content_version AND e.source_id=c.original_url)
+ OR (e.source_kind='image' AND (e.image_user_policy_version IS NOT NULL OR e.content_version=c.content_version)
+  AND EXISTS (SELECT 1 FROM current_image_extractions i WHERE i.user_id=e.user_id AND i.id=e.id)
+  AND EXISTS (SELECT 1 FROM attachments a
+   WHERE (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id) AND a.removed_at IS NULL)))
+ORDER BY e.source_kind, e.source_id, e.created_at DESC, e.id
+`
+
+type ListCurrentExtractionsParams struct {
+	UserID       pgtype.UUID
+	CollectionID pgtype.UUID
+}
+
+type ListCurrentExtractionsRow struct {
+	Extraction       Extraction
+	LegacyImageRetry bool
+}
+
+func (q *Queries) ListCurrentExtractions(ctx context.Context, arg ListCurrentExtractionsParams) ([]ListCurrentExtractionsRow, error) {
+	rows, err := q.db.Query(ctx, listCurrentExtractions, arg.UserID, arg.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCurrentExtractionsRow
+	for rows.Next() {
+		var i ListCurrentExtractionsRow
+		if err := rows.Scan(
+			&i.Extraction.ID,
+			&i.Extraction.UserID,
+			&i.Extraction.CollectionID,
+			&i.Extraction.ContentVersion,
+			&i.Extraction.SourceKind,
+			&i.Extraction.SourceID,
+			&i.Extraction.AttachmentID,
+			&i.Extraction.Status,
+			&i.Extraction.Text,
+			&i.Extraction.SourceTitle,
+			&i.Extraction.EvidenceMeta,
+			&i.Extraction.ErrorCode,
+			&i.Extraction.ExtractorVersion,
+			&i.Extraction.CreatedAt,
+			&i.Extraction.UpdatedAt,
+			&i.Extraction.ImageUserPolicyVersion,
+			&i.Extraction.ImageCollectionPolicyVersion,
+			&i.LegacyImageRetry,
 		); err != nil {
 			return nil, err
 		}

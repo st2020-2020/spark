@@ -115,13 +115,19 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 `GET /me/image-analysis` 返回账户的 `enabled`、当前账号的 `available`（生产要求平台已启用、UUID 匹配且仍是管理员） 与当前 `required_consent_version`。`PUT /me/image-analysis` 开启时须携带该版本，没有资格的账号请求开启返回 403 `image_analysis_unavailable`。关闭时发送 `{"enabled":false}`，即使失去资格也可以撤回。授权文案须明确说明会将此后新保存的确认图片的视觉副本发送给第三方 DeepSeek，用于识别图中文字并生成 AI 画面描述。副本应用方向并去除 EXIF、GPS 与注释，用户仍可下载原件。图片使用独立授权，并复用收藏的 AI 排除设置。
 
-`GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID。`text` 为逐字识别的标题和代表性摘录，`image_description` 为简短的中文主题和 AI 画面描述。触及输出上限时，存在可验证的完整字段则返回 `partial / image_output_truncated`；两个字段均空则为 `failed / image_output_truncated_empty`，两种结果均带 `truncated: true`。服务正常完成的两个空字段表示未识别到可用内容。格式错误为 `failed / invalid_model_output`。可信用量按实际结算，缺少可靠用量时保留待核对金额。额度不足为 `blocked / quota_exceeded`。
+`GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID。`text` 为逐字识别的标题和代表性摘录，`image_description` 为简短的中文主题和 AI 画面描述。触及输出上限时，存在可验证的完整字段则返回 `partial / image_output_truncated`；两个字段均空则为 `failed / image_output_truncated_empty`，两种结果均带 `truncated: true`。服务正常完成的两个空字段表示未识别到可用内容。可信用量按实际结算，缺少可靠用量时保留待核对金额。额度不足为 `blocked / quota_exceeded`。
+
+当前解析只读取有界 JSON 对象中的顶层字符串 `text` 和 `description`，允许仅返回其中一个字段。额外字段的值按 JSON 验证后舍弃。重复键、超深结构、尾随内容和非法字段类型返回 `image_provider_content_invalid`。截断由供应商的 `finish_reason=length` 判定，只保留已经闭合并通过验证的已知字段。可信用量继续独立结算。
+
+图片诊断码区分响应读取中断 `image_response_read_failed`、响应封装无效 `image_response_invalid`、候选结构或工具调用异常 `image_provider_choice_invalid`、终止原因异常 `image_provider_finish_invalid`、内容被过滤 `image_provider_content_filtered`、供应商中断 `image_provider_interrupted`、正常停止时的空白响应 `image_provider_empty_output`。旧记录可能保留 `invalid_model_output`。
 
 结果随有效附件保留，编辑备注和重排复用结果。图片项的 `content_version` 为首次绑定版本。移除附件或收藏进入回收站后，提取接口和搜索均省略该结果。搜索片段分别标为 `image_text`、`image_description`。
 
 `POST /attachments/{id}/image-analysis/retry` 接受 `base_extraction_id` 与 `consent_version: "deepseek-image-retry-v1"`，需要 CSRF 和幂等键。界面先确认本次将这张已保存图片的视觉副本再次发给 DeepSeek，服务端复核独立图片授权、账号资格、收藏排除和预算。当前附件仍有效时，目标提取 ID 在普通正文编辑后继续有效。旧版 `partial`、`truncated: true` 且两个字段均空的结果与新版空截断均可申请。符合条件的当前提取返回 `image_retry_available: true`。
 
 首次受理返回 `202` 和新恢复作业，提取列表只显示同一个附件的当前作业。对初次目标的重复请求以及原请求键的重放返回同一作业当前结果。恢复作业若因额度不足且零派发、零账务而终止，提取项再次返回 `image_retry_available: true`。用户可明确确认，提交该恢复作业 ID 及新幂等键重排同一作业。已派发作业的后续请求只读取结果。前端沿用收藏的 `organization` SSE 更新提取列表。
+
+旧版当前可见的首次识别或恢复记录，若为 `failed / invalid_model_output`、两个字段均空且本次账务已结算，也会返回 `image_retry_available: true`。用户可用该提取 ID 和新键明确确认一次当前版本的兼容恢复，本次费用单独核算。旧账务未知时不开放这条恢复路径。
 
 拒绝状态包括 `403 image_analysis_unavailable`、`image_consent_required`、`ai_excluded`，跨账号或附件已移除为 404。回收站为 `409 collection_in_trash`，不匹配的提取 ID 为 `409 extraction_conflict`，材料不满足恢复条件为 `422 image_retry_not_available`。开关关闭为 `503 integration_not_configured`，配置超出图片 Token 上界为 `503 image_token_limit`，当前余额不足为 `429 quota_exceeded`。
 

@@ -40,7 +40,8 @@ WHERE (e.user_id, e.collection_id) = (c.user_id, c.id) AND e.id = sqlc.arg(id)
 RETURNING e.*;
 
 -- name: ListCurrentExtractions :many
-SELECT e.* FROM extractions e JOIN collections c
+SELECT sqlc.embed(e), EXISTS(SELECT 1 FROM legacy_image_provider_failures f WHERE (f.user_id,f.id)=(e.user_id,e.id)) AS legacy_image_retry
+FROM extractions e JOIN collections c
  ON (c.user_id, c.id) = (e.user_id, e.collection_id)
 WHERE e.user_id = $1 AND e.collection_id = $2 AND c.deleted_at IS NULL
  AND ((e.source_kind='url' AND e.content_version=c.content_version AND e.source_id=c.original_url)
@@ -57,10 +58,13 @@ JOIN users u ON u.id = e.user_id
 WHERE e.user_id = $1 AND e.collection_id = $2 AND e.source_kind = 'url' AND e.extractor_version = $3
   AND c.deleted_at IS NULL AND u.status = 'active';
 
--- name: GetAttachmentImageExtraction :one
+-- name: ListAttachmentImageExtractions :many
 SELECT e.* FROM extractions e
 WHERE e.user_id=$1 AND e.collection_id=$2 AND e.attachment_id=$3
- AND e.source_kind='image' AND e.extractor_version=$4 AND e.image_user_policy_version IS NOT NULL;
+ AND e.source_kind='image' AND e.extractor_version=ANY(sqlc.arg(versions)::text[]) AND e.image_user_policy_version IS NOT NULL;
+
+-- name: CanRecoverLegacyImageProviderFailure :one
+SELECT EXISTS(SELECT 1 FROM legacy_image_provider_failures WHERE user_id=$1 AND id=$2);
 
 -- name: InsertImageRecovery :one
 INSERT INTO extractions (id,user_id,collection_id,content_version,source_kind,source_id,attachment_id,extractor_version,

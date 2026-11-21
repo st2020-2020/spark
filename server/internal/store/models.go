@@ -243,6 +243,11 @@ type InviteRedemption struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type LegacyImageProviderFailure struct {
+	UserID pgtype.UUID
+	ID     pgtype.UUID
+}
+
 type MailOutbox struct {
 	ChallengeID      pgtype.UUID
 	EncryptedPayload []byte

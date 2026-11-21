@@ -1,8 +1,12 @@
-import { ImageRetryAction } from './ImageRetryAction';
+import { ImageRetryAction, type ImageRetryKind } from './ImageRetryAction';
 import { IMAGE_ANALYSIS_CONSENT_VERSION } from './ImageAnalysisConsentModal';
 import { Link } from 'react-router-dom';
 import { Image as ImageIcon, Loader2, RefreshCw } from 'lucide-react';
 import type { Attachment, Extraction, ImageAnalysisPreferences } from '../api/types';
+
+function hasUsableImageResult(ext: Extraction) {
+  return ext.status === 'succeeded' || ext.status === 'partial';
+}
 
 function hasImageContent(ext: Extraction) {
   return Boolean(ext.text?.trim() || ext.image_description?.trim());
@@ -10,8 +14,35 @@ function hasImageContent(ext: Extraction) {
 
 function isTruncatedResult(ext: Extraction) {
   return (ext.status === 'failed' && ext.error_code === 'image_output_truncated_empty') ||
-    ((ext.status === 'partial' || ext.status === 'succeeded') &&
+    (hasUsableImageResult(ext) &&
       (ext.truncated || ext.error_code === 'image_output_truncated'));
+}
+
+function imageRetryKind(ext: Extraction): ImageRetryKind | undefined {
+  if (ext.image_retry_available !== true || hasImageContent(ext)) return;
+  if (ext.status === 'failed' && ext.error_code === 'invalid_model_output') return 'legacy-format';
+  if (ext.status === 'blocked' && ext.error_code === 'quota_exceeded') return 'quota';
+  if (isTruncatedResult(ext)) return 'truncated';
+}
+
+function imageFailureNote(code?: string): string {
+  switch (code) {
+    case 'invalid_model_output': return '无法解析上次的识别结果，原图仍可查看。';
+    case 'image_provider_empty_output': return '图片识别服务返回了空内容。';
+    case 'image_provider_content_filtered': return '图片识别服务进行了内容过滤，本次没有可展示的结果。';
+    case 'image_provider_interrupted': return '图片识别服务的生成中断，本次未取得完整结果。';
+    case 'image_response_read_failed': return '读取图片识别服务的响应时出错。';
+    case 'image_response_invalid': return '图片识别服务的响应格式无法解析。';
+    case 'image_provider_content_invalid': return '服务返回的识别内容格式有误，无法提取文字或画面描述。';
+    case 'image_provider_choice_invalid': return '图片识别服务返回的结果结构无法使用。';
+    case 'image_provider_finish_invalid': return '图片识别服务返回的结束状态无法确认。';
+    case 'usage_uncertain': return '本次识别用量待核对，原图仍可查看。';
+    case 'image_unavailable': return '识别服务未能取得可处理的图片。';
+    case 'provider_unavailable': return '本次未能连接到图片识别服务或接收其响应。';
+    case 'provider_request_failed': return '图片识别服务未成功处理这次请求。';
+    case 'image_token_limit': return '本次识别超出平台的用量限制。';
+    default: return '本次没有可展示的识别结果，原图仍可查看。';
+  }
 }
 
 function resolveImageStatusDisplay(ext: Extraction): {
@@ -65,7 +96,7 @@ function resolveImageStatusDisplay(ext: Extraction): {
       return {
         label: '识别失败',
         pillClass: 'sp-pill sp-pill--danger',
-        note: '本次图片理解未能成功返回，原图已完整保存并可正常查看。',
+        note: imageFailureNote(ext.error_code),
       };
   }
 }
@@ -74,11 +105,13 @@ export function formatExtractionSummaryText(ext: Extraction): string {
   if (ext.source_kind === 'url') {
     return ext.text || ext.status;
   }
+  const display = resolveImageStatusDisplay(ext);
+  if (!hasUsableImageResult(ext) || !hasImageContent(ext)) {
+    return [display.label, display.note].filter(Boolean).join(' · ');
+  }
   const parts: string[] = [];
   if (ext.text?.trim()) parts.push(`图中文字：${ext.text.trim()}`);
   if (ext.image_description?.trim()) parts.push(`AI 画面描述：${ext.image_description.trim()}`);
-  const display = resolveImageStatusDisplay(ext);
-  if (!parts.length) return [display.label, display.note].filter(Boolean).join(' · ');
   if (isTruncatedResult(ext)) parts.push('摘录已截断');
   return parts.join(' ｜ ');
 }
@@ -196,12 +229,11 @@ export function ImageAnalysisPanel({
         <div className="sp-image-analysis-list">
           {matched.map(({ attachment, index, extraction }) => {
             const statusDisplay = resolveImageStatusDisplay(extraction);
-            const ocrText = extraction.text?.trim() ?? '';
-            const visualDesc = extraction.image_description?.trim() ?? '';
-            const quotaRequeue = extraction.status === 'blocked' && extraction.error_code === 'quota_exceeded';
-            const eligibleResult = extraction.image_retry_available === true &&
-              (quotaRequeue || isTruncatedResult(extraction)) && !hasImageContent(extraction) &&
-              !isError && !aiExcluded && imagePreferences?.available === true;
+            const usable = hasUsableImageResult(extraction);
+            const ocrText = usable && extraction.text?.trim();
+            const visualDesc = usable && extraction.image_description?.trim();
+            const retryKind = imageRetryKind(extraction);
+            const mayOfferRetry = !isError && !aiExcluded && imagePreferences?.available === true;
             const isPending = extraction.status === 'queued' || extraction.status === 'running';
 
             return (
@@ -244,13 +276,13 @@ export function ImageAnalysisPanel({
                   <p className="sp-help sp-image-analysis-note">{statusDisplay.note}</p>
                 )}
 
-                {eligibleResult && !imagePreferences.enabled && (
+                {retryKind && mayOfferRetry && !imagePreferences.enabled && (
                   <Link className="sp-strong" to="/settings">前往设置开启图片理解</Link>
                 )}
-                {eligibleResult && imagePreferences.enabled &&
+                {retryKind && mayOfferRetry && imagePreferences.enabled &&
                   imagePreferences.required_consent_version === IMAGE_ANALYSIS_CONSENT_VERSION && (
                     <ImageRetryAction key={extraction.id + ':' + extraction.updated_at} collectionId={collectionId}
-                      attachment={attachment} extraction={extraction} quotaRequeue={quotaRequeue} />
+                      attachment={attachment} extraction={extraction} kind={retryKind} />
                   )}
               </div>
             );

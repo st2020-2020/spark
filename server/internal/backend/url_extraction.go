@@ -125,13 +125,14 @@ func (s *Server) getExtractions(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	result := contract.ExtractionList{Items: make([]contract.Extraction, 0, len(rows))}
-	for _, row := range rows {
+	for _, current := range rows {
+		row := current.Extraction
 		disabled := row.SourceKind == "url" && !s.Config.URLExtractEnabled || row.SourceKind == "image" && !s.Config.ImageAnalysisEnabled
 		if disabled && (row.Status == "queued" || row.Status == "running") {
 			row.Status = "skipped"
 			row.ErrorCode = pgtype.Text{String: "integration_not_configured", Valid: true}
 		}
-		item, err := extractionView(row)
+		item, err := imageExtractionView(row, current.LegacyImageRetry)
 		if err != nil {
 			return nil, err
 		}

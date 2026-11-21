@@ -10,12 +10,15 @@ import (
 	"spark/server/internal/contract"
 )
 
+var imageExtractionVersions = []string{imageExtractorVersion, legacyImageRecoveryExtractorVersion, imageRecoveryExtractorVersion}
+
 const (
-	imageConsentVersion           = "deepseek-images-v1"
-	imageExtractorVersion         = "deepseek-flash-image-v1"
-	imageRecoveryExtractorVersion = "deepseek-flash-image-recovery-v1"
-	imageAnalysisQueue            = "image_analysis"
-	imageJobLockSalt              = 43
+	imageConsentVersion                 = "deepseek-images-v1"
+	imageExtractorVersion               = "deepseek-flash-image-v1"
+	legacyImageRecoveryExtractorVersion = "deepseek-flash-image-recovery-v1"
+	imageRecoveryExtractorVersion       = "deepseek-flash-image-recovery-v2"
+	imageAnalysisQueue                  = "image_analysis"
+	imageJobLockSalt                    = 43
 	// All callers bind $2 to the administrator configured for this process.
 	imageAccountAllowedSQL = "($2::text = '' OR (u.role = 'admin' AND u.id::text = $2))"
 )

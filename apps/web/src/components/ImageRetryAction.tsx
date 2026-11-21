@@ -25,11 +25,19 @@ function retryError(error: unknown): string {
   return '尚未确认提交结果，可刷新状态后再试。';
 }
 
-export function ImageRetryAction({ collectionId, attachment, extraction, quotaRequeue }: {
+export type ImageRetryKind = 'truncated' | 'quota' | 'legacy-format';
+
+const confirmationNotes: Record<ImageRetryKind, string> = {
+  truncated: '这次识别会使用平台图片理解额度。每张符合条件的图片可重新识别一次。',
+  quota: '上次任务因额度不足在发送前暂停，未产生用量。确认后会将同一任务重新排队，发送时会使用平台图片理解额度。',
+  'legacy-format': '上次识别的用量已结算。这条旧记录可按更新后的方式再识别一次，发送时会再次使用平台图片理解额度。',
+};
+
+export function ImageRetryAction({ collectionId, attachment, extraction, kind }: {
   collectionId: string;
   attachment: Attachment;
   extraction: Extraction;
-  quotaRequeue: boolean;
+  kind: ImageRetryKind;
 }) {
   const api = useApi();
   const client = useQueryClient();
@@ -78,15 +86,13 @@ export function ImageRetryAction({ collectionId, attachment, extraction, quotaRe
     <div>
       <button type="button" className="sp-btn sp-btn--sm" disabled={retry.isPending}
         onClick={() => setConfirming(true)}>
-        {retry.isPending ? '正在提交…' : quotaRequeue ? '重新排队' : '重新识别这张图片'}
+        {retry.isPending ? '正在提交…' : kind === 'quota' ? '重新排队' : '重新识别这张图片'}
       </button>
       {retry.isError && <p className="sp-error-text" role="alert">{retryError(retry.error)}</p>}
       <Modal open={confirming} onClose={() => setConfirming(false)} title="重新识别这张图片">
         <div className="sp-stack">
           <p className="sp-break-anywhere">将把「{attachment.filename}」的视觉副本再次发送给 DeepSeek，识别图中文字和画面。</p>
-          <p>{quotaRequeue
-            ? '上次任务因额度不足在发送前暂停，未产生用量。确认后会将同一任务重新排队，发送时会使用平台图片理解额度。'
-            : '这次识别会使用平台图片理解额度。每张符合条件的图片可重新识别一次。'}</p>
+          <p>{confirmationNotes[kind]}</p>
           <div className="sp-form-actions">
             <button type="button" className="sp-btn" data-dialog-autofocus onClick={() => setConfirming(false)}>取消</button>
             <button type="button" className="sp-btn sp-btn--primary" onClick={submit}>确认重新识别</button>

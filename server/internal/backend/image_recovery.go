@@ -22,7 +22,8 @@ func emptyImageTruncation(row store.Extraction, evidence imageEvidence) bool {
 
 func quotaBlockedImageRecovery(row store.Extraction) bool {
 	// The worker writes this state before it inserts a dispatch reservation.
-	return row.ExtractorVersion == imageRecoveryExtractorVersion && row.Status == "blocked" && row.ErrorCode.String == "quota_exceeded"
+	return (row.ExtractorVersion == imageRecoveryExtractorVersion || row.ExtractorVersion == legacyImageRecoveryExtractorVersion) &&
+		row.Status == "blocked" && row.ErrorCode.String == "quota_exceeded"
 }
 
 func (s *Server) retryImageAnalysis(c *gin.Context) (any, error) {
@@ -56,29 +57,50 @@ func (s *Server) imageRecovery(ctx context.Context, tx pgx.Tx, uid, attachment, 
 		return item, problem(409, "collection_in_trash", "请先从回收站恢复收藏。")
 	}
 	q := store.New(tx)
-	lookup := store.GetAttachmentImageExtractionParams{
-		UserID: idPG(uid), CollectionID: idPG(collection), AttachmentID: idPG(attachment), ExtractorVersion: imageExtractorVersion,
-	}
-	base, err := q.GetAttachmentImageExtraction(ctx, lookup)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return item, problem(422, "image_retry_not_available", "此附件没有可恢复的图片识别结果。")
-	}
+	rows, err := q.ListAttachmentImageExtractions(ctx, store.ListAttachmentImageExtractionsParams{
+		UserID: idPG(uid), CollectionID: idPG(collection), AttachmentID: idPG(attachment), Versions: imageExtractionVersions,
+	})
 	if err != nil {
 		return item, err
 	}
-	lookup.ExtractorVersion = imageRecoveryExtractorVersion
-	recovery, err := q.GetAttachmentImageExtraction(ctx, lookup)
-	existing := err == nil
-	if !existing && !errors.Is(err, pgx.ErrNoRows) {
-		return item, err
+	var base, legacy, current store.Extraction
+	for _, row := range rows {
+		switch row.ExtractorVersion {
+		case imageExtractorVersion:
+			base = row
+		case legacyImageRecoveryExtractorVersion:
+			legacy = row
+		case imageRecoveryExtractorVersion:
+			current = row
+		}
 	}
-	isRecoveryTarget := existing && recovery.ID.String() == baseID
-	if base.ID.String() != baseID && !isRecoveryTarget {
+	if !base.ID.Valid {
+		return item, problem(422, "image_retry_not_available", "此附件没有可恢复的图片识别结果。")
+	}
+	recovery := current
+	if !recovery.ID.Valid {
+		recovery = legacy
+	}
+	isRecoveryTarget := recovery.ID.Valid && recovery.ID.String() == baseID
+	isLegacyTarget := legacy.ID.Valid && legacy.ID.String() == baseID
+	if base.ID.String() != baseID && !isLegacyTarget && !isRecoveryTarget {
 		return item, problem(409, "extraction_conflict", "图片识别结果已变化，请重新读取。")
 	}
+	target := base
+	if recovery.ID.Valid {
+		target = recovery
+	}
+	var legacyEligible bool
+	if target.Status == "failed" && target.ErrorCode.String == "invalid_model_output" {
+		legacyEligible, err = q.CanRecoverLegacyImageProviderFailure(ctx, store.CanRecoverLegacyImageProviderFailureParams{UserID: idPG(uid), ID: target.ID})
+		if err != nil {
+			return item, err
+		}
+	}
+	replaceLegacy := enqueue && target.ID.String() == baseID && legacyEligible
 	requeue := enqueue && isRecoveryTarget && quotaBlockedImageRecovery(recovery)
-	if existing && !requeue {
-		return extractionView(recovery)
+	if recovery.ID.Valid && !requeue && !replaceLegacy {
+		return imageExtractionView(recovery, legacyEligible)
 	}
 	if !enqueue {
 		return item, pgx.ErrNoRows
@@ -98,12 +120,14 @@ func (s *Server) imageRecovery(ctx context.Context, tx pgx.Tx, uid, attachment, 
 	case excluded:
 		return item, problem(403, "ai_excluded", "此收藏已排除 AI 处理。")
 	}
-	baseView, err := extractionView(base)
-	if err != nil {
-		return item, err
-	}
-	if !requeue && !value(baseView.ImageRetryAvailable) {
-		return item, problem(422, "image_retry_not_available", "只有识别截断且未得到内容的图片可以尝试恢复。")
+	if !requeue && !replaceLegacy {
+		baseView, err := extractionView(base)
+		if err != nil {
+			return item, err
+		}
+		if !value(baseView.ImageRetryAvailable) {
+			return item, problem(422, "image_retry_not_available", "此图片识别结果不符合恢复条件。")
+		}
 	}
 	blocked, err := imageRouteBlocked(ctx, tx)
 	if err != nil {
@@ -125,6 +149,9 @@ func (s *Server) imageRecovery(ctx context.Context, tx pgx.Tx, uid, attachment, 
 			return item, problem(422, "image_retry_not_available", "该恢复作业已经派发或记账。")
 		}
 	} else {
+		if replaceLegacy {
+			base = target
+		}
 		recovery, err = q.InsertImageRecovery(ctx, store.InsertImageRecoveryParams{
 			ID: idPG(uuid.NewString()), UserID: idPG(uid), BaseID: base.ID, RecoveryVersion: imageRecoveryExtractorVersion,
 		})
@@ -138,6 +165,14 @@ func (s *Server) imageRecovery(ctx context.Context, tx pgx.Tx, uid, attachment, 
 		return item, err
 	}
 	return extractionView(recovery)
+}
+
+func imageExtractionView(row store.Extraction, legacyRetry bool) (contract.Extraction, error) {
+	item, err := extractionView(row)
+	if legacyRetry {
+		item.ImageRetryAvailable = &legacyRetry
+	}
+	return item, err
 }
 
 func imageRouteBlocked(ctx context.Context, q querier) (bool, error) {
