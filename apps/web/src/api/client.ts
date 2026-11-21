@@ -366,11 +366,9 @@ export function createRealApiClient(): SparkApi {
       }),
 
     logout: async () => {
-      try {
-        await request<void>('POST', '/auth/logout', { requiresCsrf: true });
-      } finally {
-        csrfToken = null;
-      }
+      const requestSession = csrfToken;
+      await request<void>('POST', '/auth/logout', { requiresCsrf: true, notifyUnauthorized: false });
+      if (csrfToken === requestSession) csrfToken = null;
     },
 
     currentSession: async () => {

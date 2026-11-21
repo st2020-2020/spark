@@ -71,6 +71,22 @@ describe('realApiClient', () => {
     vi.unstubAllGlobals();
   });
 
+  it('retains the session token for retry after a logout transport failure', async () => {
+    const client = createRealApiClient();
+    client.setCsrfToken('session-A');
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await expect(client.logout()).rejects.toMatchObject({ code: 'network_error' });
+      await client.logout();
+      expect(fetchMock.mock.calls[1][1].headers['X-CSRF-Token']).toBe('session-A');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps the new session when an earlier account receives a late 401', async () => {
     const client = createRealApiClient();
     const expired = vi.fn();
