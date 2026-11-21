@@ -29,6 +29,8 @@
 
 首次进入 Web 调用 `GET /auth/session` 恢复账号和 CSRF token。页面刷新后重新读取。匿名的验证码、登录、注册和找回密码请求同样验证 Origin，限制来源和发送频率。登出撤销服务端会话并使 Cookie 过期。
 
+SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永久删除。字段缺失时按关闭处理。
+
 验证码申请返回 202 表示已持久受理，返回的 expires_in 和 resend_after 单位为秒。用户更改邮箱或用途后需要重新申请。未启用投递时返回 503，超限返回 429 并使用 Retry-After。验证码接口对账号存在与否使用统一响应形状；密码恢复对无效或不存在账号使用统一失败信息。账号被禁用后撤销会话、拒绝后续签名授权并停止新 AI 任务。
 
 注册输入邮箱、密码、challenge_id、verification_code 和 invite_code。前端预检用于反馈，后端最终事务同时验证账号、挑战和邀请码。注册响应丢失时可通过既有账号登录，邀请码消费以事务状态为准。
@@ -83,7 +85,7 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 `POST /tags` 接受 `{name}`，需要 CSRF 与幂等键。先去首尾空白并做 Unicode NFC，长度 1 至 24 个字符。用户内规范名按 Unicode 大小写折叠去重，同名返回 `409 duplicate_resource`。`PATCH /tags/{id}` 接受 `{name,expected_name}`，`DELETE /tags/{id}?expected_name=` 成功返回 204，原名称不符返回 `409 tag_conflict`。删除清除该标签的所有关联并保留收藏正文。
 
-文字自动整理仅在当前授权版本为 `spark-ai-tags-v1` 时发送匹配标签并应用结果。旧授权继续使用原有的文字整理范围；用户可在设置页查看新版说明后主动更新。
+文字自动整理在 `spark-ai-tags-v1` 和 `spark-ai-image-material-v1` 授权下发送匹配标签并应用结果。更早的授权继续使用原有的文字整理范围。用户可在设置页查看新版说明后主动更新。
 
 新建收藏使用 `tag_ids` 指定已有标签。修改标签用 `PATCH /collections/{id}/tags`，与项目共用 `base_decision_version`，支持 include、exclude、reset。详情返回用于编辑的全部决定，卡片、标签计数和筛选只显示有效关联。`GET /collections` 和 `GET /search` 均可按 `tag_id` 筛选，关键词命中有效标签时来源标记为 `tag`。JSON 导出保留标签目录及收藏的标签决定，Markdown 在收藏内列出标签决定。
 
@@ -114,6 +116,12 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 `GET /me/image-analysis` 返回账户的 `enabled`、当前账号的 `available`（生产要求平台已启用、UUID 匹配且仍是管理员） 与当前 `required_consent_version`。`PUT /me/image-analysis` 开启时须携带该版本，没有资格的账号请求开启返回 403 `image_analysis_unavailable`。关闭时发送 `{"enabled":false}`，即使失去资格也可以撤回。授权文案须明确说明会将此后新保存的确认图片的视觉副本发送给第三方 DeepSeek，用于识别图中文字并生成 AI 画面描述。副本应用方向并去除 EXIF、GPS 与注释，用户仍可下载原件。图片使用独立授权，并复用收藏的 AI 排除设置。
 
 `GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID，`text` 与 `image_description` 分别是图中文字和 AI 画面描述。服务截断时返回 `partial` 和 `truncated: true`，客户端可提示结果可能不完整。缺少可靠用量时保留待核对额度。账户或平台额度不足时作业为 `blocked`，`error_code=quota_exceeded`，原收藏已保存。结果随有效附件保留，编辑备注和重排复用结果。图片项的 content_version 为首次绑定版本，读取时按附件 ID 对应。移除附件或进入回收站后，提取接口和搜索均省略该结果。搜索片段分别标为 `image_text`、`image_description`。
+
+文字整理经 `PATCH /me/preferences` 提交 `ai_enabled: true` 和 `consent_version: "spark-ai-image-material-v1"` 同意将合格附件的图中文字和 AI 画面描述一并发给第三方文字模型用于整理。独立图片授权、试用资格和单条排除同时有效时才使用。文字 Worker 仅收到派生文本。登录、会话恢复和偏好更新的用户字段 `ai_consent_version` 返回最近的文字授权版本，启用状态由 `ai_enabled` 表示。
+
+收藏整理响应中的 `image_material_status` 为 `consent_required`、`waiting` 或 `included`，分别对应需补充文字授权、此轮正在等待图片提取、此轮成功或部分成功且用到了图片材料。上层等待状态为 `queued`。整理队列总期限为十分钟，超期未能使用图片的等待运行返回 `failed / image_material_timeout`，识别完成后可重新整理。图片终态没有可用文本时用原有文字材料，无可用材料则为 `skipped / insufficient_material`。旧文字授权下，主动整理合格含图收藏返回 `403 image_material_consent_required`。同一活动运行复用，既有图片提取结果可在主动整理时复用。
+
+项目引文的 `source_id` 可以是 `original_text`、`intent`、`image_text:<附件 UUID>` 或 `image_description:<附件 UUID>`。引文必须逐字来自该次模型输入的对应段。既有 `organization` SSE 通知图片状态和整理变化，客户端按需重新读取收藏、提取和整理。
 
 ## 网页信息提取
 

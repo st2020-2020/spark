@@ -4217,6 +4217,10 @@
           },
           "theme": {
             "$ref": "#/components/schemas/Theme"
+          },
+          "ai_consent_version": {
+            "type": "string",
+            "description": "最近一次接受的文字整理处理说明版本。是否启用仍由 ai_enabled 表示。"
           }
         },
         "required": [
@@ -4249,6 +4253,10 @@
           "ai_platform_enabled": {
             "type": "boolean",
             "description": "平台文字整理总开关。"
+          },
+          "purge_enabled": {
+            "type": "boolean",
+            "description": "是否开放登记新的永久删除。字段缺失视为关闭。"
           }
         },
         "required": [
@@ -5195,6 +5203,15 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "image_material_status": {
+            "type": "string",
+            "enum": [
+              "consent_required",
+              "waiting",
+              "included"
+            ],
+            "description": "分别表示可用图片材料需要新版文字授权、正在等待图片提取、此轮成功或部分成功使用了图片衍生材料。"
           }
         },
         "required": [
@@ -6331,10 +6348,8 @@
         "properties": {
           "source_id": {
             "type": "string",
-            "enum": [
-              "original_text",
-              "intent"
-            ]
+            "pattern": "^(original_text|intent|image_(text|description):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+            "description": "原文字段，或 image_text:/image_description: 加附件 UUID。"
           },
           "quote": {
             "type": "string",

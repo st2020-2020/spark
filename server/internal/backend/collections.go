@@ -25,13 +25,25 @@ type collectionRow struct {
 	LinkPreview        *contract.LinkPreview  `json:"link_preview"`
 	StoredOrganization *contract.Organization `json:"stored_organization"`
 	UserAIEnabled      bool                   `json:"user_ai_enabled"`
+	UserAIConsent      string                 `json:"user_ai_consent"`
+	UserRole           string                 `json:"user_role"`
+	HasImageMaterial   bool                   `json:"has_image_material"`
 	GeneratedTitle     *string                `json:"generated_title"`
 	GeneratedSummary   *string                `json:"generated_summary"`
 }
 
 const collectionJSON = `to_jsonb(c)||jsonb_build_object(
  'user_ai_enabled',(SELECT ai_enabled FROM users WHERE id=c.user_id),
- 'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,'stages',r.stages,'error_code',r.error_code,'updated_at',r.updated_at)) FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
+ 'user_ai_consent',(SELECT COALESCE(ai_consent_version,'') FROM users WHERE id=c.user_id),
+ 'user_role',(SELECT role FROM users WHERE id=c.user_id),
+ 'has_image_material',EXISTS(SELECT 1 FROM organization_image_materials m WHERE (m.user_id,m.collection_id)=(c.user_id,c.id)),
+ 'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,
+ 'stages',CASE WHEN r.image_waiting AND r.status<>'queued' THEN '[{"name":"extract_images","status":"skipped","attempts":0}]'::jsonb ELSE r.stages END,
+ 'error_code',r.error_code,'updated_at',r.updated_at,
+ 'image_material_status',CASE
+  WHEN r.status='queued' AND r.image_waiting THEN 'waiting'
+  WHEN r.status IN ('succeeded','partial') AND EXISTS(SELECT 1 FROM organization_current_image_runs ir
+    WHERE (ir.user_id,ir.run_id)=(r.user_id,r.id)) THEN 'included' END)) FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
  'generated_title',(SELECT generated_title FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'generated_summary',(SELECT summary FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'filename',a.filename,'mime_type',a.mime_type,
@@ -466,6 +478,11 @@ func (s *Server) collectionView(row collectionRow) collectionRow {
 			code := aiTrialUnavailable
 			row.Organization.ErrorCode = &code
 		}
+	}
+	if s.Organizer.Enabled && s.Organizer.Trial.allows(row.UserID) && row.UserAIEnabled &&
+		row.HasImageMaterial && s.Organizer.Images.allows(row.UserID, row.UserRole) && row.UserAIConsent != textImageConsentVersion {
+		status := contract.OrganizationImageMaterialStatus("consent_required")
+		row.Organization.ImageMaterialStatus = &status
 	}
 	return row
 }

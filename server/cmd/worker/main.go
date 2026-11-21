@@ -72,6 +72,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	imageEnabled := os.Getenv("SPARK_IMAGE_ANALYSIS_ENABLED") == "true"
+	imageAdmin, err := backend.ImageAdminID(env, imageEnabled)
+	if err != nil {
+		return err
+	}
+	cfg.Images = backend.ImageOrganizationScope{Enabled: imageEnabled, AdminID: imageAdmin}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	connect, cancel := context.WithTimeout(ctx, 10*time.Second)

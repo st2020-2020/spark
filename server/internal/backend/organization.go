@@ -29,6 +29,7 @@ type Organizer struct {
 	Queue   *river.Client[pgx.Tx]
 	Enabled bool
 	Trial   AITrialScope
+	Images  ImageOrganizationScope
 }
 
 func NewOrganizer(pool *pgxpool.Pool, enabled bool, trial AITrialScope) (*Organizer, error) {
@@ -46,10 +47,10 @@ func materialAvailable(text, intent string) bool {
 // same transaction as content and River insertion. No network work occurs here.
 func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, explicit bool) (string, string, error) {
 	var enabled, excluded bool
-	var status, text, intent string
+	var status, text, intent, role, consent string
 	var deleted *time.Time
 	var cv, uv, pv int64
-	err := tx.QueryRow(ctx, `SELECT u.ai_enabled,u.status,u.ai_policy_version,c.ai_excluded,c.ai_policy_version,c.content_version,c.plain_text,c.intent,c.deleted_at FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, uid, id).Scan(&enabled, &status, &uv, &excluded, &pv, &cv, &text, &intent, &deleted)
+	err := tx.QueryRow(ctx, `SELECT u.ai_enabled,u.status,u.ai_policy_version,c.ai_excluded,c.ai_policy_version,c.content_version,c.plain_text,c.intent,c.deleted_at,u.role,COALESCE(u.ai_consent_version,'') FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, uid, id).Scan(&enabled, &status, &uv, &excluded, &pv, &cv, &text, &intent, &deleted, &role, &consent)
 	if err != nil {
 		return "", "", err
 	}
@@ -65,12 +66,23 @@ func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 		reason = "ai_excluded"
 	case deleted != nil:
 		reason = "collection_in_trash"
-	case !materialAvailable(text, intent):
-		reason = "insufficient_material"
 	}
 	if reason != "" {
 		return "", reason, nil
 	}
+	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role)
+	if err != nil {
+		return "", "", err
+	}
+	canUseImages := hasImages && consent == textImageConsentVersion
+	hasText := materialAvailable(text, intent)
+	if hasImages && !canUseImages && (explicit || !hasText) {
+		return "", "image_material_consent_required", nil
+	}
+	if !hasText && !canUseImages {
+		return "", "insufficient_material", nil
+	}
+	waitImages := canUseImages && pendingImages
 	var active string
 	err = tx.QueryRow(ctx, `SELECT id FROM organization_runs WHERE user_id=$1 AND collection_id=$2 AND content_version=$3 AND user_policy_version=$4 AND collection_policy_version=$5 AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1`, uid, id, cv, uv, pv).Scan(&active)
 	if err == nil {
@@ -92,7 +104,10 @@ func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 		return "", "", err
 	}
 	run := uuid.NewString()
-	if _, err = tx.Exec(ctx, `INSERT INTO organization_runs(id,user_id,collection_id,content_version,user_policy_version,collection_policy_version,status,stages) VALUES($1,$2,$3,$4,$5,$6,'queued','[{"name":"generate","status":"queued","attempts":0}]')`, run, uid, id, cv, uv, pv); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO organization_runs(id,user_id,collection_id,content_version,user_policy_version,collection_policy_version,status,stages,image_waiting)
+		VALUES($1,$2,$3,$4,$5,$6,'queued',CASE WHEN $7
+			THEN '[{"name":"extract_images","status":"queued","attempts":0}]'::jsonb
+			ELSE '[{"name":"generate","status":"queued","attempts":0}]'::jsonb END,$7)`, run, uid, id, cv, uv, pv, waitImages); err != nil {
 		return "", "", err
 	}
 	if _, err = o.Queue.InsertTx(ctx, tx, TextOrganizationArgs{UserID: uid, RunID: run}, &river.InsertOpts{MaxAttempts: 5, Queue: "text_organization"}); err != nil {
@@ -142,7 +157,7 @@ func (s *Server) updatePreferences(c *gin.Context) (any, error) {
 		}
 	}
 	var u userView
-	if err = tx.QueryRow(ctx, `SELECT id,email_normalized,role,status,ai_enabled,ai_policy_version,palette,theme FROM users WHERE id=$1`, uid).Scan(&u.ID, &u.Email, &u.Role, &u.Status, &u.AIEnabled, &u.AIPolicyVersion, &u.Palette, &u.Theme); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT id,email_normalized,role,status,ai_enabled,ai_policy_version,palette,theme,COALESCE(ai_consent_version,'') FROM users WHERE id=$1`, uid).Scan(&u.ID, &u.Email, &u.Role, &u.Status, &u.AIEnabled, &u.AIPolicyVersion, &u.Palette, &u.Theme, &u.AIConsentVersion); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
@@ -201,6 +216,9 @@ func (s *Server) restartOrganization(c *gin.Context) (any, error) {
 		if reason != "" {
 			if reason == aiTrialUnavailable {
 				return nil, problem(403, reason, "AI 整理暂未向此账号开放。")
+			}
+			if reason == "image_material_consent_required" {
+				return nil, problem(403, reason, "请先确认将已识别的图中文字和画面描述用于文字 AI 整理。")
 			}
 			status := 403
 			switch reason {

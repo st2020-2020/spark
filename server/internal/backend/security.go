@@ -29,14 +29,15 @@ type signedIn struct {
 	User            userView
 }
 type userView struct {
-	ID              string `json:"id"`
-	Email           string `json:"email"`
-	Role            string `json:"role"`
-	Status          string `json:"status"`
-	AIEnabled       bool   `json:"ai_enabled"`
-	AIPolicyVersion int64  `json:"ai_policy_version"`
-	Palette         string `json:"palette"`
-	Theme           string `json:"theme"`
+	ID               string `json:"id"`
+	Email            string `json:"email"`
+	Role             string `json:"role"`
+	Status           string `json:"status"`
+	AIEnabled        bool   `json:"ai_enabled"`
+	AIConsentVersion string `json:"ai_consent_version,omitempty"`
+	AIPolicyVersion  int64  `json:"ai_policy_version"`
+	Palette          string `json:"palette"`
+	Theme            string `json:"theme"`
 }
 
 func current(c *gin.Context) *signedIn { return c.MustGet("session").(*signedIn) }
@@ -149,7 +150,7 @@ func (s *Server) authenticate(c *gin.Context) {
 		s.fail(c, problem(401, "session_expired", "请重新登录。"))
 		return
 	}
-	c.Set("session", &signedIn{ID: row.ID.String(), Token: token, CSRF: csrf, Expires: row.ExpiresAt.Time, User: userView{ID: row.UserID.String(), Email: row.EmailNormalized, Role: row.Role, Status: row.Status, AIEnabled: row.AiEnabled, AIPolicyVersion: row.AiPolicyVersion, Palette: row.Palette, Theme: row.Theme}})
+	c.Set("session", &signedIn{ID: row.ID.String(), Token: token, CSRF: csrf, Expires: row.ExpiresAt.Time, User: userView{ID: row.UserID.String(), Email: row.EmailNormalized, Role: row.Role, Status: row.Status, AIEnabled: row.AiEnabled, AIConsentVersion: row.AiConsentVersion, AIPolicyVersion: row.AiPolicyVersion, Palette: row.Palette, Theme: row.Theme}})
 	c.Next()
 }
 func (s *Server) csrf(c *gin.Context) {
@@ -189,7 +190,7 @@ func (s *Server) newSession(ctx context.Context, tx pgx.Tx, c *gin.Context, u us
 	return sess, err
 }
 func (s *Server) sessionResult(v *signedIn) any {
-	return gin.H{"user": v.User, "csrf_token": v.CSRF, "expires_at": v.Expires, "ai_trial_eligible": s.Organizer.Trial.allows(v.User.ID), "ai_platform_enabled": s.Organizer.Enabled}
+	return gin.H{"user": v.User, "csrf_token": v.CSRF, "expires_at": v.Expires, "ai_trial_eligible": s.Organizer.Trial.allows(v.User.ID), "ai_platform_enabled": s.Organizer.Enabled, "purge_enabled": s.Config.PurgeEnabled}
 }
 func (s *Server) rate(ctx context.Context, key string, limit int, window time.Duration) error {
 	now := time.Now().UTC().Truncate(window)

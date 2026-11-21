@@ -265,7 +265,7 @@ func (s *Server) login(c *gin.Context) (any, error) {
 	if currentHash != hash || status != "active" {
 		return nil, problem(401, "authentication_failed", "邮箱或密码不正确。")
 	}
-	u := userView{ID: user.ID.String(), Email: email, Role: user.Role, Status: user.Status, AIEnabled: user.AiEnabled, AIPolicyVersion: user.AiPolicyVersion, Palette: user.Palette, Theme: user.Theme}
+	u := userView{ID: user.ID.String(), Email: email, Role: user.Role, Status: user.Status, AIEnabled: user.AiEnabled, AIConsentVersion: user.AiConsentVersion.String, AIPolicyVersion: user.AiPolicyVersion, Palette: user.Palette, Theme: user.Theme}
 	sess, err := s.newSession(ctx, tx, c, u)
 	if err != nil {
 		return nil, err

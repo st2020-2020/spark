@@ -246,3 +246,46 @@ func TestUpgradeAddsAccountTagsAndAppearance(t *testing.T) {
 		t.Fatalf("cross-account tag association was not rejected: %v", err)
 	}
 }
+
+func TestUpgradePreservesImageMaterialAndPreviousOrganization(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:10] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,10)`)
+	user, collection, upload, attachment, extraction, run := newTestID(), newTestID(), newTestID(), newTestID(), newTestID(), newTestID()
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash,ai_enabled,ai_consent_version,image_consent_version,image_consented_at)
+		VALUES ($1,'image-upgrade@example.test','synthetic-not-a-login-hash',true,'spark-ai-tags-v1','deepseek-images-v1',now())`, user)
+	execTestSQL(t, pool, `INSERT INTO collections(id,user_id,document,plain_text,intent,content_version)
+		VALUES ($1,$2,'{}','合成正文','',2)`, collection, user)
+	execTestSQL(t, pool, `INSERT INTO uploads(id,user_id,staging_key,final_key,filename,declared_size,actual_size,mime_type,sha256,status,expires_at)
+		VALUES ($1,$2,'synthetic/staging','synthetic/final','test.png',3,3,'image/png',decode(repeat('00',32),'hex'),'attached',now())`, upload, user)
+	execTestSQL(t, pool, `INSERT INTO attachments(id,user_id,collection_id,upload_id,object_key,filename,mime_type,size_bytes,sha256,position)
+		VALUES ($1,$2,$3,$4,'synthetic/final','test.png','image/png',3,decode(repeat('00',32),'hex'),0)`, attachment, user, collection, upload)
+	execTestSQL(t, pool, `INSERT INTO extractions(id,user_id,collection_id,content_version,source_kind,source_id,attachment_id,status,text,evidence_meta,extractor_version,image_user_policy_version,image_collection_policy_version)
+		VALUES ($1,$2,$3,1,'image',$4::uuid::text,$4,'partial','合成文字','{"description":"合成画面","truncated":true}','deepseek-flash-image-v1',1,1)`, extraction, user, collection, attachment)
+	execTestSQL(t, pool, `INSERT INTO organization_runs(id,user_id,collection_id,content_version,user_policy_version,collection_policy_version,status,result)
+		VALUES ($1,$2,$3,2,1,1,'succeeded','{"title":"旧标题"}')`, run, user, collection)
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if err := Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var text, description string
+	if err := pool.QueryRow(ctx, `SELECT recognized_text,description FROM organization_image_materials
+		WHERE user_id=$1 AND collection_id=$2 AND extraction_id=$3 AND attachment_id=$4 AND content_version=1 AND status='partial'`,
+		user, collection, extraction, attachment).Scan(&text, &description); err != nil || text != "合成文字" || description != "合成画面" {
+		t.Fatalf("upgrade lost the historical attached image material: %q %q, %v", text, description, err)
+	}
+	var oldTitle string
+	if err := pool.QueryRow(ctx, `SELECT result->>'title' FROM organization_runs
+		WHERE user_id=$1 AND id=$2 AND NOT image_waiting AND image_user_policy_version IS NULL`, user, run).Scan(&oldTitle); err != nil || oldTitle != "旧标题" {
+		t.Fatalf("upgrade misidentified old organization as using image material: %q, %v", oldTitle, err)
+	}
+}

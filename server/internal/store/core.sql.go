@@ -12,23 +12,24 @@ import (
 )
 
 const getSession = `-- name: GetSession :one
-SELECT s.id, s.user_id,s.csrf_digest,s.expires_at,u.email_normalized,u.role,u.status,u.ai_enabled,u.ai_policy_version,u.palette,u.theme
+SELECT s.id, s.user_id,s.csrf_digest,s.expires_at,u.email_normalized,u.role,u.status,u.ai_enabled,u.ai_policy_version,u.palette,u.theme,COALESCE(u.ai_consent_version,'') AS ai_consent_version
 FROM sessions s JOIN users u ON u.id=s.user_id
 WHERE s.token_digest=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.status='active'
 `
 
 type GetSessionRow struct {
-	ID              pgtype.UUID
-	UserID          pgtype.UUID
-	CsrfDigest      []byte
-	ExpiresAt       pgtype.Timestamptz
-	EmailNormalized string
-	Role            string
-	Status          string
-	AiEnabled       bool
-	AiPolicyVersion int64
-	Palette         string
-	Theme           string
+	ID               pgtype.UUID
+	UserID           pgtype.UUID
+	CsrfDigest       []byte
+	ExpiresAt        pgtype.Timestamptz
+	EmailNormalized  string
+	Role             string
+	Status           string
+	AiEnabled        bool
+	AiPolicyVersion  int64
+	Palette          string
+	Theme            string
+	AiConsentVersion string
 }
 
 func (q *Queries) GetSession(ctx context.Context, tokenDigest []byte) (GetSessionRow, error) {
@@ -46,6 +47,7 @@ func (q *Queries) GetSession(ctx context.Context, tokenDigest []byte) (GetSessio
 		&i.AiPolicyVersion,
 		&i.Palette,
 		&i.Theme,
+		&i.AiConsentVersion,
 	)
 	return i, err
 }

@@ -64,6 +64,7 @@ func New(ctx context.Context, cfg Config, pool *pgxpool.Pool) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.Organizer.Images = ImageOrganizationScope{Enabled: cfg.ImageAnalysisEnabled, AdminID: cfg.ImageAdminID}
 	s.dummyHash, err = s.passwordHash("unused-dummy-password-" + uuid.NewString())
 	return s, err
 }

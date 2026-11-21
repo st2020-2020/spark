@@ -241,6 +241,25 @@ type OrganizationCurrent struct {
 	UpdatedAt      pgtype.Timestamptz
 }
 
+type OrganizationCurrentImageRun struct {
+	UserID pgtype.UUID
+	RunID  pgtype.UUID
+}
+
+type OrganizationImageMaterial struct {
+	UserID                 pgtype.UUID
+	CollectionID           pgtype.UUID
+	ExtractionID           pgtype.UUID
+	AttachmentID           pgtype.UUID
+	ContentVersion         int64
+	ImageUserPolicyVersion pgtype.Int8
+	Status                 string
+	RecognizedText         []byte
+	Description            []byte
+	Position               int32
+	Role                   string
+}
+
 type OrganizationPendingSuggestion struct {
 	UserID       pgtype.UUID
 	CollectionID pgtype.UUID
@@ -267,6 +286,8 @@ type OrganizationRun struct {
 	CompletedAt             pgtype.Timestamptz
 	CreatedAt               pgtype.Timestamptz
 	UpdatedAt               pgtype.Timestamptz
+	ImageWaiting            bool
+	ImageUserPolicyVersion  pgtype.Int8
 }
 
 type Project struct {
