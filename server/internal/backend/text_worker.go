@@ -66,10 +66,14 @@ type textSource struct {
 	ID   string `json:"source_id"`
 	Text string `json:"text"`
 }
+
+const textTagConsentVersion = "spark-ai-tags-v1"
+
 type textInput struct {
-	Sources  []textSource   `json:"sources"`
-	Projects []projectInput `json:"projects"`
-	Tags     []modelTag     `json:"tags,omitempty"`
+	tagConsent bool
+	Sources    []textSource   `json:"sources"`
+	Projects   []projectInput `json:"projects"`
+	Tags       []modelTag     `json:"tags,omitempty"`
 }
 type modelTag struct {
 	ID       string  `json:"tag_id"`
@@ -186,7 +190,8 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		return r, input, false, tx.Commit(ctx)
 	}
 	var text, intent string
-	if err = tx.QueryRow(ctx, `SELECT plain_text,intent FROM collections WHERE user_id=$1 AND id=$2`, r.UID, r.CollectionID).Scan(&text, &intent); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT c.plain_text,c.intent,coalesce(u.ai_consent_version=$3,false)
+ FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, r.UID, r.CollectionID, textTagConsentVersion).Scan(&text, &intent, &input.tagConsent); err != nil {
 		return r, input, false, err
 	}
 	if !materialAvailable(text, intent) {
@@ -226,9 +231,11 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 	if err != nil {
 		return r, input, false, err
 	}
-	input.Tags, err = textTagCandidates(ctx, tx, r, text, intent)
-	if err != nil {
-		return r, input, false, err
+	if input.tagConsent {
+		input.Tags, err = textTagCandidates(ctx, tx, r, text, intent)
+		if err != nil {
+			return r, input, false, err
+		}
 	}
 	if _, err = tx.Exec(ctx, `UPDATE organization_runs SET status='running',started_at=COALESCE(started_at,now()),updated_at=now() WHERE user_id=$1 AND id=$2`, r.UID, r.ID); err != nil {
 		return r, input, false, err
@@ -488,9 +495,12 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 			return false, err
 		}
 	}
-	tagsChanged, err := applyOrganizationTags(ctx, tx, r, result.Tags)
-	if err != nil {
-		return false, err
+	var tagsChanged bool
+	if input.tagConsent {
+		tagsChanged, err = applyOrganizationTags(ctx, tx, r, result.Tags)
+		if err != nil {
+			return false, err
+		}
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO organization_current(user_id,collection_id,run_id,content_version,generated_title,summary) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(collection_id) DO UPDATE SET run_id=excluded.run_id,content_version=excluded.content_version,generated_title=excluded.generated_title,summary=excluded.summary,updated_at=now()`, r.UID, r.CollectionID, r.ID, r.CV, result.Title, result.Summary); err != nil {
 		return false, err

@@ -83,6 +83,8 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 `POST /tags` 接受 `{name}`，需要 CSRF 与幂等键。先去首尾空白并做 Unicode NFC，长度 1 至 24 个字符。用户内规范名按 Unicode 大小写折叠去重，同名返回 `409 duplicate_resource`。`PATCH /tags/{id}` 接受 `{name,expected_name}`，`DELETE /tags/{id}?expected_name=` 成功返回 204，原名称不符返回 `409 tag_conflict`。删除清除该标签的所有关联并保留收藏正文。
 
+文字自动整理仅在当前授权版本为 `spark-ai-tags-v1` 时发送匹配标签并应用结果。旧授权继续使用原有的文字整理范围；用户可在设置页查看新版说明后主动更新。
+
 新建收藏使用 `tag_ids` 指定已有标签。修改标签用 `PATCH /collections/{id}/tags`，与项目共用 `base_decision_version`，支持 include、exclude、reset。详情返回用于编辑的全部决定，卡片、标签计数和筛选只显示有效关联。`GET /collections` 和 `GET /search` 均可按 `tag_id` 筛选，关键词命中有效标签时来源标记为 `tag`。JSON 导出保留标签目录及收藏的标签决定，Markdown 在收藏内列出标签决定。
 
 登录、注册和 `GET /auth/session` 的 `user` 返回 `palette` 与 `theme`。可使用 `PATCH /me/preferences` 单独更新任意一项，配色取 `mint`、`sea`、`matcha`、`sakura`，明暗取 `system`、`light`、`dark`，默认 `mint` 和 `system`。旧客户端原有的 AI 设置请求仍有效，两个偏好组互不覆盖。

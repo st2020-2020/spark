@@ -225,6 +225,10 @@ func TestTextWorkerUsesOnlyOwnedTagsAndExistingBudget(t *testing.T) {
 			http.Error(w, "invalid fixture request", http.StatusBadRequest)
 			return
 		}
+		if len(input.Tags) == 0 {
+			modelReply(w, "stop", `{"title":"写作","tag_candidates":[],"project_candidates":[]}`, map[string]int{"prompt_tokens": 100, "completion_tokens": 40})
+			return
+		}
 		entered <- input.Tags
 		<-release
 		result := map[string]any{"title": "写作研究", "tag_candidates": []modelTag{
@@ -260,6 +264,12 @@ func TestTextWorkerUsesOnlyOwnedTagsAndExistingBudget(t *testing.T) {
 	}
 	a.do("PUT", "/admin/budgets", map[string]any{"base_version": 1,
 		"platform_daily_units": 1000000, "user_daily_units": 1000000, "worker_concurrency": 1}, "").want(t, 200)
+	legacy := uuid.NewString()
+	a.do("POST", "/collections", collectionInput(legacy, material), uuid.NewString()).want(t, 201)
+	if len(waitOrganization(t, a, legacy, "succeeded")["tags"].([]any)) != 0 {
+		t.Fatal("legacy consent applied tags")
+	}
+	a.do("PATCH", "/me/preferences", map[string]any{"ai_enabled": true, "consent_version": textTagConsentVersion}, "").want(t, 200)
 	id := uuid.NewString()
 	a.do("POST", "/collections", collectionInput(id, material), uuid.NewString()).want(t, 201)
 	select {
@@ -282,7 +292,7 @@ func TestTextWorkerUsesOnlyOwnedTagsAndExistingBudget(t *testing.T) {
 	}
 	usage := a.do("GET", "/me/usage", nil, "").want(t, 200)
 	if len(decisions) != 2 || decisions[keep] != "auto" || decisions[exclude] != "rejected" ||
-		hits.Load() != 1 || usage["settled_units"] != float64(180) || usage["reserved_units"] != float64(0) {
+		hits.Load() != 2 || usage["settled_units"] != float64(360) || usage["reserved_units"] != float64(0) {
 		t.Fatal("label application changed the human decision or billed an extra call")
 	}
 }

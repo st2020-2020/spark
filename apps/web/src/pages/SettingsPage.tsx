@@ -171,6 +171,11 @@ export function SettingsPage() {
                       : '由平台统一管理模型、密钥与费用，无需个人配置模型或 API Key；可随时关闭，或在单条收藏详情页排除。'}
                 </span>
               </div>
+              {user?.ai_enabled && aiPlatformEnabled && aiTrialEligible && (
+                <button type="button" className="sp-btn sp-btn--sm" onClick={() => setAiConsentOpen(true)}>
+                  查看整理授权
+                </button>
+              )}
               {(user?.ai_enabled || (aiPlatformEnabled && aiTrialEligible)) && (
                 <button
                   type="button"
