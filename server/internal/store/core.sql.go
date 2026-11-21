@@ -12,7 +12,7 @@ import (
 )
 
 const getSession = `-- name: GetSession :one
-SELECT s.id, s.user_id,s.csrf_digest,s.expires_at,u.email_normalized,u.role,u.status,u.ai_enabled,u.ai_policy_version
+SELECT s.id, s.user_id,s.csrf_digest,s.expires_at,u.email_normalized,u.role,u.status,u.ai_enabled,u.ai_policy_version,u.palette,u.theme
 FROM sessions s JOIN users u ON u.id=s.user_id
 WHERE s.token_digest=$1 AND s.revoked_at IS NULL AND s.expires_at>now() AND u.status='active'
 `
@@ -27,6 +27,8 @@ type GetSessionRow struct {
 	Status          string
 	AiEnabled       bool
 	AiPolicyVersion int64
+	Palette         string
+	Theme           string
 }
 
 func (q *Queries) GetSession(ctx context.Context, tokenDigest []byte) (GetSessionRow, error) {
@@ -42,12 +44,14 @@ func (q *Queries) GetSession(ctx context.Context, tokenDigest []byte) (GetSessio
 		&i.Status,
 		&i.AiEnabled,
 		&i.AiPolicyVersion,
+		&i.Palette,
+		&i.Theme,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email_normalized, password_hash, status, role, ai_enabled, ai_policy_version, created_at, updated_at, ai_consent_at, ai_consent_version, image_consent_version, image_consented_at, image_policy_version, resurface_enabled FROM users WHERE email_normalized = $1
+SELECT id, email_normalized, password_hash, status, role, ai_enabled, ai_policy_version, created_at, updated_at, ai_consent_at, ai_consent_version, image_consent_version, image_consented_at, image_policy_version, resurface_enabled, palette, theme FROM users WHERE email_normalized = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, emailNormalized string) (User, error) {
@@ -69,6 +73,8 @@ func (q *Queries) GetUserByEmail(ctx context.Context, emailNormalized string) (U
 		&i.ImageConsentedAt,
 		&i.ImagePolicyVersion,
 		&i.ResurfaceEnabled,
+		&i.Palette,
+		&i.Theme,
 	)
 	return i, err
 }

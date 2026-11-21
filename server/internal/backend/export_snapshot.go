@@ -141,3 +141,41 @@ func (s exportSnapshot) decisions() iter.Seq2[exportDecision, error] {
 		return d, err
 	})
 }
+
+func (s exportSnapshot) tags() iter.Seq2[contract.Tag, error] {
+	return exportPages(s.ctx, exportPageSize, func(after *contract.Tag) (pgx.Rows, error) {
+		var id any
+		if after != nil {
+			id = after.Id
+		}
+		return s.tx.Query(s.ctx, tagSelect+`WHERE t.user_id=$1 AND ($2::uuid IS NULL OR t.id>$2)
+			ORDER BY t.id LIMIT $3`, s.uid, id, exportPageSize)
+	}, func(r pgx.CollectableRow) (contract.Tag, error) {
+		tag, _, err := scanTag(r)
+		return tag, err
+	})
+}
+
+type exportTagDecision struct {
+	collectionID string
+	contract.TagAssociation
+}
+
+func (s exportSnapshot) tagDecisions() iter.Seq2[exportTagDecision, error] {
+	return exportPages(s.ctx, exportPageSize, func(after *exportTagDecision) (pgx.Rows, error) {
+		var cid, tagID any
+		if after != nil {
+			cid, tagID = after.collectionID, after.TagId
+		}
+		return s.tx.Query(s.ctx, `SELECT ct.collection_id,ct.tag_id,t.name,ct.decision
+			FROM collection_tags ct JOIN tags t ON (t.user_id,t.id)=(ct.user_id,ct.tag_id)
+			JOIN collections c ON (c.user_id,c.id)=(ct.user_id,ct.collection_id)
+			WHERE ct.user_id=$1 AND c.deleted_at IS NULL
+			  AND ($2::uuid IS NULL OR (ct.collection_id,ct.tag_id)>($2,$3::uuid))
+			ORDER BY ct.collection_id,ct.tag_id LIMIT $4`, s.uid, cid, tagID, exportPageSize)
+	}, func(r pgx.CollectableRow) (exportTagDecision, error) {
+		var t exportTagDecision
+		err := r.Scan(&t.collectionID, &t.TagId, &t.Path, &t.Decision)
+		return t, err
+	})
+}

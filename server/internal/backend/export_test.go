@@ -348,8 +348,15 @@ func TestExportSnapshotCapacityAndCancellation(t *testing.T) {
 		t.Fatal(r.err)
 	}
 	empty := archiveFiles(t, r.resp)["spark-export.json"]
-	if !strings.Contains(empty, `"projects":[],"collections":[]`) {
-		t.Fatal("empty account export")
+	var decoded struct {
+		Projects    []json.RawMessage
+		Tags        []json.RawMessage
+		Collections []json.RawMessage
+	}
+	if err := json.Unmarshal([]byte(empty), &decoded); err != nil ||
+		decoded.Projects == nil || decoded.Tags == nil || decoded.Collections == nil ||
+		len(decoded.Projects)+len(decoded.Tags)+len(decoded.Collections) != 0 {
+		t.Fatal("expected empty project, tag, and collection arrays in empty account export")
 	}
 	if n := s.Pool.Stat().AcquiredConns(); n != 0 {
 		t.Fatalf("%d connections remain checked out", n)

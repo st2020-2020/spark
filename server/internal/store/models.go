@@ -113,6 +113,16 @@ type CollectionRevision struct {
 	CreatedAt      pgtype.Timestamptz
 }
 
+type CollectionTag struct {
+	UserID       pgtype.UUID
+	CollectionID pgtype.UUID
+	TagID        pgtype.UUID
+	Decision     string
+	RunID        pgtype.UUID
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
+}
+
 type DailyBudget struct {
 	Scope         string
 	OwnerKey      string
@@ -297,6 +307,15 @@ type Session struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type Tag struct {
+	ID             pgtype.UUID
+	UserID         pgtype.UUID
+	Name           string
+	NormalizedName string
+	CreatedAt      pgtype.Timestamptz
+	UpdatedAt      pgtype.Timestamptz
+}
+
 type Upload struct {
 	ID               pgtype.UUID
 	UserID           pgtype.UUID
@@ -352,6 +371,8 @@ type User struct {
 	ImageConsentedAt    pgtype.Timestamptz
 	ImagePolicyVersion  int64
 	ResurfaceEnabled    bool
+	Palette             string
+	Theme               string
 }
 
 type UserChangeCounter struct {

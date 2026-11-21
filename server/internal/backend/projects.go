@@ -132,7 +132,7 @@ func (s *Server) listProjects(c *gin.Context) (any, error) {
 		t = cur.Time
 		id = cur.ID
 	}
-	rows, err := s.Pool.Query(c.Request.Context(), projectSelect+`WHERE p.user_id=$1 AND ($2::text='' OR p.state=$2) AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, uid, c.Query("state"), t, id, limit+1)
+	rows, err := s.Pool.Query(c.Request.Context(), projectSelect+`WHERE p.user_id=$1 AND ($2::text='' OR p.state=$2) AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) AND ($6::text='' OR strpos(lower(p.name),lower($6))>0) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, uid, c.Query("state"), t, id, limit+1, strings.TrimSpace(c.Query("q")))
 	if err != nil {
 		return nil, err
 	}

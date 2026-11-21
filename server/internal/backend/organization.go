@@ -105,8 +105,11 @@ func (s *Server) updatePreferences(c *gin.Context) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if req.AiEnabled && strings.TrimSpace(value(req.ConsentVersion)) == "" {
+	if value(req.AiEnabled) && strings.TrimSpace(value(req.ConsentVersion)) == "" {
 		return nil, problem(422, "validation_failed", "开启 AI 前请确认资料处理说明。")
+	}
+	if req.AiEnabled == nil && req.ConsentVersion != nil {
+		return nil, problem(422, "validation_failed", "同意版本须与 AI 设置一起提交。")
 	}
 	ctx := c.Request.Context()
 	tx, err := s.userTx(c)
@@ -120,18 +123,26 @@ func (s *Server) updatePreferences(c *gin.Context) (any, error) {
 	if err = tx.QueryRow(ctx, `SELECT ai_enabled,COALESCE(ai_consent_version,'') FROM users WHERE id=$1 FOR UPDATE`, uid).Scan(&old, &oldConsent); err != nil {
 		return nil, err
 	}
-	if old != req.AiEnabled || req.AiEnabled && oldConsent != value(req.ConsentVersion) {
-		if _, err = tx.Exec(ctx, `UPDATE users SET ai_enabled=$2,ai_policy_version=ai_policy_version+1,ai_consent_at=CASE WHEN $2 THEN now() ELSE ai_consent_at END,ai_consent_version=CASE WHEN $2 THEN $3 ELSE ai_consent_version END,updated_at=now() WHERE id=$1`, uid, req.AiEnabled, value(req.ConsentVersion)); err != nil {
+	if req.AiEnabled != nil && (old != *req.AiEnabled || *req.AiEnabled && oldConsent != value(req.ConsentVersion)) {
+		if _, err = tx.Exec(ctx, `UPDATE users SET ai_enabled=$2,ai_policy_version=ai_policy_version+1,ai_consent_at=CASE WHEN $2 THEN now() ELSE ai_consent_at END,ai_consent_version=CASE WHEN $2 THEN $3 ELSE ai_consent_version END,updated_at=now() WHERE id=$1`, uid, *req.AiEnabled, value(req.ConsentVersion)); err != nil {
 			return nil, err
 		}
-		if !req.AiEnabled {
+		if !*req.AiEnabled {
 			if _, err = tx.Exec(ctx, `UPDATE organization_runs SET status='skipped',error_code='ai_disabled',updated_at=now(),completed_at=now() WHERE user_id=$1 AND status='queued'`, uid); err != nil {
 				return nil, err
 			}
 		}
 	}
+	if req.Palette != nil || req.Theme != nil {
+		if _, err = tx.Exec(ctx, `UPDATE users SET palette=COALESCE(NULLIF($2,''),palette),
+			theme=COALESCE(NULLIF($3,''),theme),updated_at=now()
+			WHERE id=$1 AND (palette<>COALESCE(NULLIF($2,''),palette)
+				OR theme<>COALESCE(NULLIF($3,''),theme))`, uid, string(value(req.Palette)), string(value(req.Theme))); err != nil {
+			return nil, err
+		}
+	}
 	var u userView
-	if err = tx.QueryRow(ctx, `SELECT id,email_normalized,role,status,ai_enabled,ai_policy_version FROM users WHERE id=$1`, uid).Scan(&u.ID, &u.Email, &u.Role, &u.Status, &u.AIEnabled, &u.AIPolicyVersion); err != nil {
+	if err = tx.QueryRow(ctx, `SELECT id,email_normalized,role,status,ai_enabled,ai_policy_version,palette,theme FROM users WHERE id=$1`, uid).Scan(&u.ID, &u.Email, &u.Role, &u.Status, &u.AIEnabled, &u.AIPolicyVersion, &u.Palette, &u.Theme); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
