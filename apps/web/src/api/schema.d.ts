@@ -153,7 +153,10 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        /** 更新 AI 偏好 */
+        /**
+         * 更新账号的 AI 或外观偏好
+         * @description 只更新显式提供的偏好。原有 AI 请求保持兼容；修改外观不改变 AI 同意状态。
+         */
         patch: operations["updatePreferences"];
         trace?: never;
     };
@@ -367,10 +370,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** 搜索用户标签 */
+        /** 分页搜索当前账号的标签 */
         get: operations["listTags"];
         put?: never;
-        /** 创建层级标签 */
+        /** 创建当前账号的平级标签 */
         post: operations["createTag"];
         delete?: never;
         options?: never;
@@ -388,7 +391,11 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * 按原名称条件删除标签及其关联
+         * @description 删除标签和相关决定，保留收藏正文。原名称已变更时返回 409。
+         */
+        delete: operations["deleteTag"];
         options?: never;
         head?: never;
         /** 按原名称条件重命名标签 */
@@ -1039,6 +1046,8 @@ export interface components {
             status: "active" | "disabled";
             ai_enabled: boolean;
             ai_policy_version: number;
+            palette?: components["schemas"]["Palette"];
+            theme?: components["schemas"]["Theme"];
         };
         SessionResult: {
             user: components["schemas"]["User"];
@@ -1095,8 +1104,10 @@ export interface components {
             new_password: string;
         };
         Preferences: {
-            ai_enabled: boolean;
+            ai_enabled?: boolean;
             consent_version?: string;
+            palette?: components["schemas"]["Palette"];
+            theme?: components["schemas"]["Theme"];
         };
         ActivityDay: {
             /** Format: date */
@@ -1159,17 +1170,16 @@ export interface components {
             updated_at: string;
         };
         TagCreate: {
+            /** @description 去除首尾空白并按 Unicode NFC 规范化后，须为 1 至 24 个 Unicode 字符。 */
             name: string;
-            /** Format: uuid */
-            parent_id?: string;
         };
         Tag: {
             name: string;
             /** Format: uuid */
-            parent_id?: string;
-            /** Format: uuid */
             id: string;
+            /** @description v0.6 平级标签的显示名称。 */
             path: string;
+            /** @description 关联此标签的本人未删除收藏数量。 */
             collection_count: number;
         };
         UploadRequest: {
@@ -1553,6 +1563,7 @@ export interface components {
             items: components["schemas"]["Session"][];
         };
         TagRename: {
+            /** @description 去除首尾空白并按 Unicode NFC 规范化后，须为 1 至 24 个 Unicode 字符。 */
             name: string;
             expected_name: string;
         };
@@ -1599,6 +1610,19 @@ export interface components {
         UndoProjectDecision: {
             operation_key: string;
             base_decision_version: number;
+        };
+        /** @enum {string} */
+        Palette: "mint" | "sea" | "matcha" | "sakura";
+        /** @enum {string} */
+        Theme: "system" | "light" | "dark";
+        TagDecisionUpdate: {
+            base_decision_version: number;
+            operations: {
+                /** Format: uuid */
+                id: string;
+                /** @enum {string} */
+                action: "include" | "exclude" | "reset";
+            }[];
         };
     };
     responses: never;
@@ -2272,6 +2296,8 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 state?: "active" | "paused" | "completed";
+                /** @description 按项目名称字面包含匹配，不区分大小写。 */
+                q?: string;
             };
             header?: never;
             path?: never;
@@ -2460,6 +2486,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Tag"];
                 };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteTag: {
+        parameters: {
+            query: {
+                expected_name: string;
+            };
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
             default: {
@@ -3164,7 +3223,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["AssociationUpdate"];
+                "application/json": components["schemas"]["TagDecisionUpdate"];
             };
         };
         responses: {

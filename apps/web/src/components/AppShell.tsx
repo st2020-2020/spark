@@ -24,6 +24,8 @@ import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
 import { projectToneClass } from '../lib/projectTone';
 import { BrandLink, SparkGlyph } from './Brand';
+import { CommandPalette } from './CommandPalette';
+import { TagNavigation } from './Tags';
 import { ActivityCalendar } from './ActivityCalendar';
 import { QuickCaptureSheet } from './QuickCaptureSheet';
 
@@ -54,6 +56,7 @@ export function AppShell({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [inputFocusedMobile, setInputFocusedMobile] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
   const [captureOpen, setCaptureOpen] = useState(false);
 
   const drawerPanelRef = useRef<HTMLDivElement | null>(null);
@@ -192,18 +195,29 @@ export function AppShell({
   // "N" opens quick capture from anywhere, unless the person is typing or a dialog is open.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() !== 'n' || event.isComposing || event.keyCode === 229) return;
-      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.shiftKey) return;
       const target = event.target;
       if (
         target instanceof HTMLElement &&
-        (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+        target.closest('input, textarea, select, [contenteditable="true"], [role="menu"], [role="listbox"]')
       ) {
         return;
       }
-      if (document.querySelector('[aria-modal="true"]')) return;
-      event.preventDefault();
-      quickCaptureRef.current();
+      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="dialog"]')) return;
+      const key = event.key.toLowerCase();
+      if (event.metaKey || event.ctrlKey) {
+        if (key === 'k') { event.preventDefault(); setCommandOpen(true); }
+        return;
+      }
+      if (key === 'n') { event.preventDefault(); quickCaptureRef.current(); }
+      if (key === 'j' || key === 'k') {
+        const cards = Array.from(document.querySelectorAll<HTMLElement>('main [data-keyboard-card]'));
+        if (!cards.length) return;
+        const current = cards.findIndex(c => c.contains(document.activeElement));
+        const next = current < 0 ? (key === 'j' ? 0 : cards.length - 1)
+          : Math.max(0, Math.min(cards.length - 1, current + (key === 'j' ? 1 : -1)));
+        event.preventDefault(); cards[next].focus();
+      }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
@@ -294,6 +308,8 @@ export function AppShell({
           </li>
         )}
       </ul>
+      <TagNavigation />
+      <button type="button" className="sp-nav-link" onClick={() => { setDrawerOpen(false); setCommandOpen(true); }}>命令面板 <kbd>⌘/Ctrl K</kbd></button>
     </>
   );
 
@@ -467,6 +483,7 @@ export function AppShell({
         </button>
       </nav>
 
+      {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} />}
       <QuickCaptureSheet open={captureOpen} onClose={() => setCaptureOpen(false)} />
 
       {/* Tablet side drawer / phone bottom sheet — one panel, two presentations. */}

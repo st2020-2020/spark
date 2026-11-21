@@ -10,6 +10,7 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import type { LoginRequest, RegisterRequest, SessionResult, User } from '../api/types';
 import { isApiErrorCode } from '../api/errors';
+import { showAccountAppearance, type PaletteId, type ThemePref } from '../lib/appearance';
 import { clearUserDrafts } from '../lib/drafts';
 import { useApi } from './ApiContext';
 
@@ -28,7 +29,9 @@ interface AuthContextValue extends AuthState {
   login: (body: LoginRequest) => Promise<SessionResult>;
   register: (body: RegisterRequest) => Promise<SessionResult>;
   logout: (options?: { clearDrafts?: boolean }) => Promise<void>;
-  setUser: (user: User) => void;
+  applyAiPreferences: (user: User) => void;
+  saveAppearance: (patch: { palette?: PaletteId; theme?: ThemePref }) => Promise<void>;
+  appearancePending: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -46,12 +49,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     sessionError: null,
   });
 
+  const [appearancePending, setAppearancePending] = useState(false);
+  const appearanceRequest = useRef<symbol | null>(null);
+  useEffect(() => {
+    const user = state.user;
+    showAccountAppearance(user ? { palette: user.palette ?? 'mint', theme: user.theme ?? 'system' } : null);
+    return () => showAccountAppearance(null);
+  }, [state.user]);
+
   const sessionGeneration = useRef(0);
   const currentUserIdRef = useRef<string | null>(null);
 
   const applySession = useCallback(
     (session: SessionResult) => {
       if (currentUserIdRef.current && currentUserIdRef.current !== session.user.id) {
+        appearanceRequest.current = null;
+        setAppearancePending(false);
         queryClient.clear();
       }
       sessionGeneration.current += 1;
@@ -75,6 +88,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sessionGeneration.current += 1;
       currentUserIdRef.current = null;
       api.setCsrfToken(null);
+      appearanceRequest.current = null;
+      setAppearancePending(false);
       queryClient.clear();
       setState({
         user: null,
@@ -158,9 +173,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [api, clearSessionState, state.user?.id],
   );
 
-  const setUser = useCallback((user: User) => {
-    setState((prev) => ({ ...prev, user }));
+  const applyAiPreferences = useCallback((user: User) => {
+    setState((prev) => prev.user?.id === user.id ? { ...prev, user: {
+      ...prev.user, ai_enabled: user.ai_enabled, ai_policy_version: user.ai_policy_version,
+    } } : prev);
   }, []);
+
+  const saveAppearance = async (patch: { palette?: PaletteId; theme?: ThemePref }) => {
+    if (appearanceRequest.current) throw new Error('外观设置正在保存。');
+    const request = Symbol();
+    appearanceRequest.current = request;
+    setAppearancePending(true);
+    try {
+      const updated = await api.updatePreferences(patch);
+      if (appearanceRequest.current !== request || updated.id !== currentUserIdRef.current) return;
+      if ((patch.palette && patch.palette !== updated.palette) || (patch.theme && patch.theme !== updated.theme)) {
+        throw new Error('服务器未保存外观设置。');
+      }
+      sessionGeneration.current += 1;
+      setState(prev => prev.user?.id === updated.id ? { ...prev, user: {
+        ...prev.user, palette: updated.palette, theme: updated.theme,
+      } } : prev);
+    } finally {
+      if (appearanceRequest.current === request) {
+        appearanceRequest.current = null;
+        setAppearancePending(false);
+      }
+    }
+  };
 
   return (
     <AuthContext.Provider
@@ -170,7 +210,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         register,
         logout,
-        setUser,
+        applyAiPreferences, saveAppearance, appearancePending,
       }}
     >
       {children}

@@ -17,7 +17,7 @@ export function AIConsentModal({
   onEnabled?: () => void;
 }) {
   const api = useApi();
-  const { setUser } = useAuth();
+  const { applyAiPreferences } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -28,7 +28,7 @@ export function AIConsentModal({
         consent_version: SPARK_AI_CONSENT_VERSION,
       }),
     onSuccess: (updatedUser) => {
-      setUser(updatedUser);
+      applyAiPreferences(updatedUser);
       onClose();
       void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
       pushToast({ message: '已开启 AI 自动整理' });

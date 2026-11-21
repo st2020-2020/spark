@@ -12,10 +12,6 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import {
   PALETTES,
-  applyPalette,
-  applyThemePreference,
-  readPalette,
-  readThemePref,
   type PaletteId,
   type ThemePref,
 } from '../lib/appearance';
@@ -23,12 +19,15 @@ import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/for
 
 export function SettingsPage() {
   const api = useApi();
-  const { user, setUser, logout, aiTrialEligible, aiPlatformEnabled } = useAuth();
+  const { user, applyAiPreferences, logout, saveAppearance, appearancePending, aiTrialEligible, aiPlatformEnabled } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
-  const [themePref, setThemePref] = useState<ThemePref>(() => readThemePref());
-  const [palette, setPalette] = useState<PaletteId>(() => readPalette());
+  const themePref = user?.theme ?? 'system';
+  const palette = user?.palette ?? 'mint';
+  function chooseAppearance(patch: { palette?: PaletteId; theme?: ThemePref }) {
+    void saveAppearance(patch).catch(error => pushToast({ message: getFriendlyErrorMessage(error), tone: 'error' }));
+  }
   const [aiConsentOpen, setAiConsentOpen] = useState(false);
 
   const usageQuery = useQuery({
@@ -45,7 +44,7 @@ export function SettingsPage() {
     mutationFn: (params: { ai_enabled: boolean; consent_version?: string }) =>
       api.updatePreferences(params),
     onSuccess: (updatedUser) => {
-      setUser(updatedUser);
+      applyAiPreferences(updatedUser);
       setAiConsentOpen(false);
       pushToast({
         message: updatedUser.ai_enabled ? '已开启 AI 自动整理' : '已关闭 AI 自动整理',
@@ -91,6 +90,11 @@ export function SettingsPage() {
           </div>
         </section>
 
+        <section className="sp-card" aria-label="键盘快捷键">
+          <h2 className="sp-card-title">键盘快捷键</h2>
+          <p><kbd>J</kbd> / <kbd>K</kbd> 选择下一条或上一条收藏。纸条获得焦点后，<kbd>Enter</kbd> 打开，<kbd>E</kbd> 编辑，<kbd>R</kbd> 切换已读。</p>
+          <p><kbd>N</kbd> 记一条，<kbd>⌘/Ctrl K</kbd> 打开命令面板。编辑正文时用 <kbd>#</kbd> 选标签，<kbd>@</kbd> 选项目。</p>
+        </section>
         <ResurfaceSetting />
 
         <section className="sp-card" aria-label="界面外观">
@@ -102,10 +106,8 @@ export function SettingsPage() {
                 type="button"
                 className="sp-palette-option"
                 aria-pressed={palette === p.id}
-                onClick={() => {
-                  setPalette(p.id);
-                  applyPalette(p.id);
-                }}
+                disabled={appearancePending}
+                onClick={() => chooseAppearance({ palette: p.id })}
               >
                 <span className="sp-palette-swatches" aria-hidden="true">
                   {p.swatches.map((color) => (
@@ -130,10 +132,8 @@ export function SettingsPage() {
                 type="button"
                 className="sp-segmented-btn"
                 aria-pressed={themePref === pref}
-                onClick={() => {
-                  setThemePref(pref);
-                  applyThemePreference(pref);
-                }}
+                disabled={appearancePending}
+                onClick={() => chooseAppearance({ theme: pref })}
               >
                 <Icon size={15} strokeWidth={2} aria-hidden="true" />
                 <span>{label}</span>

@@ -11,6 +11,7 @@ export interface CollectionDraft {
   manualTitle: string;
   projectIds: string[];
   tagIds: string[];
+  associationNames?: Record<string, string>;
   aiExcluded: boolean;
   updatedAt: string;
 }
@@ -75,6 +76,12 @@ export function clearUserDrafts(userId: string): void {
   } catch {
     // Ignore storage failure during logout cleanup
   }
+}
+
+/** File objects in an open upload queue cannot be recovered from the text draft. */
+export function confirmLeavingImageDraft(): boolean {
+  return !document.querySelector('[data-pending-images]') ||
+    window.confirm('离开后，未保存的图片需要重新选择。仍要离开吗？');
 }
 
 export function useBeforeUnloadWarning(enabled: boolean): void {

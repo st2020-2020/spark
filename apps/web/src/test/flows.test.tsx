@@ -306,17 +306,18 @@ describe('Spark Web key flows', () => {
     await loginAsAdmin(user, adapter);
     await screen.findByText('note.example.com');
 
-    // Global Cmd/Ctrl+K focuses header search and Escape restores previous focus
+    // The command palette restores focus; ordinary search stays available.
     const unreadTab = screen.getByRole('button', { name: '未读' });
     unreadTab.focus();
     fireEvent.keyDown(window, { key: 'k', metaKey: true });
-    const searchInput = screen.getByLabelText('搜索收藏');
-    expect(searchInput).toHaveFocus();
-    fireEvent.keyDown(searchInput, { key: 'Escape' });
+    const command = screen.getByRole('combobox', { name: '搜索收藏、项目或命令' });
+    expect(command).toHaveFocus();
+    fireEvent.keyDown(command, { key: 'Escape' });
     expect(unreadTab).toHaveFocus();
 
     // Quick search IME Enter does not jump; normal submit jumps to /collections?q=...
-    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    const searchInput = screen.getByLabelText('搜索收藏');
+    searchInput.focus();
     fireEvent.compositionStart(searchInput);
     fireEvent.keyDown(searchInput, { key: 'Enter', isComposing: true, keyCode: 229 });
     expect(screen.getByRole('heading', { name: '收件箱' })).toBeInTheDocument();

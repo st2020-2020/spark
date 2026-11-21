@@ -20,11 +20,6 @@ interface PageHeaderProps {
   autoFocusSearch?: boolean;
 }
 
-function isMacPlatform(): boolean {
-  if (typeof navigator === 'undefined') return false;
-  return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent);
-}
-
 export function PageHeader({
   title,
   subtitle,
@@ -51,42 +46,12 @@ export function PageHeader({
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const isComposingRef = useRef(false);
 
-  const shortcutHint = isMacPlatform() ? '⌘K' : 'Ctrl K';
 
   useEffect(() => {
     if (autoFocusSearch && inputRef.current) {
       inputRef.current.focus();
     }
   }, [autoFocusSearch]);
-
-  useEffect(() => {
-    if (!showSearch) return;
-    const onGlobalKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) return;
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        const input = inputRef.current;
-        if (!input) return;
-        event.preventDefault();
-        const isHiddenOnMobile =
-          (formRef.current && window.getComputedStyle(formRef.current).display === 'none') ||
-          (!searchAlwaysVisible &&
-            typeof window.matchMedia === 'function' &&
-            window.matchMedia('(max-width: 767px)').matches);
-        if (isHiddenOnMobile) {
-          navigate('/collections?focus=search');
-          return;
-        }
-        const active = document.activeElement;
-        if (active instanceof HTMLElement && active !== input) {
-          previousFocusRef.current = active;
-        }
-        input.focus();
-        input.select();
-      }
-    };
-    window.addEventListener('keydown', onGlobalKeyDown);
-    return () => window.removeEventListener('keydown', onGlobalKeyDown);
-  }, [navigate, searchAlwaysVisible, showSearch]);
 
   const setQuery = (next: string) => {
     if (isControlled) {
@@ -185,7 +150,7 @@ export function PageHeader({
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={handleInputKeyDown}
                 />
-                {currentQ ? (
+                {currentQ && (
                   <button
                     type="button"
                     className="sp-search-clear"
@@ -194,10 +159,6 @@ export function PageHeader({
                   >
                     <X size={14} strokeWidth={2} aria-hidden="true" />
                   </button>
-                ) : (
-                  <kbd className="sp-kbd-hint" aria-hidden="true">
-                    {shortcutHint}
-                  </kbd>
                 )}
               </div>
             </form>

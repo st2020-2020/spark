@@ -1,0 +1,40 @@
+/* Capture controls use the same paper, ink and interaction colors as the journal. */
+.sp-mention, .sp-command-list {
+  max-height: min(18rem, 38dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sp-mention {
+  padding: 4px;
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-control);
+  margin-block: 4px;
+}
+.sp-mention p { color: var(--sp-muted); font-size: var(--sp-text-sm); padding-inline: 8px; }
+.sp-mention [role="option"], .sp-command-list [role="option"] {
+  display: block;
+  width: 100%;
+  text-align: start;
+  padding: 8px 12px;
+  overflow-wrap: anywhere;
+  border-radius: var(--sp-radius-xs);
+  color: var(--sp-fg);
+}
+.sp-mention [aria-selected="true"], .sp-command-list [aria-selected="true"],
+.sp-mention [role="option"]:hover, .sp-command-list [role="option"]:hover { background: var(--sp-accent); color: var(--sp-accent-fg); }
+.sp-command-list { margin-block-start: 8px; }
+.sp-tag {
+  color: var(--sp-primary);
+  font-size: var(--sp-text-sm);
+  overflow-wrap: anywhere;
+  padding: 3px 5px;
+}
+.sp-tag-nav { padding-block: 6px; }
+.sp-tag-nav nav { max-height: 14rem; overflow: auto; }
+.sp-tag-nav small { margin-inline-start: auto; }
+.sp-share-preview { width: min(100%, 21rem); max-height: 46dvh; object-fit: contain; align-self: center; margin-inline: auto; }
+[data-keyboard-card]:focus-visible { outline: 2px solid var(--sp-primary); outline-offset: 2px; }
+@media (max-width: 767px) {
+  .sp-mention [role="option"], .sp-command-list [role="option"] { min-height: 44px; }
+}

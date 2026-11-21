@@ -1,3 +1,4 @@
+import { confirmLeavingImageDraft } from '../lib/drafts';
 import { CollectionLink, useRecordOpened } from './CollectionLink';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -103,6 +104,7 @@ export function CollectionCard({
     mutationFn: () =>
       api.trashCollection(collection.id, { base_resource_version: collection.resource_version }),
     onSuccess: (trashed) => {
+      void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setMenuOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -119,6 +121,7 @@ export function CollectionCard({
           void queryClient.invalidateQueries({ queryKey: ['projects'] });
           void queryClient.invalidateQueries({ queryKey: ['project'] });
           void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+          void queryClient.invalidateQueries({ queryKey: ['tags'] });
           pushToast({ message: '已恢复收藏' });
         },
       });
@@ -142,7 +145,20 @@ export function CollectionCard({
   const hasImage = collection.content_types.includes('image');
 
   return (
-    <article className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
+    <article data-keyboard-card tabIndex={0} aria-label={collection.display_title}
+      onKeyDown={e => {
+        if (e.target !== e.currentTarget || e.nativeEvent.isComposing || e.keyCode === 229 ||
+            e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.repeat) return;
+        const key = e.key.toLowerCase();
+        if (key === 'enter' || key === 'e') {
+          e.preventDefault();
+          if (!confirmLeavingImageDraft()) return;
+          recordOpened(collection.id);
+          navigate(`/collections/${collection.id}`, { state: { ...detailState, edit: key === 'e' } });
+        } else if (key === 'r' && !toggleReadMutation.isPending) {
+          e.preventDefault(); toggleReadMutation.mutate();
+        }
+      }} className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
       <div className="sp-note-meta">
         <time dateTime={collection.created_at} title={formatDateTime(collection.created_at)}>
           {timeStyle === 'clock'
@@ -328,6 +344,8 @@ export function CollectionCard({
       })()}
 
       <div className="sp-note-footer">
+        {collection.tags.filter(t => t.decision !== 'rejected').map(t => <Link key={t.tag_id} className="sp-tag"
+          to={`/collections?tag_id=${t.tag_id}`} state={{ tagName: t.path }}>#{t.path}</Link>)}
         {effectiveProjects.map((p) => (
           <Link
             key={p.project_id}

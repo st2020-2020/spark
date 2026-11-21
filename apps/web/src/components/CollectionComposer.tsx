@@ -25,6 +25,8 @@ import {
 import { generateIdempotencyKey, generateUuid } from '../lib/idempotency';
 import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import { AIConsentModal } from './AIConsentModal';
+import { projectToneClass } from '../lib/projectTone';
+import { MentionPicker } from './MentionPicker';
 import { RichTextEditor } from './RichTextEditor';
 import { UploadQueueTray } from './UploadQueueTray';
 
@@ -77,6 +79,9 @@ export function CollectionComposer({
   const [originalUrl, setOriginalUrl] = useState(initialDraft.originalUrl);
   const [manualTitle, setManualTitle] = useState(initialDraft.manualTitle);
   const [projectIds, setProjectIds] = useState<string[]>(initialDraft.projectIds);
+  const [tagIds, setTagIds] = useState<string[]>(initialDraft.tagIds ?? []);
+  const [names, setNames] = useState(initialDraft.associationNames ?? {});
+  const [creatingTag, setCreatingTag] = useState(false);
   const [aiExcluded, setAiExcluded] = useState(Boolean(initialDraft.aiExcluded));
 
   const imageAnalysisQuery = useQuery({
@@ -179,8 +184,8 @@ export function CollectionComposer({
   }, [allProjects, projectSearch]);
 
   const selectedProjects = useMemo(
-    () => allProjects.filter((p) => projectIds.includes(p.id)),
-    [allProjects, projectIds],
+    () => projectIds.map(id => ({ id, name: allProjects.find(p => p.id === id)?.name ?? names[id] ?? '已选项目' })),
+    [allProjects, projectIds, names],
   );
 
   const plainText = useMemo(() => derivePlainText(documentValue), [documentValue]);
@@ -197,7 +202,7 @@ export function CollectionComposer({
     uploader.readyUploadIds.length > 0;
 
   const isDirty =
-    hasContent ||
+    hasContent || tagIds.length > 0 || projectIds.some(id => id !== defaultProjectId) ||
     uploader.items.length > 0 ||
     intent.trim().length > 0 ||
     manualTitle.trim().length > 0;
@@ -218,8 +223,7 @@ export function CollectionComposer({
       intent,
       originalUrl,
       manualTitle,
-      projectIds,
-      tagIds: [],
+      projectIds, tagIds, associationNames: names,
       aiExcluded,
       updatedAt: new Date().toISOString(),
     });
@@ -234,7 +238,7 @@ export function CollectionComposer({
     intent,
     originalUrl,
     manualTitle,
-    projectIds,
+    projectIds, tagIds, names,
     aiExcluded,
   ]);
 
@@ -246,6 +250,8 @@ export function CollectionComposer({
     setOriginalUrl('');
     setManualTitle('');
     setProjectIds(defaultProjectId ? [defaultProjectId] : []);
+    setTagIds([]);
+    setNames({});
     setAiExcluded(false);
     setShowIntentField(false);
     setShowUrlField(false);
@@ -289,7 +295,7 @@ export function CollectionComposer({
           manual_title: manualTitle.trim() || undefined,
           upload_ids: uploader.readyUploadIds,
           project_ids: projectIds,
-          tag_ids: [],
+          tag_ids: tagIds,
           ai_excluded: aiExcluded,
         },
         idempotencyKey,
@@ -314,6 +320,7 @@ export function CollectionComposer({
       const isQueued =
         created.organization.status === 'queued' || created.organization.status === 'running';
       pushToast({ message: isQueued ? '已保存，正在后台整理' : '已保存' });
+      void queryClient.invalidateQueries({ queryKey: ['tags'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
@@ -328,7 +335,7 @@ export function CollectionComposer({
   });
 
   const handleSubmit = useCallback(() => {
-    if (saveMutation.isPending) return;
+    if (saveMutation.isPending || creatingTag) return;
     if (uploader.hasInFlight) {
       setSubmitError('请等待图片上传完成或取消后再保存。');
       return;
@@ -339,7 +346,7 @@ export function CollectionComposer({
     }
     setSubmitError(null);
     saveMutation.mutate();
-  }, [saveMutation, uploader.hasFailed, uploader.hasInFlight]);
+  }, [saveMutation, creatingTag, uploader.hasFailed, uploader.hasInFlight]);
 
   const toggleProject = (pid: string) => {
     setProjectIds((prev) => (prev.includes(pid) ? prev.filter((id) => id !== pid) : [...prev, pid]));
@@ -380,7 +387,7 @@ export function CollectionComposer({
     projectPickerOpen;
 
   const saveDisabled =
-    saveMutation.isPending ||
+    saveMutation.isPending || creatingTag ||
     !hasContent ||
     uploader.hasInFlight ||
     uploader.hasFailed ||
@@ -390,6 +397,7 @@ export function CollectionComposer({
 
   return (
     <section
+      data-pending-images={uploader.items.length || undefined}
       className={`sp-composer ${effectiveActivated ? 'sp-composer--active' : ''} ${
         variant === 'sheet' ? 'sp-composer--sheet' : ''
       }`}
@@ -412,6 +420,11 @@ export function CollectionComposer({
 
       <div ref={composerRef} onFocusCapture={activateComposer} onBlurCapture={handleBlurCapture}>
       <RichTextEditor
+        suggestions={editor => <MentionPicker editor={editor} onBusy={setCreatingTag} onChoose={choice => {
+          setNames(old => ({ ...old, [choice.id]: choice.name }));
+          const setIds = choice.kind === '#' ? setTagIds : setProjectIds;
+          setIds(old => old.includes(choice.id) ? old : [...old, choice.id]);
+        }} />}
         value={documentValue}
         onChange={setDocumentValue}
         onShortcutSubmit={handleSubmit}
@@ -547,15 +560,19 @@ export function CollectionComposer({
               disabled={saveMutation.isPending}
             />
 
-            {(selectedProjects.length > 0 || aiExcluded) && (
+            {(selectedProjects.length > 0 || tagIds.length > 0 || aiExcluded) && (
               <div className="sp-composer-chips">
+                {tagIds.map(id => <button type="button" className="sp-tag" key={id} disabled={saveMutation.isPending}
+                  aria-label={`移除标签 ${names[id] ?? '已选标签'}`}
+                  onClick={() => setTagIds(old => old.filter(t => t !== id))}>#{names[id] ?? '已选标签'} ×</button>)}
                 {selectedProjects.map((proj) => (
-                  <span key={proj.id} className="sp-pill sp-pill--green">
+                  <span key={proj.id} className={`sp-tape ${projectToneClass(proj.id)}`}>
                     <Folder size={13} strokeWidth={2} aria-hidden="true" />
-                    <span>{proj.name}</span>
+                    <span className="sp-truncate">{proj.name}</span>
                     <button
                       type="button"
                       className="sp-chip-remove"
+                      disabled={saveMutation.isPending}
                       aria-label={`移除项目 ${proj.name}`}
                       onClick={() => toggleProject(proj.id)}
                     >

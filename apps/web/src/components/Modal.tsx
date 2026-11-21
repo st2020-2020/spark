@@ -20,11 +20,20 @@ export function Modal({
   useEffect(() => {
     if (!open) return;
     const prevActive = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus();
+    const panel = panelRef.current;
+    (panel?.querySelector<HTMLElement>('[data-dialog-autofocus]') ?? panel)?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229 || event.defaultPrevented) return;
+      if (event.key === 'Tab' && panel) {
+        const focusable = Array.from(panel.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), a[href], select, textarea, [tabindex="0"]')).filter(el => el.tabIndex >= 0 && !el.hidden);
+        const first = focusable[0], last = focusable.at(-1);
+        if (event.shiftKey && (document.activeElement === first || document.activeElement === panel)) {
+          event.preventDefault(); last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
       if (event.key === 'Escape') {
         event.stopPropagation();
         onCloseRef.current();

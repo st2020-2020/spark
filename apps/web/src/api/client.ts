@@ -54,6 +54,7 @@ import type {
   SessionResult,
   Tag,
   TagCreate,
+  TagDecisionUpdate,
   TagPage,
   TagRename,
   UndoProjectDecision,
@@ -142,7 +143,7 @@ export interface SparkApi {
     idempotencyKey?: string,
   ): Promise<Collection>;
   undoProjectDecisions(id: string, body: UndoProjectDecision): Promise<Collection>;
-  updateTagDecisions(id: string, body: AssociationUpdate): Promise<Collection>;
+  updateTagDecisions(id: string, body: TagDecisionUpdate): Promise<Collection>;
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
   getExtractions(id: string): Promise<ExtractionList>;

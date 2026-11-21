@@ -86,6 +86,7 @@ export function TrashPage() {
     mutationFn: (col: CollectionSummary) =>
       api.restoreCollection(col.id, { base_resource_version: col.resource_version }),
     onSuccess: (_restored, col) => {
+      void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setActionError(null);
       queryClient.setQueryData<InfiniteData<CollectionPage>>(
         ['collections', 'trash'],
