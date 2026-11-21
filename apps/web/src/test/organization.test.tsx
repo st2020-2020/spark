@@ -394,6 +394,38 @@ describe('Platform AI organization & UI states', () => {
     expect(getOrgSpy).not.toHaveBeenCalled();
   }, 12000);
 
+  it.each(['confirm', 'ignore in another tab', 'ignore after reconnect'])('synchronizes a mounted empty suggestions tab through %s', async mode => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.updatePreferences({ ai_enabled: true, consent_version: 'v1' });
+    const project = await api.createProject({ name: '白板计划', description: '', focus_points: [] }, 'project');
+    renderApp(['/unclassified?tab=suggested'], api);
+    await screen.findByText('没有待确认的 AI 建议');
+    const list = vi.spyOn(api, 'listCollections');
+    const col = await api.createCollection({ id: crypto.randomUUID(), intent: '白板计划',
+      document: { schema_version: 1, content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '会议手稿' }] }] } },
+      upload_ids: [], project_ids: [], tag_ids: [] }, 'item');
+    await screen.findByText('建议归入：白板计划');
+    expect(screen.getByRole('button', { name: /待确认 AI 建议/ })).toHaveTextContent('1');
+    expect(list.mock.calls.every(([query]) => query?.has_suggestion === true)).toBe(true);
+    if (mode === 'confirm') {
+      await ui.click(screen.getByRole('button', { name: '加入项目' }));
+    } else {
+      const fresh = await api.getCollection(col.id);
+      await api.updateProjectDecisions(col.id, { base_decision_version: fresh.decision_version,
+        operations: [{ id: project.id, action: 'exclude' }] });
+      act(() => {
+        if (mode === 'ignore after reconnect') api.emitMockOrganizationReady();
+        else api.emitMockOrganizationEvent({ collection_id: col.id, status: 'succeeded', has_suggestion: false });
+      });
+    }
+    await screen.findByText('没有待确认的 AI 建议');
+    expect(screen.queryByText('建议归入：白板计划')).toBeNull();
+    expect(screen.queryByRole('button', { name: '忽略' })).toBeNull();
+    expect(screen.getByRole('button', { name: /待确认 AI 建议/ })).not.toHaveTextContent('1');
+  });
+
   it('recovers pending suggestions cleanly after returning offline and respects trial eligibility', async () => {
     const user = userEvent.setup();
     const adapter = createTestAdapter();
@@ -639,6 +671,12 @@ describe('organization display helpers', () => {
       expect(res.kind).toBe('failed');
       expect(res.description).not.toMatch(/http|stack|openai|deepseek/i);
     }
+
+    const timedOut = classifyOrganizationDisplay({ organization: { ...baseOrg, status: 'failed', error_code: 'image_material_timeout' },
+      aiEnabled: true, aiExcluded: false, projects: [] });
+    expect(timedOut.description).toContain('等待图片识别超时，本次整理未使用图片材料');
+    expect(timedOut.canTrigger).toBe(true);
+    expect(timedOut.noProjectSuggestion).toBe(false);
 
     const partialProjectChanged = classifyOrganizationDisplay({
       organization: {

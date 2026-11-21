@@ -1,3 +1,4 @@
+import { infiniteQueryOptions } from '@tanstack/react-query';
 import type { SparkApi } from '../api/client';
 import type {
   AssociationUpdate,
@@ -7,6 +8,18 @@ import type {
   ProjectAssociation,
   Stage,
 } from '../api/types';
+
+export const pendingSuggestionKey = ['collections', 'unclassified', 'suggested'] as const;
+
+export function pendingSuggestionOptions(api: SparkApi) {
+  return infiniteQueryOptions({
+    queryKey: pendingSuggestionKey as readonly string[],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => api.listCollections({ scope: 'active', has_suggestion: true, cursor: pageParam, limit: 20 }, signal),
+    getNextPageParam: page => page.next_cursor,
+    staleTime: 60_000,
+  });
+}
 
 export type OrganizationDisplayKind =
   | 'excluded'
@@ -120,6 +133,8 @@ export function organizationErrorMessage(errorCode?: string): string {
       return '本次生成结果未通过内容与引用校验，已自动舍弃并保留原文，可点击重试整理。';
     case 'usage_uncertain':
       return '本次整理计费确认超时，原文已安全保存，请稍后刷新或重试整理。';
+    case 'image_material_timeout':
+      return '等待图片识别超时，本次整理未使用图片材料。识别完成后可重新整理。';
     case 'queue_expired':
       return '整理排队超时未执行，原文已完整保存，可点击重试整理。';
     case 'attempts_exhausted':

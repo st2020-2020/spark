@@ -7,10 +7,10 @@ import {
   type ReactNode,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { type InfiniteData, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type InfiniteData, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
 import type { CollectionPage, CollectionSummary, OrganizationEvent } from '../api/types';
 import { useRecordOpened } from '../components/CollectionLink';
-import { isOrganizationActiveStatus } from '../lib/organization';
+import { isOrganizationActiveStatus, pendingSuggestionKey, pendingSuggestionOptions } from '../lib/organization';
 import { useApi } from './ApiContext';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
@@ -65,13 +65,7 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
   locationPathRef.current = location.pathname;
   navigateRef.current = navigate;
 
-  const pendingSuggestionsQuery = useQuery({
-    queryKey: ['collections', 'pending-suggestions'],
-    queryFn: ({ signal }) =>
-      api.listCollections({ scope: 'active', has_suggestion: true, limit: 20 }, signal),
-    enabled: Boolean(user?.id),
-    staleTime: 60_000,
-  });
+  const pendingSuggestionsQuery = useInfiniteQuery({ ...pendingSuggestionOptions(api), enabled: Boolean(user?.id) });
 
   const syncOrganizationViews = useCallback(() => {
     const now = Date.now();
@@ -145,6 +139,18 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
       const detailKey = ['collection', event.collection_id];
       // The SSE payload has no extraction results, stages or image-use status. Read the snapshots together.
       void queryClient.invalidateQueries({ queryKey: ['collection-extractions', event.collection_id], exact: true });
+      const pending = queryClient.getQueryData<InfiniteData<CollectionPage>>(pendingSuggestionKey);
+      const loaded = pending?.pages.flatMap(page => page.items) ?? [];
+      // A removed suggestion may sit beyond the loaded pages while still contributing to the badge.
+      const pendingFilter = { queryKey: pendingSuggestionKey, exact: true };
+      const fetching = queryClient.isFetching(pendingFilter) > 0;
+      if (!pending && fetching) {
+        // Invalidation alone reuses the first request while it is still in flight.
+        void queryClient.cancelQueries(pendingFilter).then(() => queryClient.invalidateQueries(pendingFilter));
+      } else if (event.has_suggestion || loaded.some(item => item.id === event.collection_id) ||
+          (pending?.pages[0].total ?? 0) > loaded.length || fetching) {
+        void queryClient.invalidateQueries(pendingFilter);
+      }
       if (isOrganizationActiveStatus(event.status)) {
         void queryClient.invalidateQueries({ queryKey: detailKey, exact: true });
         notifiedSuggestionsRef.current.delete(event.collection_id);
@@ -214,16 +220,6 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
         const filters = query.queryKey[2];
         return !!filters && typeof filters === 'object' && 'tagId' in filters && !!filters.tagId;
       } });
-      const cachedPending = queryClient.getQueryData<CollectionPage>([
-        'collections',
-        'pending-suggestions',
-      ]);
-      const wasInPendingList = Boolean(
-        cachedPending?.items.some((item) => item.id === event.collection_id),
-      );
-      if (event.has_suggestion || wasInPendingList) {
-        void queryClient.invalidateQueries({ queryKey: ['collections', 'pending-suggestions'] });
-      }
       void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
 
       if (!event.has_suggestion) {
@@ -324,9 +320,9 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
     };
   }, [api, user?.id]);
 
-  const pendingSuggestions = pendingSuggestionsQuery.data?.items ?? [];
+  const pendingSuggestions = pendingSuggestionsQuery.data?.pages[0]?.items ?? [];
   const pendingSuggestionsCount =
-    pendingSuggestionsQuery.data?.total ?? pendingSuggestions.length;
+    pendingSuggestionsQuery.data?.pages[0]?.total ?? pendingSuggestionsQuery.data?.pages.reduce((n, page) => n + page.items.length, 0) ?? 0;
 
   return (
     <OrganizationEventsContext.Provider

@@ -3,8 +3,8 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
 import type { CollectionSummary } from '../api/types';
-import { getFriendlyErrorMessage } from '../api/errors';
-import { decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
+import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
+import { pendingSuggestionOptions, decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
@@ -24,15 +24,9 @@ export function UnclassifiedPage() {
 
   const activeTab = searchParams.get('tab') === 'suggested' ? 'suggested' : 'all';
 
-  const unclassifiedQuery = useInfiniteQuery({
-    queryKey: ['collections', 'unclassified', activeTab],
-    queryFn: ({ pageParam, signal }) =>
-      api.listCollections(
-        activeTab === 'suggested'
-          ? { scope: 'active', has_suggestion: true, cursor: pageParam, limit: 30 }
-          : { scope: 'unclassified', cursor: pageParam, limit: 30 },
-        signal,
-      ),
+  const unclassifiedQuery = useInfiniteQuery(activeTab === 'suggested' ? pendingSuggestionOptions(api) : {
+    queryKey: ['collections', 'unclassified', 'all'],
+    queryFn: ({ pageParam, signal }) => api.listCollections({ scope: 'unclassified', cursor: pageParam, limit: 30 }, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor,
   });
@@ -56,18 +50,24 @@ export function UnclassifiedPage() {
       pushToast({
         message: vars.action === 'include' ? '已归入项目' : '已忽略建议关联',
       });
-      void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['projects'] });
-      void queryClient.invalidateQueries({ queryKey: ['project'] });
-      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
+      void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
+      if (vars.action === 'include') {
+        void queryClient.invalidateQueries({ queryKey: ['projects'] });
+        void queryClient.invalidateQueries({ queryKey: ['project', vars.projectId] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
+      }
     },
     onError: (err, vars) => {
       if (err instanceof StaleSuggestionError) {
         markSuggestionPromptHandled(vars.collectionId);
         queryClient.setQueryData(['collection', vars.collectionId], err.freshCollection);
-        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
         setActionError(err.message);
         return;
+      }
+      if (isApiErrorCode(err, 'suggestion_conflict') || isApiErrorCode(err, 'decision_conflict')) {
+        void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
       }
       setActionError(getFriendlyErrorMessage(err));
     },
