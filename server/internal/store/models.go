@@ -123,6 +123,26 @@ type CollectionTag struct {
 	UpdatedAt    pgtype.Timestamptz
 }
 
+type CurrentImageExtraction struct {
+	ID                           pgtype.UUID
+	UserID                       pgtype.UUID
+	CollectionID                 pgtype.UUID
+	ContentVersion               int64
+	SourceKind                   string
+	SourceID                     string
+	AttachmentID                 pgtype.UUID
+	Status                       string
+	Text                         pgtype.Text
+	SourceTitle                  pgtype.Text
+	EvidenceMeta                 []byte
+	ErrorCode                    pgtype.Text
+	ExtractorVersion             string
+	CreatedAt                    pgtype.Timestamptz
+	UpdatedAt                    pgtype.Timestamptz
+	ImageUserPolicyVersion       pgtype.Int8
+	ImageCollectionPolicyVersion pgtype.Int8
+}
+
 type DailyBudget struct {
 	Scope         string
 	OwnerKey      string

@@ -115,7 +115,15 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 `GET /me/image-analysis` 返回账户的 `enabled`、当前账号的 `available`（生产要求平台已启用、UUID 匹配且仍是管理员） 与当前 `required_consent_version`。`PUT /me/image-analysis` 开启时须携带该版本，没有资格的账号请求开启返回 403 `image_analysis_unavailable`。关闭时发送 `{"enabled":false}`，即使失去资格也可以撤回。授权文案须明确说明会将此后新保存的确认图片的视觉副本发送给第三方 DeepSeek，用于识别图中文字并生成 AI 画面描述。副本应用方向并去除 EXIF、GPS 与注释，用户仍可下载原件。图片使用独立授权，并复用收藏的 AI 排除设置。
 
-`GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID，`text` 与 `image_description` 分别是图中文字和 AI 画面描述。服务截断时返回 `partial` 和 `truncated: true`，客户端可提示结果可能不完整。缺少可靠用量时保留待核对额度。账户或平台额度不足时作业为 `blocked`，`error_code=quota_exceeded`，原收藏已保存。结果随有效附件保留，编辑备注和重排复用结果。图片项的 content_version 为首次绑定版本，读取时按附件 ID 对应。移除附件或进入回收站后，提取接口和搜索均省略该结果。搜索片段分别标为 `image_text`、`image_description`。
+`GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID。`text` 为逐字识别的标题和代表性摘录，`image_description` 为简短的中文主题和 AI 画面描述。触及输出上限时，存在可验证的完整字段则返回 `partial / image_output_truncated`；两个字段均空则为 `failed / image_output_truncated_empty`，两种结果均带 `truncated: true`。服务正常完成的两个空字段表示未识别到可用内容。格式错误为 `failed / invalid_model_output`。可信用量按实际结算，缺少可靠用量时保留待核对金额。额度不足为 `blocked / quota_exceeded`。
+
+结果随有效附件保留，编辑备注和重排复用结果。图片项的 `content_version` 为首次绑定版本。移除附件或收藏进入回收站后，提取接口和搜索均省略该结果。搜索片段分别标为 `image_text`、`image_description`。
+
+`POST /attachments/{id}/image-analysis/retry` 接受 `base_extraction_id` 与 `consent_version: "deepseek-image-retry-v1"`，需要 CSRF 和幂等键。界面先确认本次将这张已保存图片的视觉副本再次发给 DeepSeek，服务端复核独立图片授权、账号资格、收藏排除和预算。当前附件仍有效时，目标提取 ID 在普通正文编辑后继续有效。旧版 `partial`、`truncated: true` 且两个字段均空的结果与新版空截断均可申请。符合条件的当前提取返回 `image_retry_available: true`。
+
+首次受理返回 `202` 和新恢复作业，提取列表只显示同一个附件的当前作业。对初次目标的重复请求以及原请求键的重放返回同一作业当前结果。恢复作业若因额度不足且零派发、零账务而终止，提取项再次返回 `image_retry_available: true`。用户可明确确认，提交该恢复作业 ID 及新幂等键重排同一作业。已派发作业的后续请求只读取结果。前端沿用收藏的 `organization` SSE 更新提取列表。
+
+拒绝状态包括 `403 image_analysis_unavailable`、`image_consent_required`、`ai_excluded`，跨账号或附件已移除为 404。回收站为 `409 collection_in_trash`，不匹配的提取 ID 为 `409 extraction_conflict`，材料不满足恢复条件为 `422 image_retry_not_available`。开关关闭为 `503 integration_not_configured`，配置超出图片 Token 上界为 `503 image_token_limit`，当前余额不足为 `429 quota_exceeded`。
 
 文字整理经 `PATCH /me/preferences` 提交 `ai_enabled: true` 和 `consent_version: "spark-ai-image-material-v1"` 同意将合格附件的图中文字和 AI 画面描述一并发给第三方文字模型用于整理。独立图片授权、试用资格和单条排除同时有效时才使用。文字 Worker 仅收到派生文本。登录、会话恢复和偏好更新的用户字段 `ai_consent_version` 返回最近的文字授权版本，启用状态由 `ai_enabled` 表示。
 
