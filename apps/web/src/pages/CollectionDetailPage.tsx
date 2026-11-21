@@ -231,20 +231,27 @@ export function CollectionDetailPage() {
     urlRetryContextRef.current = nextContext;
   }, [id, collection?.content_version, collection?.original_url, matchedUrlExtraction?.id]);
 
+  const readMutation = useMutation({
+    scope: { id: `read:${userId}:${id}` },
+    mutationFn: ({ read }: { read: boolean; automatic?: boolean }) => api.setReadState(id, { read }),
+    onSuccess: updated => {
+      queryClient.setQueryData<Collection>(['collection', id], previous =>
+        previous && { ...previous, read_at: updated.read_at });
+      void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+    },
+    onError: (error, intent) => {
+      if (!intent.automatic) pushToast({ message: getFriendlyErrorMessage(error), tone: 'error' });
+    },
+  });
+  const { mutate: setRead } = readMutation;
+  const displayedRead = readMutation.isPending ? readMutation.variables.read : Boolean(collection?.read_at);
+
   useEffect(() => {
-    if (!collection || collection.read_at || collection.deleted_at) return;
-    if (autoReadMarkedRef.current === collection.id) return;
+    if (!collection || autoReadMarkedRef.current === collection.id) return;
     autoReadMarkedRef.current = collection.id;
-    void api
-      .setReadState(collection.id, { read: true })
-      .then((updated) => {
-        queryClient.setQueryData(['collection', id], updated);
-        void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      })
-      .catch(() => {
-        // Non-fatal
-      });
-  }, [api, collection, id, queryClient]);
+    if (!collection.read_at && !collection.deleted_at) setRead({ read: true, automatic: true });
+  }, [collection, setRead]);
 
   const orgRetryContext = collection
     ? `${collection.id}:${collection.content_version}:${collection.ai_excluded ? '1' : '0'}`
@@ -407,15 +414,6 @@ export function CollectionDetailPage() {
         if (latest.isSuccess) setConflictServerDoc(latest.data);
         else setEditError('服务器版本读取失败。本地草稿已保留，可重新进入编辑获取最新版本。');
       }
-    },
-  });
-
-  const toggleReadMutation = useMutation({
-    mutationFn: (read: boolean) => api.setReadState(id, { read }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(['collection', id], updated);
-      void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
   });
 
@@ -754,16 +752,16 @@ export function CollectionDetailPage() {
             <button
               type="button"
               className="sp-btn--quiet"
-              onClick={() => toggleReadMutation.mutate(!collection.read_at)}
-              disabled={toggleReadMutation.isPending}
+              onClick={() => setRead({ read: !displayedRead })}
+              disabled={readMutation.isPending && !readMutation.variables.automatic}
             >
-              {collection.read_at ? (
+              {displayedRead ? (
                 <Mail size={16} strokeWidth={2} aria-hidden="true" />
               ) : (
                 <MailOpen size={16} strokeWidth={2} aria-hidden="true" />
               )}
               <span className="sp-collapse-label">
-                {collection.read_at ? '标为未读' : '标为已读'}
+                {displayedRead ? '标为未读' : '标为已读'}
               </span>
             </button>
             {!isEditing && (

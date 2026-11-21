@@ -15,6 +15,33 @@ function mount(api: TestAdapter, path: string) {
   return render(<MemoryRouter initialEntries={[path]}><AppProviders api={api}><AppRoutes /></AppProviders></MemoryRouter>);
 }
 
+it.each([true, false])('preserves an explicit unread choice when initially read=%s', async initiallyRead => {
+  const api = await admin();
+  const ui = userEvent.setup();
+  const col = await api.createCollection({
+    id: crypto.randomUUID(), document: { schema_version: 1, content: { type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: '留待再读' }] },
+    ] } }, intent: '', upload_ids: [], project_ids: [], tag_ids: [],
+  }, 'read-state');
+  if (initiallyRead) await api.setReadState(col.id, { read: true });
+  const write = api.setReadState.bind(api);
+  const writes = vi.spyOn(api, 'setReadState');
+  let release = () => {};
+  if (!initiallyRead) {
+    const delay = new Promise<void>(resolve => { release = resolve; });
+    writes.mockImplementationOnce(async (id, body) => { await delay; return write(id, body); });
+  }
+  mount(api, initiallyRead ? '/collections' : '/collections?read=false');
+  await ui.click(await screen.findByRole('link', { name: '查看全文' }));
+  await ui.click(await screen.findByRole('button', { name: '标为未读' }));
+  release();
+  await waitFor(() => expect(writes.mock.calls.map(([, body]) => body.read)).toEqual(initiallyRead ? [false] : [true, false]));
+  await screen.findByRole('button', { name: '标为已读' });
+  await ui.click(screen.getByRole('link', { name: '返回' }));
+  expect(await screen.findByRole('img', { name: '未读' })).toBeVisible();
+  expect((await api.getCollection(col.id)).read_at).toBeFalsy();
+});
+
 it('uses server day boundaries even on a 25-hour day and clears the filter', async () => {
   const api = await admin();
   const selected = { date: '2026-11-01', count: 0, created_from: '2026-11-01T04:00:00Z', created_to: '2026-11-02T05:00:00Z' };
