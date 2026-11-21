@@ -481,7 +481,7 @@ export interface paths {
         put?: never;
         /**
          * 重新识别一个结果为空且截断的已保存附件
-         * @description 须单独确认将该附件的视觉副本再次发给 DeepSeek。每个符合条件的附件至多登记一次，重复请求返回同一作业的当前结果。
+         * @description 须单独确认将该附件的视觉副本再次发给 DeepSeek。每个符合条件的附件至多登记一个恢复作业。若作业因额度不足且从未派发，可用当前恢复作业 ID 和新幂等键重排同一作业。重复请求返回当前结果。
          */
         post: operations["retryImageAnalysis"];
         delete?: never;
@@ -1422,7 +1422,10 @@ export interface components {
             consent_version?: string;
         };
         ImageAnalysisRetry: {
-            /** Format: uuid */
+            /**
+             * Format: uuid
+             * @description 首次重新识别使用空截断提取 ID；因额度不足未派发时使用当前恢复作业 ID。
+             */
             base_extraction_id: string;
             /** @enum {string} */
             consent_version: "deepseek-image-retry-v1";
@@ -1449,7 +1452,7 @@ export interface components {
             error_code?: string;
             /** Format: date-time */
             updated_at: string;
-            /** @description 仅未登记恢复的空截断图片返回 true，开关和独立授权仍由服务端核验。 */
+            /** @description 未登记恢复的空截断图片，或因额度不足且从未派发的恢复作业可返回 true。服务端仍核验开关、独立授权和额度。 */
             image_retry_available?: boolean;
         };
         Revision: {

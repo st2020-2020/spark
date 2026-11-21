@@ -383,6 +383,66 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(imageConsent).not.toHaveBeenCalled();
   });
 
+  it('requeues only an undispatched quota-blocked recovery with a fresh intent key and its current ID', async () => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    api.setMockImageAnalysisBehavior({ status: 'failed', errorCode: 'image_output_truncated_empty' });
+    const col = await createImageAttachmentCollection(api);
+    const [original] = (await api.getExtractions(col.id)).items;
+    const recover = api.retryImageAnalysis.bind(api);
+    const calls = vi.spyOn(api, 'retryImageAnalysis');
+    renderWithAdapter(['/collections/' + col.id], api);
+    const panel = within(await screen.findByLabelText('图片理解结果'));
+    const confirm = async (name: string) => {
+      await ui.click(await panel.findByRole('button', { name }));
+      await ui.click(within(screen.getByRole('dialog')).getByRole('button', { name: '确认重新识别' }));
+    };
+    await confirm('重新识别这张图片');
+    await panel.findByText('正在分析图片');
+    const [job] = (await api.getExtractions(col.id)).items;
+    expect(job.id).not.toBe(original.id);
+    const block = async (code: string, available: boolean) => {
+      api.setMockCollectionExtractions(col.id, [{ ...job, status: 'blocked', error_code: code,
+        image_retry_available: available, updated_at: new Date().toISOString() }]);
+      await ui.click(panel.getByRole('button', { name: '刷新状态' }));
+      await panel.findByText(code === 'quota_exceeded' ? '今日 AI 额度已暂停' : '暂未执行');
+    };
+    await block('quota_exceeded', false);
+    expect(panel.queryByRole('button', { name: '重新排队' })).toBeNull();
+    await block('usage_uncertain', true);
+    expect(panel.queryByRole('button', { name: '重新排队' })).toBeNull();
+    await block('quota_exceeded', true);
+    expect(calls).toHaveBeenCalledTimes(1);
+
+    api.setMockImageAnalysisBehavior({ quotaExceeded: true });
+    await confirm('重新排队');
+    expect(await panel.findByRole('alert')).toHaveTextContent('额度不足');
+    api.setMockImageAnalysisBehavior({ quotaExceeded: false });
+    calls.mockImplementationOnce(async (...args) => {
+      await recover(...args);
+      throw new ApiError({ status: 0, code: 'network_error', message: '响应丢失' });
+    });
+    await confirm('重新排队');
+    expect(await panel.findByRole('alert')).toHaveTextContent('尚未确认提交结果');
+    await confirm('重新排队');
+    await panel.findByText('正在分析图片');
+    expect(calls).toHaveBeenCalledTimes(4);
+    const [first, refused, lost, replay] = calls.mock.calls;
+    expect(first[1].base_extraction_id).toBe(original.id);
+    expect(refused[1].base_extraction_id).toBe(job.id);
+    expect(lost[1].base_extraction_id).toBe(job.id);
+    expect(new Set([first[2], refused[2], lost[2]]).size).toBe(3);
+    expect(replay).toEqual(lost);
+    expect((await api.getExtractions(col.id)).items).toEqual([expect.objectContaining({ id: job.id, status: 'queued' })]);
+    await block('quota_exceeded', true);
+    await confirm('重新排队');
+    await panel.findByText('正在分析图片');
+    expect(calls.mock.calls[4][2]).not.toBe(replay[2]);
+    expect((await api.getExtractions(col.id)).items[0].id).toBe(job.id);
+  });
+
   it('reports quota refusal without hiding the original or starting a recovery on refresh', async () => {
     const ui = userEvent.setup();
     const api = createTestAdapter();

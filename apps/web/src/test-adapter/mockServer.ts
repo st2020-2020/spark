@@ -2343,10 +2343,14 @@ export function createTestAdapter(): TestAdapter {
       if (mockImageAnalysisBehavior.quotaExceeded || budgetConfig.user_daily_units <= 0) {
         throw new ApiError({ status: 429, code: 'quota_exceeded', message: '今日额度不足' });
       }
-      const queued: Extraction = { id: generateUuid(), content_version: col.content_version,
+      const requeue = current.status === 'blocked' && current.error_code === 'quota_exceeded';
+      if (current.status === 'blocked' && !requeue) {
+        throw new ApiError({ status: 422, code: 'image_retry_not_available', message: '这条记录无法重新排队' });
+      }
+      const queued: Extraction = { id: requeue ? current.id : generateUuid(), content_version: col.content_version,
         source_kind: 'image', source_id: attachmentId, status: 'queued', updated_at: new Date().toISOString() };
       col.extractions = [queued, ...col.extractions.filter(x => x.source_kind !== 'image' || x.source_id !== attachmentId)];
-      imageRecoveryByBase.set(current.id, queued.id);
+      if (!requeue) imageRecoveryByBase.set(current.id, queued.id);
       saveIdempotency(user.id, operation, key, body, queued.id);
       // Controlled tests supply the worker outcome via setMockCollectionExtractions and SSE.
       return structuredClone(queued);

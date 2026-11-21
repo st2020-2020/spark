@@ -198,8 +198,10 @@ export function ImageAnalysisPanel({
             const statusDisplay = resolveImageStatusDisplay(extraction);
             const ocrText = extraction.text?.trim() ?? '';
             const visualDesc = extraction.image_description?.trim() ?? '';
-            const eligibleResult = extraction.image_retry_available === true && isTruncatedResult(extraction) &&
-              !hasImageContent(extraction) && !isError && !aiExcluded && imagePreferences?.available === true;
+            const quotaRequeue = extraction.status === 'blocked' && extraction.error_code === 'quota_exceeded';
+            const eligibleResult = extraction.image_retry_available === true &&
+              (quotaRequeue || isTruncatedResult(extraction)) && !hasImageContent(extraction) &&
+              !isError && !aiExcluded && imagePreferences?.available === true;
             const isPending = extraction.status === 'queued' || extraction.status === 'running';
 
             return (
@@ -247,8 +249,8 @@ export function ImageAnalysisPanel({
                 )}
                 {eligibleResult && imagePreferences.enabled &&
                   imagePreferences.required_consent_version === IMAGE_ANALYSIS_CONSENT_VERSION && (
-                    <ImageRetryAction key={extraction.id} collectionId={collectionId}
-                      attachment={attachment} extractionId={extraction.id} />
+                    <ImageRetryAction key={extraction.id + ':' + extraction.updated_at} collectionId={collectionId}
+                      attachment={attachment} extraction={extraction} quotaRequeue={quotaRequeue} />
                   )}
               </div>
             );
