@@ -323,14 +323,18 @@ export function classifyOrganizationDisplay(params: {
   }
 
   if (organization.status === 'succeeded') {
+    const filed = projects.some(p => p.decision === 'auto');
+    const archive = filed && organization.image_archive_status;
+    const filedDescription = archive === 'created' ? '已新建主题项目并自动归入。可在关联项目中更改归属。'
+      : archive === 'linked' ? '已自动归入已有项目。可在关联项目中更改归属。' : undefined;
     return {
       kind: 'succeeded',
       badgeLabel: '已整理',
       pillTone: 'green',
-      description: projects.some(p => p.decision === 'suggested')
+      description: filedDescription ?? (projects.some(p => p.decision === 'suggested')
         ? '有项目建议待确认，可查看引文后加入项目或忽略。'
         : projects.length ? '本次整理已完成，当前没有待确认的项目建议。'
-        : '已完成整理，暂无匹配的项目建议；你仍可手动将本条加入项目。',
+        : '已完成整理，暂无匹配的项目建议；你仍可手动将本条加入项目。'),
       canTrigger: true,
       triggerLabel: '重新整理',
       noProjectSuggestion: !hasSuggestedOrEffective,

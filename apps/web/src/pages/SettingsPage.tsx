@@ -160,7 +160,7 @@ export function SettingsPage() {
                           : '未开启'}
                   </span>
                   {user?.ai_enabled && (
-                    <span className="sp-help">{user.ai_consent_version === SPARK_AI_CONSENT_VERSION ? '已授权在图片理解开启时使用识别结果' : '现有文字整理授权'}</span>
+                    <span className="sp-help">{user.ai_consent_version === SPARK_AI_CONSENT_VERSION ? '已授权根据图片内容自动归入或新建项目' : user.ai_consent_version === 'spark-ai-image-material-v1' ? '已授权图片材料生成项目建议' : '现有文字整理授权'}</span>
                   )}
                 </div>
                 <span className="sp-help">

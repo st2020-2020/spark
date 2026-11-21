@@ -243,13 +243,14 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     await ui.click(screen.getByRole('button', { name: '重新整理' }));
     const dialog = await screen.findByRole('dialog', { name: '更新文字整理授权' });
     expect(dialog).toHaveTextContent('第三方文字模型');
+    expect(dialog).toHaveTextContent('新建主题项目');
     expect(dialog).toHaveTextContent('图中文字和 AI 画面描述');
     await ui.click(within(dialog).getByRole('button', { name: '取消' }));
     expect(write).not.toHaveBeenCalled();
     await ui.click(screen.getByRole('button', { name: '授权使用图片识别结果' }));
     await ui.click(screen.getByRole('button', { name: '确认更新授权' }));
     await screen.findByText(/重新整理会检查已有识别结果/);
-    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-image-material-v1' });
+    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-image-notes-v1' });
     expect(restart).toHaveBeenCalledTimes(1);
     await ui.click(screen.getByRole('button', { name: '重新整理' }));
     await screen.findByText('整理排队中');
@@ -303,10 +304,57 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(screen.queryByRole('list', { name: '推荐依据摘录' })).toBeNull();
   });
 
+  it('edits the saved image paragraph, preserves conflicting input and respects removal on reload', async () => {
+    const ui = userEvent.setup(), api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    api.setMockImageAnalysisBehavior({ status: 'partial', truncated: true, text: '图号 42', imageDescription: '蓝色灯' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    const col = await createImageAttachmentCollection(api, { text: '我的原文' });
+    const snapshot = await api.setReadState(col.id, { read: true });
+    const note = { attachment_id: col.attachments[0].id, version: 1, state: 'generated' as const, text: '蓝色灯' };
+    snapshot.image_notes = [note];
+    vi.spyOn(api, 'getCollection').mockImplementation(async () => structuredClone(snapshot));
+    const write = vi.spyOn(api, 'updateImageNote').mockImplementation(async (_id, body) => {
+      if (body.base_version === 1) {
+        snapshot.image_notes = [{ ...note, text: '另一端的说明', version: 2 }];
+        throw new ApiError({ status: 409, code: 'image_note_conflict', message: '说明已更新' });
+      }
+      snapshot.image_notes = body.text.trim() ? [{ ...note, version: body.base_version + 1, state: 'edited', text: body.text }] : [];
+      return structuredClone(snapshot);
+    });
+    const retry = vi.spyOn(api, 'retryImageAnalysis');
+    const path = ['/collections/' + col.id];
+    renderWithAdapter(path, api);
+    await screen.findByText('图号 42');
+    expect(screen.getAllByText('蓝色灯')).toHaveLength(1);
+    await ui.click(screen.getByRole('button', { name: '编辑图片说明' }));
+    const editor = screen.getByRole('textbox', { name: '图片说明' });
+    await ui.clear(editor);
+    await ui.type(editor, '手写说明');
+    await ui.click(screen.getByRole('button', { name: '保存说明' }));
+    await ui.click(await screen.findByRole('button', { name: '保留输入，基于最新版编辑' }));
+    expect(editor).toHaveValue('手写说明');
+    await ui.click(screen.getByRole('button', { name: '保存说明' }));
+    await screen.findByText('手写说明');
+    expect(screen.queryByText('蓝色灯')).toBeNull();
+    await ui.click(screen.getByRole('button', { name: '编辑图片说明' }));
+    await ui.clear(screen.getByRole('textbox', { name: '图片说明' }));
+    await ui.click(screen.getByRole('button', { name: '删除说明' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    cleanup();
+    renderWithAdapter(path, api);
+    await screen.findByText('图号 42');
+    expect(screen.getByText('我的原文')).toBeVisible();
+    expect(screen.queryByText('蓝色灯')).toBeNull();
+    expect(screen.queryByText('手写说明')).toBeNull();
+    expect(write.mock.calls.map(args => args[1].base_version)).toEqual([1, 2, 3]);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
   it.each([
-    { status: 'partial', truncated: true, text: '  ', label: '输出已截断', note: '本次没有可展示的识别摘录' },
+    { status: 'partial', truncated: true, text: '  ', label: '暂无图片摘录', note: '本次没有可展示的识别摘录' },
     { status: 'failed', truncated: false, text: '', error_code: 'image_output_truncated_empty',
-      label: '输出已截断', note: '本次没有可展示的识别摘录' },
+      label: '暂无图片摘录', note: '本次没有可展示的识别摘录' },
     { status: 'succeeded', truncated: false, text: '', label: '识别完成', note: '未提取到文字或画面描述' },
     { status: 'failed', truncated: false, text: '', label: '识别失败', note: '原图' },
   ] as const)('distinguishes empty image output for $status without conflicting labels', async row => {
@@ -499,7 +547,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(await panel.findByRole('alert')).toHaveTextContent('额度不足');
     await ui.click(panel.getByRole('button', { name: '刷新状态' }));
     expect(retry).toHaveBeenCalledTimes(1);
-    expect(panel.getByText('输出已截断')).toBeVisible();
+    expect(panel.getByText('暂无图片摘录')).toBeVisible();
     expect(screen.getByRole('button', { name: /放大查看图片 whiteboard/ })).toBeVisible();
   });
 
@@ -572,7 +620,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(screen.getByText('图中文字')).toBeInTheDocument();
     expect(screen.getByText('AI 画面描述')).toBeInTheDocument();
     expect(screen.getByText('白色桌面上的产品手绘图')).toBeInTheDocument();
-    expect(screen.getByText('识别摘录（已截断）')).toBeInTheDocument();
+    expect(screen.getByText('图片摘录')).toBeInTheDocument();
 
     // Update attachment state to queued and verify no periodic polling happens
     adapter.setMockCollectionExtractions(col.id, [

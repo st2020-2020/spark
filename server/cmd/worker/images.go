@@ -53,9 +53,18 @@ func runImages() error {
 	if err = db.Ready(connect, pool); err != nil {
 		return errors.New("worker database schema is not ready; run explicit migrations")
 	}
+	trial, err := backend.ParseAITrialScope(env, os.Getenv("SPARK_AI_TRIAL_USER_IDS"))
+	if err != nil {
+		return err
+	}
+	organizer, err := backend.NewOrganizer(pool, os.Getenv("SPARK_AI_ENABLED") == "true", trial)
+	if err != nil {
+		return err
+	}
+	organizer.Images = backend.ImageOrganizationScope{Enabled: true, AdminID: adminID}
 	working, cancelWorking := context.WithCancel(context.Background())
 	defer cancelWorking()
-	worker, err := backend.StartImageWorker(working, pool, storage, model, adminID)
+	worker, err := backend.StartImageWorker(working, pool, storage, model, adminID, organizer)
 	if err != nil {
 		return err
 	}

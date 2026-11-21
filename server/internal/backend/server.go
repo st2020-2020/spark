@@ -141,6 +141,8 @@ func (s *Server) Router() *gin.Engine {
 	secured.GET("/uploads/:id", s.handle(s.getUpload))
 	secured.POST("/uploads/:id/complete", s.handle(s.completeUpload))
 	secured.GET("/attachments/:id/download", s.handle(s.getDownload))
+	secured.GET("/attachments/:id/thumbnail", s.handle(s.attachmentThumbnail))
+	secured.PATCH("/attachments/:id/image-note", s.handle(s.updateImageNote))
 	secured.POST("/attachments/:id/image-analysis/retry", s.handle(s.retryImageAnalysis))
 	secured.POST("/collections", s.handle(s.createCollection))
 	secured.GET("/collections", s.handle(s.listCollections))

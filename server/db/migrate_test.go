@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -248,16 +249,25 @@ func TestUpgradeAddsAccountTagsAndAppearance(t *testing.T) {
 }
 
 func TestUpgradePreservesImageMaterialAndPreviousOrganization(t *testing.T) {
+	for _, version := range []int{10, 13} {
+		t.Run(fmt.Sprintf("from v%d", version), func(t *testing.T) {
+			testImageMaterialUpgrade(t, version)
+		})
+	}
+}
+
+func testImageMaterialUpgrade(t *testing.T, oldVersion int) {
+	t.Helper()
 	ctx, pool := t.Context(), migrationTestPool(t)
-	for _, name := range migrationNames[:10] {
+	for _, name := range migrationNames[:oldVersion] {
 		sql, err := migrations.ReadFile("migrations/" + name)
 		if err != nil {
 			t.Fatal(err)
 		}
 		execTestSQL(t, pool, string(sql))
 	}
-	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
-		INSERT INTO schema_migrations(version) SELECT generate_series(1,10)`)
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`)
+	execTestSQL(t, pool, `INSERT INTO schema_migrations(version) SELECT generate_series(1,$1::integer)`, oldVersion)
 	user, collection, upload, attachment, extraction, run := newTestID(), newTestID(), newTestID(), newTestID(), newTestID(), newTestID()
 	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash,ai_enabled,ai_consent_version,image_consent_version,image_consented_at)
 		VALUES ($1,'image-upgrade@example.test','synthetic-not-a-login-hash',true,'spark-ai-tags-v1','deepseek-images-v1',now())`, user)
@@ -287,5 +297,13 @@ func TestUpgradePreservesImageMaterialAndPreviousOrganization(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT result->>'title' FROM organization_runs
 		WHERE user_id=$1 AND id=$2 AND NOT image_waiting AND image_user_policy_version IS NULL`, user, run).Scan(&oldTitle); err != nil || oldTitle != "旧标题" {
 		t.Fatalf("upgrade misidentified old organization as using image material: %q, %v", oldTitle, err)
+	}
+	var note, original string
+	var jobs int
+	if err := pool.QueryRow(ctx, `SELECT n.text,c.plain_text,(SELECT count(*) FROM river_job)
+		FROM collection_image_notes n JOIN collections c ON (c.user_id,c.id)=(n.user_id,n.collection_id)
+		WHERE n.user_id=$1 AND n.attachment_id=$2 AND n.source_extraction_id=$3 AND n.state='generated' AND n.version=1`,
+		user, attachment, extraction).Scan(&note, &original, &jobs); err != nil || note != "合成画面" || original != "合成正文" || jobs != 0 {
+		t.Fatalf("upgrade failed to backfill the note without changing content or scheduling more work: %q %q %d, %v", note, original, jobs, err)
 	}
 }

@@ -1713,6 +1713,138 @@
         ]
       }
     },
+    "/attachments/{id}/thumbnail": {
+      "get": {
+        "operationId": "getAttachmentThumbnail",
+        "summary": "读取当前账号附件的私有 JPEG 缩略图",
+        "tags": [
+          "attachments"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "私有 JPEG 缩略图",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "账号的下载签名次数已达上限（rate_limited）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "当前限制窗口的剩余等待秒数",
+                "schema": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/attachments/{id}/image-note": {
+      "patch": {
+        "operationId": "updateImageNote",
+        "summary": "编辑或删除附件绑定的图片描述正文段",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageNoteUpdate"
+              }
+            }
+          }
+        }
+      }
+    },
     "/attachments/{id}/image-analysis/retry": {
       "post": {
         "operationId": "retryImageAnalysis",
@@ -5292,6 +5424,15 @@
               "included"
             ],
             "description": "分别表示可用图片材料需要新版文字授权、正在等待图片提取、此轮成功或部分成功使用了图片衍生材料。"
+          },
+          "image_archive_status": {
+            "type": "string",
+            "enum": [
+              "consent_required",
+              "linked",
+              "created"
+            ],
+            "description": "新版文字授权待确认、已关联进行中项目、或已创建并关联主题项目。"
           }
         },
         "required": [
@@ -5398,6 +5539,14 @@
           },
           "undo_receipt": {
             "$ref": "#/components/schemas/ProjectUndoReceipt"
+          },
+          "image_notes": {
+            "type": "array",
+            "maxItems": 9,
+            "items": {
+              "$ref": "#/components/schemas/ImageNote"
+            },
+            "description": "按附件排序的图片描述正文段。服务端总返回数组，删除段落省略。"
           }
         },
         "required": [
@@ -6615,6 +6764,56 @@
         "required": [
           "base_decision_version",
           "operations"
+        ]
+      },
+      "ImageNote": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "generated",
+              "edited"
+            ]
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "attachment_id",
+          "version",
+          "state",
+          "text"
+        ]
+      },
+      "ImageNoteUpdate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "空白删除正文段。"
+          }
+        },
+        "required": [
+          "base_version",
+          "text"
         ]
       }
     }

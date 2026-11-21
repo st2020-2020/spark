@@ -31,7 +31,6 @@ import { ApiError, getFriendlyErrorMessage, isApiErrorCode } from '../api/errors
 import { AIConsentModal, SPARK_AI_CONSENT_VERSION } from '../components/AIConsentModal';
 import { AttachmentGallery } from '../components/AttachmentGallery';
 import {
-  formatExtractionSummaryText,
   ImageAnalysisPanel,
 } from '../components/ImageAnalysisPanel';
 import { LinkPreviewCard } from '../components/LinkPreviewCard';
@@ -44,6 +43,7 @@ import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks
 import { UploadQueueTray } from '../components/UploadQueueTray';
 import { MentionPicker, type MentionChoice } from '../components/MentionPicker';
 import { CollectionTags } from '../components/Tags';
+import { ImageNotes } from '../components/ImageNotes';
 import { ShareCard } from '../components/ShareCard';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
@@ -731,6 +731,7 @@ export function CollectionDetailPage() {
     aiExcluded: Boolean(collection.ai_excluded),
     projects: collection.projects,
   });
+  const imageArchive = collection.organization.image_archive_status;
   const imageMaterial = collection.organization.image_material_status;
   const hasExtractedImageText = extractionsQuery.data?.items.some(ext =>
     ext.source_kind === 'image' && collection.attachments.some(a => a.id === ext.source_id) &&
@@ -856,6 +857,7 @@ export function CollectionDetailPage() {
             )}
 
             <SafeDocumentView document={collection.document} />
+            <ImageNotes key={collection.id} collection={collection} />
 
             {collection.original_url && (
               <LinkPreviewCard
@@ -1112,6 +1114,8 @@ export function CollectionDetailPage() {
           )
         )}
 
+        {isEditing && <ImageNotes key={collection.id} collection={collection} />}
+
         {/* Attachments in read mode (single large image or 9-grid + lightbox zoom) */}
         {!isEditing && collection.attachments.length > 0 && (
           <section className="sp-section">
@@ -1121,6 +1125,7 @@ export function CollectionDetailPage() {
             <AttachmentGallery attachments={collection.attachments} />
             <ImageAnalysisPanel
               collectionId={id}
+              descriptionsInBody={collection.image_notes !== undefined}
               attachments={collection.attachments}
               extractions={extractionsQuery.data?.items ?? []}
               isInTrash={isInTrash}
@@ -1198,7 +1203,7 @@ export function CollectionDetailPage() {
                         >
                           {pa.decision === 'manual' && '手动关联'}
                           {pa.decision === 'confirmed' && '已确认'}
-                          {pa.decision === 'auto' && '自动关联'}
+                          {pa.decision === 'auto' && '自动归入'}
                           {pa.decision === 'suggested' && 'AI 建议'}
                           {pa.decision === 'rejected' && '已忽略'}
                         </span>
@@ -1383,8 +1388,9 @@ export function CollectionDetailPage() {
               <p className="sp-help">本次整理使用了图片识别结果。</p>
             )}
             {!isInTrash && !collection.ai_excluded && !isOrganizationActiveStatus(collection.organization.status) &&
-              (hasExtractedImageText || imageMaterial === 'consent_required') && (
+              (hasExtractedImageText || imageMaterial === 'consent_required' || imageArchive === 'consent_required') && (
               <div className="sp-stack sp-stack--tight">
+                {imageArchive === 'consent_required' && <p className="sp-help">自动归入或创建项目需要更新整理授权。</p>}
                 {imageMaterial === 'consent_required' && <p className="sp-help">上次整理缺少使用图片识别结果的授权。</p>}
                 {imagePrefs && !canUseImages && <p className="sp-help">{imagePrefs.available
                   ? <>图片理解已关闭。<Link to="/settings">前往设置</Link>可管理授权。</>
@@ -1453,12 +1459,12 @@ export function CollectionDetailPage() {
           >
             <summary>提取内容与修订历史</summary>
             <div className="sp-stack sp-details-body">
-              {extractionsQuery.isSuccess && extractionsQuery.data.items.length > 0 && (
+              {extractionsQuery.isSuccess && extractionsQuery.data.items.some(ext => ext.source_kind === 'url') && (
                 <div className="sp-stack sp-stack--tight">
-                  {extractionsQuery.data.items.map((ext) => (
+                  {extractionsQuery.data.items.filter(ext => ext.source_kind === 'url').map((ext) => (
                     <div key={ext.id} className="sp-help sp-break-anywhere">
-                      {ext.source_kind === 'url' ? '网页正文' : '图片理解'}：
-                      {formatExtractionSummaryText(ext)}
+                      网页正文：
+                      {ext.text || ext.status}
                     </div>
                   ))}
                 </div>

@@ -394,6 +394,28 @@ describe('Platform AI organization & UI states', () => {
     expect(getOrgSpy).not.toHaveBeenCalled();
   }, 12000);
 
+  it('refreshes a previously empty project when an image is automatically filed there', async () => {
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const project = await api.createProject({ name: '蓝图册', description: '', focus_points: [] }, 'project');
+    const col = await api.createCollection({ id: crypto.randomUUID(), intent: '', manual_title: '观察图',
+      document: { schema_version: 1, content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '网格' }] }] } },
+      upload_ids: [], project_ids: [], tag_ids: [] }, 'item');
+    const row = (await api.listCollections()).items.find(item => item.id === col.id)!;
+    renderApp(['/projects/' + project.id], api);
+    await screen.findByText('该项目下暂无匹配的收藏');
+    const projects = [{ project_id: project.id, name: project.name, decision: 'auto' as const }];
+    vi.spyOn(api, 'getCollection').mockResolvedValue({ ...col, projects,
+      organization: { ...col.organization, status: 'succeeded', image_archive_status: 'linked' } });
+    const list = api.listCollections.bind(api);
+    vi.spyOn(api, 'listCollections').mockImplementation((filters, signal) => filters?.project_id === project.id
+      ? Promise.resolve({ items: [{ ...row, projects }] }) : list(filters, signal));
+    act(() => api.emitMockOrganizationEvent({ collection_id: col.id, status: 'succeeded', has_suggestion: false }));
+    const article = await screen.findByRole('article', { name: '观察图' });
+    expect(within(article).getByRole('link', { name: '自动归入 · 蓝图册' })).toBeVisible();
+    expect(screen.queryByText('有一条收藏的项目建议待确认')).toBeNull();
+  });
+
   it('updates a project search hit from live events while preserving its snippet', async () => {
     const api = createTestAdapter();
     const ui = userEvent.setup();

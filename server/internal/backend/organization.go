@@ -46,6 +46,15 @@ func materialAvailable(text, intent string) bool {
 // Caller holds user_change_counters, so new inputs supersede prior runs in the
 // same transaction as content and River insertion. No network work occurs here.
 func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, explicit bool) (string, string, error) {
+	return o.enqueue(ctx, tx, uid, id, explicit, false)
+}
+
+func (o *Organizer) EnqueueImage(ctx context.Context, tx pgx.Tx, uid, id string) error {
+	_, _, err := o.enqueue(ctx, tx, uid, id, false, true)
+	return err
+}
+
+func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, explicit, imageEvent bool) (string, string, error) {
 	var enabled, excluded bool
 	var status, text, intent, role, consent string
 	var deleted *time.Time
@@ -70,17 +79,24 @@ func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	if reason != "" {
 		return "", reason, nil
 	}
-	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role)
+	if imageEvent && consent != textImageNotesConsentVersion {
+		return "", "", nil
+	}
+	archive := consent == textImageNotesConsentVersion
+	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role, archive)
 	if err != nil {
 		return "", "", err
 	}
-	canUseImages := hasImages && consent == textImageConsentVersion
+	canUseImages := hasImages && allowsTextImageMaterial(consent)
 	hasText := materialAvailable(text, intent)
 	if hasImages && !canUseImages && (explicit || !hasText) {
 		return "", "image_material_consent_required", nil
 	}
 	if !hasText && !canUseImages {
 		return "", "insufficient_material", nil
+	}
+	if imageEvent && !canUseImages {
+		return "", "", nil
 	}
 	waitImages := canUseImages && pendingImages
 	var active string
@@ -90,6 +106,22 @@ func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", "", err
+	}
+	if canUseImages && !pendingImages && archive {
+		sources, _, err := o.Images.sources(ctx, tx, uid, id, true)
+		if err != nil {
+			return "", "", err
+		}
+		ids := imageMaterialKeys(sources)
+		if len(ids) > 0 {
+			err = tx.QueryRow(ctx, `SELECT id FROM organization_runs
+				WHERE (user_id,collection_id,content_version,user_policy_version,collection_policy_version)=($1,$2,$3,$4,$5)
+				  AND image_extraction_ids=$6
+				ORDER BY created_at DESC,id DESC LIMIT 1`, uid, id, cv, uv, pv, ids).Scan(&active)
+			if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+				return active, "", err
+			}
+		}
 	}
 	if explicit {
 		ok, err := budgetAvailable(ctx, tx, uid)

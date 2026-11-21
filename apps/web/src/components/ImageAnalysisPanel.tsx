@@ -53,8 +53,8 @@ function resolveImageStatusDisplay(ext: Extraction): {
   if (isTruncatedResult(ext)) {
     const hasContent = hasImageContent(ext);
     return {
-      label: hasContent ? '识别摘录（已截断）' : '输出已截断',
-      pillClass: 'sp-pill sp-pill--warning',
+      label: hasContent ? '图片摘录' : '暂无图片摘录',
+      pillClass: hasContent ? 'sp-pill' : 'sp-pill sp-pill--warning',
       note: [!hasContent && '本次没有可展示的识别摘录，原图仍可查看。',
         ext.error_code === 'usage_uncertain' && '本次用量待核对。'].filter(Boolean).join(''),
     };
@@ -75,7 +75,7 @@ function resolveImageStatusDisplay(ext: Extraction): {
       };
     case 'partial':
       return {
-        label: hasImageContent(ext) ? '部分识别' : '暂无识别摘录',
+        label: hasImageContent(ext) ? '图片摘录' : '暂无识别摘录',
         note: ext.error_code === 'usage_uncertain' ? '本次用量待核对。' : undefined,
         pillClass: 'sp-pill sp-pill--warning',
       };
@@ -101,24 +101,10 @@ function resolveImageStatusDisplay(ext: Extraction): {
   }
 }
 
-export function formatExtractionSummaryText(ext: Extraction): string {
-  if (ext.source_kind === 'url') {
-    return ext.text || ext.status;
-  }
-  const display = resolveImageStatusDisplay(ext);
-  if (!hasUsableImageResult(ext) || !hasImageContent(ext)) {
-    return [display.label, display.note].filter(Boolean).join(' · ');
-  }
-  const parts: string[] = [];
-  if (ext.text?.trim()) parts.push(`图中文字：${ext.text.trim()}`);
-  if (ext.image_description?.trim()) parts.push(`AI 画面描述：${ext.image_description.trim()}`);
-  if (isTruncatedResult(ext)) parts.push('摘录已截断');
-  return parts.join(' ｜ ');
-}
-
 export function ImageAnalysisPanel({
   collectionId,
   attachments,
+  descriptionsInBody,
   extractions,
   isInTrash,
   aiExcluded,
@@ -130,6 +116,7 @@ export function ImageAnalysisPanel({
 }: {
   collectionId: string;
   attachments: Attachment[];
+  descriptionsInBody: boolean;
   extractions: Extraction[];
   isInTrash: boolean;
   aiExcluded: boolean;
@@ -231,7 +218,7 @@ export function ImageAnalysisPanel({
             const statusDisplay = resolveImageStatusDisplay(extraction);
             const usable = hasUsableImageResult(extraction);
             const ocrText = usable && extraction.text?.trim();
-            const visualDesc = usable && extraction.image_description?.trim();
+            const visualDesc = !descriptionsInBody && usable && extraction.image_description?.trim();
             const retryKind = imageRetryKind(extraction);
             const mayOfferRetry = !isError && !aiExcluded && imagePreferences?.available === true;
             const isPending = extraction.status === 'queued' || extraction.status === 'running';

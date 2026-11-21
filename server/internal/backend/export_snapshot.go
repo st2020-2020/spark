@@ -72,22 +72,23 @@ func (s exportSnapshot) projects() iter.Seq2[contract.Project, error] {
 }
 
 type exportCollection struct {
-	ID              string          `json:"id"`
-	Document        json.RawMessage `json:"document"`
-	PlainText       string          `json:"plain_text"`
-	ManualTitle     string          `json:"manual_title"`
-	DisplayTitle    string          `json:"display_title"`
-	GeneratedTitle  *string         `json:"generated_title,omitempty"`
-	Summary         *string         `json:"summary,omitempty"`
-	Intent          string          `json:"intent"`
-	OriginalURL     string          `json:"original_url"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
-	ReadAt          *time.Time      `json:"read_at,omitempty"`
-	AIExcluded      bool            `json:"ai_excluded"`
-	ResourceVersion int64           `json:"resource_version"`
-	ContentVersion  int64           `json:"content_version"`
-	DecisionVersion int64           `json:"decision_version"`
+	ID              string               `json:"id"`
+	Document        json.RawMessage      `json:"document"`
+	ImageNotes      []contract.ImageNote `json:"image_notes,omitempty"`
+	PlainText       string               `json:"plain_text"`
+	ManualTitle     string               `json:"manual_title"`
+	DisplayTitle    string               `json:"display_title"`
+	GeneratedTitle  *string              `json:"generated_title,omitempty"`
+	Summary         *string              `json:"summary,omitempty"`
+	Intent          string               `json:"intent"`
+	OriginalURL     string               `json:"original_url"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	ReadAt          *time.Time           `json:"read_at,omitempty"`
+	AIExcluded      bool                 `json:"ai_excluded"`
+	ResourceVersion int64                `json:"resource_version"`
+	ContentVersion  int64                `json:"content_version"`
+	DecisionVersion int64                `json:"decision_version"`
 }
 
 func (s exportSnapshot) collections() iter.Seq2[exportCollection, error] {
@@ -98,13 +99,13 @@ func (s exportSnapshot) collections() iter.Seq2[exportCollection, error] {
 		}
 		return s.tx.Query(s.ctx, `SELECT c.id,c.document,c.plain_text,c.manual_title,c.intent,c.original_url,
             c.created_at,c.updated_at,c.read_at,c.ai_excluded,c.resource_version,c.content_version,c.decision_version,
-            oc.generated_title,oc.summary FROM collections c LEFT JOIN organization_current oc
+            oc.generated_title,oc.summary,`+imageNotesJSON+` FROM collections c LEFT JOIN organization_current oc
             ON (oc.user_id,oc.collection_id,oc.content_version)=(c.user_id,c.id,c.content_version)
             WHERE c.user_id=$1 AND c.deleted_at IS NULL AND ($2::uuid IS NULL OR c.id>$2)
             ORDER BY c.id LIMIT $3`, s.uid, id, exportContentPageSize)
 	}, func(r pgx.CollectableRow) (exportCollection, error) {
 		var c exportCollection
-		err := r.Scan(&c.ID, &c.Document, &c.PlainText, &c.ManualTitle, &c.Intent, &c.OriginalURL, &c.CreatedAt, &c.UpdatedAt, &c.ReadAt, &c.AIExcluded, &c.ResourceVersion, &c.ContentVersion, &c.DecisionVersion, &c.GeneratedTitle, &c.Summary)
+		err := r.Scan(&c.ID, &c.Document, &c.PlainText, &c.ManualTitle, &c.Intent, &c.OriginalURL, &c.CreatedAt, &c.UpdatedAt, &c.ReadAt, &c.AIExcluded, &c.ResourceVersion, &c.ContentVersion, &c.DecisionVersion, &c.GeneratedTitle, &c.Summary, &c.ImageNotes)
 		c.DisplayTitle = titleFor(c.PlainText, c.ManualTitle, c.OriginalURL)
 		if c.ManualTitle == "" && value(c.GeneratedTitle) != "" {
 			c.DisplayTitle = *c.GeneratedTitle

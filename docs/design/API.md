@@ -117,6 +117,8 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 `GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID。`text` 为逐字识别的标题和代表性摘录，`image_description` 为简短的中文主题和 AI 画面描述。触及输出上限时，存在可验证的完整字段则返回 `partial / image_output_truncated`；两个字段均空则为 `failed / image_output_truncated_empty`，两种结果均带 `truncated: true`。服务正常完成的两个空字段表示未识别到可用内容。可信用量按实际结算，缺少可靠用量时保留待核对金额。额度不足为 `blocked / quota_exceeded`。
 
+收藏详情的 `image_notes` 保存按附件顺序排列的图片说明正文段。每段有 `attachment_id`、`version`、`state` 与 `text`。服务端总返回数组，历史图片说明迁移后也可读。使用 `PATCH /attachments/{id}/image-note` 提交 `base_version` 与最多 2000 字的 `text`，空白删除段落，版本落后返回 `409 image_note_conflict` 和 `details.current_version`。人工段落内容独立于原富文本，正文渲染与分享以 `image_notes` 为准，JSON 和 Markdown 导出均包含当前段落。图片提取面板仍可展示原始识别。私有 `GET /attachments/{id}/thumbnail` 返回同账号可读附件的 JPEG，用于卡片。
+
 当前解析只读取有界 JSON 对象中的顶层字符串 `text` 和 `description`，允许仅返回其中一个字段。额外字段的值按 JSON 验证后舍弃。重复键、超深结构、尾随内容和非法字段类型返回 `image_provider_content_invalid`。截断由供应商的 `finish_reason=length` 判定，只保留已经闭合并通过验证的已知字段。可信用量继续独立结算。
 
 图片诊断码区分响应读取中断 `image_response_read_failed`、响应封装无效 `image_response_invalid`、候选结构或工具调用异常 `image_provider_choice_invalid`、终止原因异常 `image_provider_finish_invalid`、内容被过滤 `image_provider_content_filtered`、供应商中断 `image_provider_interrupted`、正常停止时的空白响应 `image_provider_empty_output`。旧记录可能保留 `invalid_model_output`。
@@ -136,6 +138,8 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 收藏整理响应中的 `image_material_status` 为 `consent_required`、`waiting` 或 `included`，分别对应需补充文字授权、此轮正在等待图片提取、此轮成功或部分成功且用到了图片材料。上层等待状态为 `queued`。整理队列总期限为十分钟，超期未能使用图片的等待运行返回 `failed / image_material_timeout`，识别完成后可重新整理。图片终态没有可用文本时用原有文字材料，无可用材料则为 `skipped / insufficient_material`。旧文字授权下，主动整理合格含图收藏返回 `403 image_material_consent_required`。同一活动运行复用，既有图片提取结果可在主动整理时复用。
 
 项目引文的 `source_id` 可以是 `original_text`、`intent`、`image_text:<附件 UUID>` 或 `image_description:<附件 UUID>`。引文必须逐字来自该次模型输入的对应段。既有 `organization` SSE 通知图片状态和整理变化，客户端按需重新读取收藏、提取和整理。
+
+新版文字授权 `spark-ai-image-notes-v1` 增加图片笔记自动归档。在独立图片授权仍有效且收藏允许时，识别完成可触发或唤醒一次文字整理。符合依据的进行中项目会生成 `decision=auto`，可用主题可在同事务创建并关联项目。人工关联和排除优先。组织详情的 `image_archive_status` 为 `consent_required`、`linked` 或 `created`，分别表示需新版同意、已自动关联或已自动新建并关联。人工修改过或删除的图片说明会从新版归档证据中排除，仍可使用有效 OCR。事件沿用 `organization` SSE，并重新读取项目目录和项目资料列表。
 
 ## 网页信息提取
 

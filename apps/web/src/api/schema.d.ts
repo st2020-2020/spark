@@ -470,6 +470,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/attachments/{id}/thumbnail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取当前账号附件的私有 JPEG 缩略图 */
+        get: operations["getAttachmentThumbnail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/attachments/{id}/image-note": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** 编辑或删除附件绑定的图片描述正文段 */
+        patch: operations["updateImageNote"];
+        trace?: never;
+    };
     "/attachments/{id}/image-analysis/retry": {
         parameters: {
             query?: never;
@@ -1330,6 +1364,11 @@ export interface components {
              * @enum {string}
              */
             image_material_status?: "consent_required" | "waiting" | "included";
+            /**
+             * @description 新版文字授权待确认、已关联进行中项目、或已创建并关联主题项目。
+             * @enum {string}
+             */
+            image_archive_status?: "consent_required" | "linked" | "created";
         };
         Collection: {
             /** Format: uuid */
@@ -1361,6 +1400,8 @@ export interface components {
             /** @description 当前有效且待确认的项目建议。 */
             has_suggestion?: boolean;
             undo_receipt?: components["schemas"]["ProjectUndoReceipt"];
+            /** @description 按附件排序的图片描述正文段。服务端总返回数组，删除段落省略。 */
+            image_notes?: components["schemas"]["ImageNote"][];
         };
         CollectionSummary: {
             /** Format: uuid */
@@ -1665,6 +1706,19 @@ export interface components {
                 /** @enum {string} */
                 action: "include" | "exclude" | "reset";
             }[];
+        };
+        ImageNote: {
+            /** Format: uuid */
+            attachment_id: string;
+            version: number;
+            /** @enum {string} */
+            state: "generated" | "edited";
+            text: string;
+        };
+        ImageNoteUpdate: {
+            base_version: number;
+            /** @description 空白删除正文段。 */
+            text: string;
         };
     };
     responses: never;
@@ -2750,6 +2804,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getAttachmentThumbnail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 私有 JPEG 缩略图 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            /** @description 账号的下载签名次数已达上限（rate_limited） */
+            429: {
+                headers: {
+                    /** @description 当前限制窗口的剩余等待秒数 */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    updateImageNote: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageNoteUpdate"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

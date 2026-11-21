@@ -26,20 +26,21 @@ type ImageObjectReader interface {
 
 type imageWorker struct {
 	river.WorkerDefaults[imageAnalysisArgs]
-	pool    *pgxpool.Pool
-	storage ImageObjectReader
-	adminID string
-	model   *ImageModel
+	pool      *pgxpool.Pool
+	storage   ImageObjectReader
+	adminID   string
+	model     *ImageModel
+	organizer *Organizer
 	// Serialize the memory-intensive decode while allowing overlapping HTTP jobs.
 	visualCopySlot chan struct{}
 }
 
-func StartImageWorker(ctx context.Context, pool *pgxpool.Pool, storage ImageObjectReader, model *ImageModel, adminID string) (*river.Client[pgx.Tx], error) {
+func StartImageWorker(ctx context.Context, pool *pgxpool.Pool, storage ImageObjectReader, model *ImageModel, adminID string, organizer *Organizer) (*river.Client[pgx.Tx], error) {
 	if storage == nil || model == nil {
 		return nil, errors.New("image analysis requires private object storage and a provider")
 	}
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &imageWorker{pool: pool, storage: storage, model: model, adminID: adminID, visualCopySlot: make(chan struct{}, 1)})
+	river.AddWorker(workers, &imageWorker{pool: pool, storage: storage, model: model, adminID: adminID, organizer: organizer, visualCopySlot: make(chan struct{}, 1)})
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
 		Schema: db.RiverSchema(pool), Workers: workers,
 		Queues:     map[string]river.QueueConfig{imageAnalysisQueue: {MaxWorkers: 2}},
@@ -172,7 +173,19 @@ func (w *imageWorker) Work(ctx context.Context, delivery *river.Job[imageAnalysi
 		if !current.Eligible {
 			result = imageModelResult{Status: "skipped", Account: ModelOutput{ErrorCode: "image_authorization_changed"}}
 		}
-		return writeImageResult(settle, tx, args, "running", result)
+		if err := writeImageResult(settle, tx, args, "running", result); err != nil {
+			return err
+		}
+		if current.Status != "running" || (result.Status != "succeeded" && result.Status != "partial") {
+			return nil
+		}
+		if err := storeImageNote(settle, tx, args, result.Evidence.Description); err != nil {
+			return err
+		}
+		if w.organizer != nil && (result.Text != "" || result.Evidence.Description != "") {
+			return w.organizer.EnqueueImage(settle, tx, args.UserID, args.CollectionID)
+		}
+		return nil
 	})
 }
 

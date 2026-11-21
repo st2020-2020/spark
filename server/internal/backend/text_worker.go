@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,11 +73,14 @@ type textSource struct {
 const textTagConsentVersion = "spark-ai-tags-v1"
 
 type textInput struct {
-	tagConsent    bool
-	waitingImages bool
-	Sources       []textSource   `json:"sources"`
-	Projects      []projectInput `json:"projects"`
-	Tags          []modelTag     `json:"tags,omitempty"`
+	tagConsent          bool
+	waitingImages       bool
+	imageArchiveConsent bool
+	imageKeys           []string
+	decisionVersion     int64
+	Sources             []textSource   `json:"sources"`
+	Projects            []projectInput `json:"projects"`
+	Tags                []modelTag     `json:"tags,omitempty"`
 }
 type modelTag struct {
 	ID       string  `json:"tag_id"`
@@ -98,7 +102,18 @@ type organizationResult struct {
 	Summary  string         `json:"summary,omitempty"`
 	Tags     []modelTag     `json:"tag_candidates"`
 	Projects []modelProject `json:"project_candidates"`
+	Topic    *modelTopic    `json:"topic_candidate,omitempty"`
 }
+type modelTopic struct {
+	Name     string          `json:"name"`
+	Reason   string          `json:"reason"`
+	Evidence []modelEvidence `json:"evidence"`
+}
+
+func (i textInput) archivesImage() bool {
+	return i.imageArchiveConsent && len(i.imageKeys) > 0
+}
+
 type runSnapshot struct {
 	UID, ID, CollectionID, State string
 	CV, UV, PV                   int64
@@ -220,19 +235,34 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		if err = setRunState(ctx, tx, r, "failed", code); err != nil {
 			return r, input, false, err
 		}
+		if r.ImageWaiting {
+			// A result may have committed just before this expiry check and
+			// found this run still active. Recover without waiting a second
+			// time for sources that remain pending.
+			images, pending, err := w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, true)
+			if err != nil {
+				return r, input, false, err
+			}
+			if !pending && len(images) > 0 {
+				if err := w.Organizer.EnqueueImage(ctx, tx, r.UID, r.CollectionID); err != nil {
+					return r, input, false, err
+				}
+			}
+		}
 		return r, input, false, tx.Commit(ctx)
 	}
 	var text, intent, consent string
-	if err = tx.QueryRow(ctx, `SELECT c.plain_text,c.intent,coalesce(u.ai_consent_version,'')
+	if err = tx.QueryRow(ctx, `SELECT c.plain_text,c.intent,coalesce(u.ai_consent_version,''),c.decision_version
 		FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`,
-		r.UID, r.CollectionID).Scan(&text, &intent, &consent); err != nil {
+		r.UID, r.CollectionID).Scan(&text, &intent, &consent, &input.decisionVersion); err != nil {
 		return r, input, false, err
 	}
-	input.tagConsent = consent == textTagConsentVersion || consent == textImageConsentVersion
+	input.tagConsent = consent == textTagConsentVersion || allowsTextImageMaterial(consent)
+	input.imageArchiveConsent = consent == textImageNotesConsentVersion
 	var imageSources []textSource
-	if consent == textImageConsentVersion {
+	if allowsTextImageMaterial(consent) {
 		var pending bool
-		imageSources, pending, err = w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID)
+		imageSources, pending, err = w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, input.imageArchiveConsent)
 		if err != nil {
 			return r, input, false, err
 		}
@@ -246,6 +276,7 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 			return r, input, false, tx.Commit(ctx)
 		}
 	}
+	input.imageKeys = imageMaterialKeys(imageSources)
 	if !materialAvailable(text, intent) && len(imageSources) == 0 {
 		if err = setRunState(ctx, tx, r, "skipped", "insufficient_material"); err != nil {
 			return r, input, false, err
@@ -329,6 +360,9 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 	var schema map[string]any
 	_ = json.Unmarshal([]byte(organizationResultSchema), &schema)
 	delete(schema, "$schema")
+	if !input.archivesImage() {
+		delete(schema["properties"].(map[string]any), "topic_candidate")
+	}
 	schema["properties"].(map[string]any)["project_candidates"].(map[string]any)["maxItems"] = 1
 	tagSchema := schema["properties"].(map[string]any)["tag_candidates"].(map[string]any)
 	tagItem := tagSchema["items"].(map[string]any)
@@ -339,6 +373,9 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 		system := strings.Replace(systemTemplate, organizationResultSchema, string(jsonBytes(schema)), 1)
 		if input.imagePolicyVersion() != 0 {
 			system = strings.Replace(system, "(original_text or intent)", "(the exact source_id in sources). image_text is recognized text; image_description is a generated observation, not an original quotation", 1)
+		}
+		if input.archivesImage() {
+			system += " For this image note, choose one relevant existing project if possible. Otherwise suggest one reusable topic_candidate with a concise name, reason and exact image evidence. Never return a topic and a project together. Use image evidence for any project decision. If the image does not establish a topic, leave both options empty."
 		}
 		if len(input.Tags) > 0 {
 			system = strings.Replace(system, emptyTags, "tag_candidates may select up to five relevant entries from tags. Copy tag_id and name exactly without duplicates", 1)
@@ -411,21 +448,55 @@ func (w *TextWorker) validateResult(raw string, input textInput) (organizationRe
 		candidates[p.ID] = true
 	}
 	sources := map[string]string{}
+	imageSources := map[string]bool{}
 	for _, src := range input.Sources {
 		sources[src.ID] = src.Text
+		imageSources[src.ID] = src.image.ExtractionID != ""
 	}
-	for _, p := range result.Projects {
-		if !candidates[p.ID] || strings.TrimSpace(p.Reason) == "" {
-			return result, errors.New("invalid_model_output")
-		}
-		for _, e := range p.Evidence {
+	validEvidence := func(evidence []modelEvidence, requireImage bool) bool {
+		hasImage := false
+		for _, e := range evidence {
 			text, exists := sources[e.SourceID]
 			if !exists || strings.TrimSpace(e.Quote) == "" || !strings.Contains(text, e.Quote) {
-				return result, errors.New("invalid_model_output")
+				return false
 			}
+			hasImage = hasImage || imageSources[e.SourceID]
+		}
+		return !requireImage || hasImage
+	}
+	for _, p := range result.Projects {
+		if !candidates[p.ID] || strings.TrimSpace(p.Reason) == "" || !validEvidence(p.Evidence, input.archivesImage()) {
+			return result, errors.New("invalid_model_output")
 		}
 	}
+	if topic := result.Topic; topic != nil && (!input.archivesImage() || len(result.Projects) != 0 ||
+		strings.TrimSpace(topic.Name) == "" || strings.TrimSpace(topic.Reason) == "" || !validEvidence(topic.Evidence, true)) {
+		return result, errors.New("invalid_model_output")
+	}
 	return result, nil
+}
+
+func (w *TextWorker) imageInputChanged(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput) (changed, arrived bool, err error) {
+	if !input.imageArchiveConsent {
+		return false, false, nil
+	}
+	current, pending, err := w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, true)
+	if err != nil {
+		return false, false, err
+	}
+	keys := imageMaterialKeys(current)
+	arrived = pending || slices.ContainsFunc(keys, func(key string) bool { return !slices.Contains(input.imageKeys, key) })
+	return arrived || !slices.Equal(input.imageKeys, keys), arrived, nil
+}
+
+func (w *TextWorker) supersedeForImage(ctx context.Context, tx pgx.Tx, r runSnapshot, arrived bool) error {
+	if err := setRunState(ctx, tx, r, "superseded", "input_changed"); err != nil {
+		return err
+	}
+	if !arrived {
+		return nil
+	}
+	return w.Organizer.EnqueueImage(ctx, tx, r.UID, r.CollectionID)
 }
 func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, input textInput, upper int64) (string, string, error) {
 	tx, err := w.Pool.Begin(ctx)
@@ -469,6 +540,16 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 		}
 		return "", "attempts_exhausted", tx.Commit(ctx)
 	}
+	changedImages, arrived, err := w.imageInputChanged(ctx, tx, r, input)
+	if err != nil {
+		return "", "", err
+	}
+	if changedImages {
+		if err = w.supersedeForImage(ctx, tx, r, arrived); err != nil {
+			return "", "", err
+		}
+		return "", "input_changed", tx.Commit(ctx)
+	}
 	validImages, err := w.Organizer.Images.stillValid(ctx, tx, r, input)
 	if err != nil {
 		return "", "", err
@@ -492,7 +573,7 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 			return "", "", err
 		}
 	} else {
-		if _, err = tx.Exec(ctx, `UPDATE organization_runs SET project_snapshot=$3 WHERE user_id=$1 AND id=$2`, r.UID, r.ID, jsonBytes(input.Projects)); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE organization_runs SET project_snapshot=$3,image_extraction_ids=$4 WHERE user_id=$1 AND id=$2`, r.UID, r.ID, jsonBytes(input.Projects), input.imageKeys); err != nil {
 			return "", "", err
 		}
 	}
@@ -528,6 +609,16 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		return false, err
 	}
 	if reason == "" && r.State == "running" {
+		changedImages, arrived, err := w.imageInputChanged(ctx, tx, r, input)
+		if err != nil {
+			return false, err
+		}
+		if changedImages {
+			if err := w.supersedeForImage(ctx, tx, r, arrived); err != nil {
+				return false, err
+			}
+			return false, tx.Commit(ctx)
+		}
 		validImages, err := w.Organizer.Images.stillValid(ctx, tx, r, input)
 		if err != nil {
 			return false, err
@@ -567,23 +658,33 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	if _, err = tx.Exec(ctx, `DELETE FROM collection_projects WHERE user_id=$1 AND collection_id=$2 AND decision='suggested'`, r.UID, r.CollectionID); err != nil {
 		return false, err
 	}
-	snapshot := map[string]projectInput{}
-	for _, p := range input.Projects {
-		snapshot[p.ID] = p
-	}
+	archive := ""
 	staleProject := false
-	for _, p := range result.Projects {
-		version := snapshot[p.ID].Version
-		var valid bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2 AND state='active' AND version=$3)`, r.UID, p.ID, version).Scan(&valid); err != nil {
-			return false, err
+	if input.archivesImage() {
+		if out.ErrorCode == "" {
+			archive, staleProject, err = applyImageProject(ctx, tx, r, input, result)
+			if err != nil {
+				return false, err
+			}
 		}
-		if !valid {
-			staleProject = true
-			continue
+	} else {
+		snapshot := map[string]projectInput{}
+		for _, p := range input.Projects {
+			snapshot[p.ID] = p
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision,reason,evidence,project_version,run_id) VALUES($1,$2,$3,'suggested',$4,$5,$6,$7) ON CONFLICT(collection_id,project_id) DO UPDATE SET reason=excluded.reason,evidence=excluded.evidence,project_version=excluded.project_version,run_id=excluded.run_id,updated_at=now() WHERE collection_projects.decision='suggested'`, r.UID, r.CollectionID, p.ID, p.Reason, jsonBytes(p.Evidence), version, r.ID); err != nil {
-			return false, err
+		for _, p := range result.Projects {
+			version := snapshot[p.ID].Version
+			var valid bool
+			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2 AND state='active' AND version=$3)`, r.UID, p.ID, version).Scan(&valid); err != nil {
+				return false, err
+			}
+			if !valid {
+				staleProject = true
+				continue
+			}
+			if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision,reason,evidence,project_version,run_id) VALUES($1,$2,$3,'suggested',$4,$5,$6,$7) ON CONFLICT(collection_id,project_id) DO UPDATE SET reason=excluded.reason,evidence=excluded.evidence,project_version=excluded.project_version,run_id=excluded.run_id,updated_at=now() WHERE collection_projects.decision='suggested'`, r.UID, r.CollectionID, p.ID, p.Reason, jsonBytes(p.Evidence), version, r.ID); err != nil {
+				return false, err
+			}
 		}
 	}
 	var tagsChanged bool
@@ -597,8 +698,8 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		return false, err
 	}
 	r.ImagePolicyVersion = input.imagePolicyVersion()
-	if _, err = tx.Exec(ctx, `UPDATE organization_runs SET result=$3,applied_at=now(),image_user_policy_version=NULLIF($4::bigint,0)
-		WHERE user_id=$1 AND id=$2 AND applied_at IS NULL`, r.UID, r.ID, jsonBytes(result), r.ImagePolicyVersion); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE organization_runs SET result=$3,applied_at=now(),image_user_policy_version=NULLIF($4::bigint,0),image_archive_status=NULLIF($5,'')
+		WHERE user_id=$1 AND id=$2 AND applied_at IS NULL`, r.UID, r.ID, jsonBytes(result), r.ImagePolicyVersion, archive); err != nil {
 		return false, err
 	}
 	state, code := "succeeded", ""
@@ -614,13 +715,13 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	var version int64
 	if err = tx.QueryRow(ctx, `UPDATE collections SET resource_version=resource_version+1,
 		decision_version=decision_version+CASE WHEN $3 THEN 1 ELSE 0 END,updated_at=now()
-		WHERE user_id=$1 AND id=$2 RETURNING resource_version`, r.UID, r.CollectionID, tagsChanged).Scan(&version); err != nil {
+		WHERE user_id=$1 AND id=$2 RETURNING resource_version`, r.UID, r.CollectionID, tagsChanged || archive != "").Scan(&version); err != nil {
 		return false, err
 	}
 	if err = record(ctx, tx, r.UID, "collection", r.CollectionID, version); err != nil {
 		return false, err
 	}
-	if staleProject && out.ErrorCode == "" {
+	if staleProject && out.ErrorCode == "" && !input.archivesImage() {
 		if _, _, err = w.Organizer.Enqueue(ctx, tx, r.UID, r.CollectionID, false); err != nil {
 			return false, err
 		}

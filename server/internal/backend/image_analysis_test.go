@@ -372,7 +372,7 @@ func startImageTestWorker(t *testing.T, app *Server, storage ImageObjectReader, 
 		t.Fatal(err)
 	}
 	t.Cleanup(model.Close)
-	worker, err := StartImageWorker(context.Background(), app.Pool, storage, model, app.Config.ImageAdminID)
+	worker, err := StartImageWorker(context.Background(), app.Pool, storage, model, app.Config.ImageAdminID, app.Organizer)
 	if err != nil {
 		t.Fatal(err)
 	}
