@@ -27,6 +27,36 @@ func calendarInstant(t *testing.T, raw string) time.Time {
 	return value
 }
 
+func TestLocalDayStartAtYearBoundary(t *testing.T) {
+	for _, example := range []struct {
+		zone, date, start string
+	}{
+		{"America/New_York", "2028-12-31", "2028-12-31T05:00:00Z"},
+		{"America/New_York", "2029-01-01", "2029-01-01T05:00:00Z"},
+		{"Australia/Sydney", "2029-01-01", "2028-12-31T13:00:00Z"},
+		{"America/Sao_Paulo", "2018-11-04", "2018-11-04T03:00:00Z"},
+		{"America/Havana", "2026-11-01", "2026-11-01T04:00:00Z"},
+	} {
+		t.Run(example.zone+"/"+example.date, func(t *testing.T) {
+			date, err := time.Parse(time.DateOnly, example.date)
+			if err != nil {
+				t.Fatal(err)
+			}
+			location, err := time.LoadLocation(example.zone)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := localDayStart(date, location)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := calendarInstant(t, example.start); !got.Equal(want) {
+				t.Fatalf("date starts at %s, want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestCalendarDateBoundariesMatchCollections(t *testing.T) {
 	app, base := testBackend(t)
 	alice := imageTestAccount(t, app, base, "calendar-alice")
@@ -37,6 +67,7 @@ func TestCalendarDateBoundariesMatchCollections(t *testing.T) {
 		{"2026-03-08", "2026-03-09", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z"},
 		{"2026-11-01", "2026-11-02", "2026-11-01T04:00:00Z", "2026-11-02T05:00:00Z"},
 		{"2025-12-31", "2026-01-01", "2025-12-31T05:00:00Z", "2026-01-01T05:00:00Z"},
+		{"2028-12-31", "2029-01-01", "2028-12-31T05:00:00Z", "2029-01-01T05:00:00Z"},
 	} {
 		start, end := calendarInstant(t, fixture.start), calendarInstant(t, fixture.end)
 		datedCollection(t, app, alice, start.Add(-time.Microsecond))

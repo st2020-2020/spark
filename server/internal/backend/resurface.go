@@ -110,7 +110,11 @@ func (s *Server) getResurface(c *gin.Context) (any, error) {
 
 func createResurfaceItems(ctx context.Context, tx pgx.Tx, uid string, date, now time.Time, location *time.Location) error {
 	yearStart := time.Date(date.Year(), 1, 1, 0, 0, 0, 0, time.UTC)
-	_, err := tx.Exec(ctx, `
+	yearBoundary, err := localDayStart(yearStart, location)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `
 		WITH unclassified AS (
 			SELECT c.id, c.created_at AS sort_time
 			FROM collections c
@@ -156,7 +160,7 @@ func createResurfaceItems(ctx context.Context, tx pgx.Tx, uid string, date, now 
 		FROM numbered JOIN collections c ON c.user_id=$1 AND c.id=numbered.id
 		WHERE c.deleted_at IS NULL AND c.purge_requested_at IS NULL
 		FOR KEY SHARE OF c`, uid, date, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour),
-		localDayStart(yearStart, location), location.String())
+		yearBoundary, location.String())
 	return err
 }
 

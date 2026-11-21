@@ -33,20 +33,47 @@ func civilDateAt(now time.Time, location *time.Location) time.Time {
 
 // localDayStart finds the first instant of a civil date from the zone offsets.
 // This also handles transitions at midnight and dates skipped in their entirety.
-func localDayStart(date time.Time, location *time.Location) time.Time {
-	for instant := date.Add(-36 * time.Hour); ; {
+func localDayStart(date time.Time, location *time.Location) (time.Time, error) {
+	const (
+		offsetWindow = 36 * time.Hour
+		maxSegments  = 16
+	)
+	instant := date.Add(-offsetWindow)
+	// The window exceeds the absolute offset of every IANA zone. Cap the
+	// number of segments as well so an inconsistent zone cannot stall a request.
+	for range maxSegments {
 		local := instant.In(location)
 		_, offset := local.Zone()
+		shift := time.Duration(offset) * time.Second
+		if shift <= -offsetWindow || shift >= offsetWindow {
+			break
+		}
 		_, end := local.ZoneBounds()
-		start := date.Add(-time.Duration(offset) * time.Second)
+		if !end.IsZero() && !end.After(instant) {
+			// Go's POSIX extension uses Jan 1 + 365 days as a synthetic end
+			// after the year's last transition. In leap years it lands on
+			// Dec 31. Recheck the zone at the actual UTC year boundary.
+			yearStart := time.Date(instant.UTC().Year(), time.January, 1, 0, 0, 0, 0, time.UTC)
+			nextYear := yearStart.AddDate(1, 0, 0)
+			if !end.Equal(yearStart.Add(365*24*time.Hour)) || !end.Before(nextYear) {
+				break
+			}
+			end = nextYear
+		}
+		start := date.Add(-shift)
 		if start.Before(instant) {
 			start = instant
 		}
 		if end.IsZero() || start.Before(end) {
-			return start.UTC()
+			start = start.UTC()
+			if start.Year() >= 0 && start.Year() <= 9999 {
+				return start, nil
+			}
+			break
 		}
 		instant = end
 	}
+	return time.Time{}, problem(400, "invalid_request", "无法表示所选时区的日期边界。")
 }
 
 func (s *Server) getActivity(c *gin.Context) (any, error) {
@@ -68,10 +95,16 @@ func (s *Server) getActivity(c *gin.Context) (any, error) {
 
 	result := contract.ActivityResult{From: types.Date{Time: from}, To: types.Date{Time: to}, Tz: location.String()}
 	var starts, ends []time.Time
-	start := localDayStart(from, location)
+	start, err := localDayStart(from, location)
+	if err != nil {
+		return nil, err
+	}
 	for date := from; date.Before(to); {
 		next := date.AddDate(0, 0, 1)
-		end := localDayStart(next, location)
+		end, err := localDayStart(next, location)
+		if err != nil {
+			return nil, err
+		}
 		starts, ends = append(starts, start), append(ends, end)
 		result.Days = append(result.Days, contract.ActivityDay{
 			Date: types.Date{Time: date}, CreatedFrom: start, CreatedTo: end,
