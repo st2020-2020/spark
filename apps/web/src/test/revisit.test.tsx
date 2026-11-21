@@ -15,6 +15,92 @@ function mount(api: TestAdapter, path: string) {
   return render(<MemoryRouter initialEntries={[path]}><AppProviders api={api}><AppRoutes /></AppProviders></MemoryRouter>);
 }
 
+it.each([true, false])('preserves an explicit unread choice when initially read=%s', async initiallyRead => {
+  const api = await admin();
+  const ui = userEvent.setup();
+  const col = await api.createCollection({
+    id: crypto.randomUUID(), document: { schema_version: 1, content: { type: 'doc', content: [
+      { type: 'paragraph', content: [{ type: 'text', text: '留待再读' }] },
+    ] } }, intent: '', upload_ids: [], project_ids: [], tag_ids: [],
+  }, 'read-state');
+  if (initiallyRead) await api.setReadState(col.id, { read: true });
+  const write = api.setReadState.bind(api);
+  const writes = vi.spyOn(api, 'setReadState');
+  let release = () => {};
+  if (!initiallyRead) {
+    const delay = new Promise<void>(resolve => { release = resolve; });
+    writes.mockImplementationOnce(async (id, body) => { await delay; return write(id, body); });
+  }
+  mount(api, initiallyRead ? '/collections' : '/collections?read=false');
+  await ui.click(await screen.findByRole('link', { name: '查看全文' }));
+  await ui.click(await screen.findByRole('button', { name: '标为未读' }));
+  release();
+  await waitFor(() => expect(writes.mock.calls.map(([, body]) => body.read)).toEqual(initiallyRead ? [false] : [true, false]));
+  await screen.findByRole('button', { name: '标为已读' });
+  await ui.click(screen.getByRole('link', { name: '返回' }));
+  expect(await screen.findByRole('img', { name: '未读' })).toBeVisible();
+  expect((await api.getCollection(col.id)).read_at).toBeFalsy();
+});
+
+it.each([false, true])('orders trash after the entry read, preserving external conflicts=%s', async external => {
+  const api = await admin();
+  const ui = userEvent.setup();
+  const col = await api.createCollection({ id: crypto.randomUUID(), document: { schema_version: 1,
+    content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '合成资料' }] }] } },
+    intent: '', upload_ids: [], project_ids: [], tag_ids: [] }, 'trash-race');
+  const write = api.setReadState.bind(api);
+  let release = () => {};
+  const delay = new Promise<void>(resolve => { release = resolve; });
+  vi.spyOn(api, 'setReadState').mockImplementationOnce(async (id, body) => {
+    await delay;
+    const updated = await write(id, body);
+    if (external) await write(id, { read: false });
+    return updated;
+  });
+  const trash = vi.spyOn(api, 'trashCollection');
+  mount(api, `/collections/${col.id}`);
+  await ui.click(await screen.findByRole('button', { name: '移入回收站' }));
+  expect(trash).not.toHaveBeenCalled();
+  release();
+  await screen.findByText(external ? '收藏状态已变更，请刷新后重试' : '已移入回收站');
+  expect(trash).toHaveBeenCalledTimes(1);
+  expect(Boolean((await api.getCollection(col.id)).deleted_at)).toBe(!external);
+});
+
+it.each(['composer', 'filter', 'detail', 'unclassified'])('selects project 101 on demand in the %s', async entry => {
+  const api = await admin();
+  const ui = userEvent.setup();
+  const project = await api.createProject({ name: '第 101 项', description: '', focus_points: [] }, 'last');
+  for (let i = 0; i < 100; i++) {
+    await api.createProject({ name: `项目 ${i}`, description: '', focus_points: [] }, `p-${i}`);
+  }
+  const col = await api.createCollection({ id: crypto.randomUUID(), document: { schema_version: 1,
+    content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '待关联资料' }] }] } },
+    intent: '', upload_ids: [], project_ids: [], tag_ids: [] }, 'note');
+  const list = vi.spyOn(api, 'listProjects');
+  mount(api, entry === 'composer' ? '/inbox' : entry === 'filter' ? '/collections' :
+    entry === 'detail' ? `/collections/${col.id}` : '/unclassified');
+  if (entry === 'composer') await ui.click(await screen.findByRole('button', { name: '添加项目' }));
+  if (entry === 'filter') await ui.click(await screen.findByRole('button', { name: '筛选' }));
+  const more = await screen.findByRole('button', { name: '加载更多项目' });
+  expect(list.mock.calls.some(([q]) => q?.cursor)).toBe(false);
+  await ui.click(more);
+  if (entry === 'composer') {
+    const choice = await screen.findByRole('button', { name: project.name });
+    await ui.click(choice);
+    expect(choice).toHaveAttribute('aria-pressed', 'true');
+  } else {
+    const opt = await screen.findByRole('option', { name: project.name });
+    const select = opt.closest('select')!;
+    await ui.selectOptions(select, opt);
+    expect(select).toHaveValue(project.id);
+    if (entry !== 'filter') {
+      await ui.click(screen.getByRole('button', { name: entry === 'detail' ? '加入项目' : '确认关联' }));
+      await waitFor(async () => expect((await api.getCollection(col.id)).projects.some(p => p.project_id === project.id)).toBe(true));
+    }
+  }
+});
+
 it('uses server day boundaries even on a 25-hour day and clears the filter', async () => {
   const api = await admin();
   const selected = { date: '2026-11-01', count: 0, created_from: '2026-11-01T04:00:00Z', created_to: '2026-11-02T05:00:00Z' };

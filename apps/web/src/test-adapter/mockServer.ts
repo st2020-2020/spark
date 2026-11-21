@@ -349,6 +349,7 @@ export function createTestAdapter(): TestAdapter {
       role: u.role,
       status: u.status,
       ai_enabled: u.ai_enabled,
+      ai_consent_version: u.ai_consent_version,
       ai_policy_version: u.ai_policy_version,
     };
   }
@@ -556,6 +557,8 @@ export function createTestAdapter(): TestAdapter {
       expires_at: sess.expires_at,
       ai_trial_eligible: mockAiTrialEligible,
       ai_platform_enabled: mockAiPlatformEnabled,
+      purge_enabled: !mockPurgeBehavior.unconfigured,
+      url_extraction_enabled: !mockUrlExtractionBehavior.unconfigured,
     };
   }
 
@@ -1053,6 +1056,8 @@ export function createTestAdapter(): TestAdapter {
         expires_at: sess.expires_at,
         ai_trial_eligible: mockAiTrialEligible,
         ai_platform_enabled: mockAiPlatformEnabled,
+      purge_enabled: !mockPurgeBehavior.unconfigured,
+      url_extraction_enabled: !mockUrlExtractionBehavior.unconfigured,
       };
     },
 
@@ -1115,6 +1120,7 @@ export function createTestAdapter(): TestAdapter {
       const user = requireUser(true);
       if (body.ai_enabled !== undefined) {
         user.ai_enabled = body.ai_enabled;
+        user.ai_consent_version = body.ai_enabled ? body.consent_version : undefined;
         user.ai_policy_version += 1;
       }
       if (body.palette) user.palette = body.palette;
@@ -1227,15 +1233,14 @@ export function createTestAdapter(): TestAdapter {
     async listProjects(query) {
       const user = requireUser(false);
       refreshProjectCounts(user.id);
-      let items = projects
+      const items = projects
         .filter((p) => p.user_id === user.id)
         .filter(p => !query?.q || p.name.toLowerCase().includes(query.q.toLowerCase()))
         .filter((p) => !query?.state || p.state === query.state)
         .map(({ user_id: _u, ...rest }) => rest);
-      if (query?.limit) {
-        items = items.slice(0, query.limit);
-      }
-      return { items };
+      const start = Number(query?.cursor ?? 0);
+      const end = start + (query?.limit ?? 30);
+      return { items: items.slice(start, end), next_cursor: end < items.length ? String(end) : undefined };
     },
 
     async getProject(id) {

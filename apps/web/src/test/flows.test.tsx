@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
 import { createTestAdapter } from '../test-adapter/mockServer';
-import { saveDraft } from '../lib/drafts';
+import { loadDraft, saveDraft } from '../lib/drafts';
 import { EMPTY_DOCUMENT } from '../lib/document';
 
 function renderWithAdapter(initialEntries: string[] = ['/login'], adapter = createTestAdapter()) {
@@ -34,6 +34,69 @@ async function loginAsAdmin(user: ReturnType<typeof userEvent.setup>, adapter = 
 }
 
 describe('Spark Web key flows', () => {
+  it.each([false, true])('reconciles an interrupted logout and preserves the draft (server signed out: %s)', async (signedOut) => {
+    const user = userEvent.setup();
+    const api = createTestAdapter();
+    const session = await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    saveDraft(session.user.id, 'edit:sample', { document: EMPTY_DOCUMENT, intent: '保留本地资料' });
+    const logout = api.logout.bind(api);
+    vi.spyOn(api, 'logout').mockImplementationOnce(async () => {
+      if (signedOut) await logout();
+      throw new Error('连接中断');
+    });
+    renderWithAdapter(['/settings'], api);
+    await user.click(await screen.findByRole('button', { name: '退出登录' }));
+    if (signedOut) {
+      await screen.findByRole('button', { name: '登录' });
+    } else {
+      await screen.findByText(/尚未退出登录/);
+    }
+    expect(loadDraft(session.user.id, 'edit:sample').data).toMatchObject({ intent: '保留本地资料' });
+    if (!signedOut) {
+      await user.click(screen.getByRole('button', { name: '退出登录' }));
+      await screen.findByRole('button', { name: '登录' });
+      expect(loadDraft(session.user.id, 'edit:sample').data).toBeNull();
+    }
+  });
+
+  it('restores project search and type when returning from a collection', async () => {
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const project = await api.createProject({ name: '山地记录', description: '', focus_points: [] }, 'seed');
+    await api.createCollection({ id: crypto.randomUUID(), original_url: 'https://example.com/AlpineRecall',
+      document: EMPTY_DOCUMENT, intent: 'AlpineRecall', upload_ids: [], tag_ids: [], project_ids: [project.id] }, 'note');
+    renderWithAdapter([`/projects/${project.id}`], api);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText('在当前项目内搜索'), 'AlpineRecall');
+    await user.selectOptions(screen.getByRole('combobox', { name: '筛选类型' }), 'url');
+    await user.click(await screen.findByRole('link', { name: '查看全文' }));
+    await user.click(await screen.findByRole('link', { name: '返回' }));
+    expect(await screen.findByLabelText('在当前项目内搜索')).toHaveValue('AlpineRecall');
+    expect(screen.getByRole('combobox', { name: '筛选类型' })).toHaveValue('url');
+    expect(await screen.findByRole('link', { name: '查看全文' })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['/inbox', '展开类型筛选', '内容类型'],
+    ['/collections', '筛选', '按类型筛选'],
+    ['/projects/:id', '', '筛选类型'],
+  ])('filters image collections from %s', async (path, toggle, label) => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const project = path.includes(':id')
+      ? await adapter.createProject({ name: '图片手记', description: '', focus_points: [] }, 'image-project')
+      : undefined;
+    const list = vi.spyOn(adapter, 'listCollections');
+    const user = userEvent.setup();
+    renderWithAdapter([project ? path.replace(':id', project.id) : path], adapter);
+    if (toggle) await user.click(await screen.findByRole('button', { name: toggle }));
+    const filter = await screen.findByRole('combobox', { name: label });
+    await user.selectOptions(filter, within(filter).getByRole('option', { name: '图片' }));
+    await waitFor(() => expect(list.mock.calls.some(([q]) =>
+      q?.type === 'image' && q.project_id === project?.id,
+    )).toBe(true));
+  });
+
   it.each([
     ['Android WebView SparkAndroid/2', true],
     ['Android WebView SparkAndroid/20', false],

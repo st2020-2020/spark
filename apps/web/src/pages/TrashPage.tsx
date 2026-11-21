@@ -43,7 +43,7 @@ function removeCollectionFromPages(
 
 export function TrashPage() {
   const api = useApi();
-  const { user } = useAuth();
+  const { user, purgeEnabled } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -166,7 +166,7 @@ export function TrashPage() {
   }
 
   function handleConfirmPurge() {
-    if (!confirmTarget || restoreMutation.isPending || purgeMutation.isPending) return;
+    if (!purgeEnabled || !confirmTarget || restoreMutation.isPending || purgeMutation.isPending) return;
     const keySlot = `${confirmTarget.id}:${confirmTarget.resource_version}`;
     let idempotencyKey = purgeKeysRef.current.get(keySlot);
     if (!idempotencyKey) {
@@ -185,7 +185,7 @@ export function TrashPage() {
     <div>
       <PageHeader
         title="回收站"
-        subtitle="保留期 30 天内可随时恢复，到期后自动清理；永久删除不可恢复"
+        subtitle={purgeEnabled ? '保留期 30 天，到期后自动清理。永久删除后无法恢复。' : '可在这里查看或恢复已删除的收藏。'}
       />
 
       {actionError && (
@@ -276,14 +276,14 @@ export function TrashPage() {
           const isBusy =
             restoringId === col.id ||
             purgingId === col.id ||
-            confirmTarget?.id === col.id ||
+            (purgeEnabled && confirmTarget?.id === col.id) ||
             acceptedIds.has(col.id);
 
           return (
             <article key={col.id} className="sp-note">
               <div className="sp-note-meta sp-trash-meta">
                 <time dateTime={col.updated_at}>删除/更新于 {formatDateTime(col.updated_at)}</time>
-                {estExpiry && (
+                {purgeEnabled && estExpiry && (
                   <span className="sp-trash-expiry">
                     预计到期：{formatDateTime(estExpiry)}（{formatRemainingTrashDays(estExpiry)}）
                   </span>
@@ -326,7 +326,7 @@ export function TrashPage() {
                     <RotateCcw size={14} strokeWidth={2} aria-hidden="true" />
                     <span>{restoringId === col.id ? '恢复中…' : '恢复'}</span>
                   </button>
-                  <button
+                  {purgeEnabled && <button
                     type="button"
                     className="sp-btn sp-btn--sm sp-btn--danger"
                     disabled={isBusy}
@@ -337,7 +337,7 @@ export function TrashPage() {
                   >
                     <Trash2 size={14} strokeWidth={2} aria-hidden="true" />
                     <span>{purgingId === col.id ? '删除中…' : '永久删除'}</span>
-                  </button>
+                  </button>}
                 </div>
               </div>
             </article>
@@ -359,7 +359,7 @@ export function TrashPage() {
       )}
 
       <PurgeConfirmModal
-        open={Boolean(confirmTarget)}
+        open={purgeEnabled && Boolean(confirmTarget)}
         targetSummary={
           confirmTarget ? confirmTarget.display_title || confirmTarget.excerpt : undefined
         }

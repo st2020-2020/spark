@@ -17,11 +17,12 @@ import (
 )
 
 type AIConfig struct {
-	Version        string    `json:"version"`
-	MaxAttempts    int       `json:"max_attempts"`
-	TimeoutSeconds int       `json:"timeout_seconds"`
-	MaxInputChars  int       `json:"max_input_chars"`
-	Routes         []AIRoute `json:"routes"`
+	Version        string                 `json:"version"`
+	MaxAttempts    int                    `json:"max_attempts"`
+	TimeoutSeconds int                    `json:"timeout_seconds"`
+	MaxInputChars  int                    `json:"max_input_chars"`
+	Routes         []AIRoute              `json:"routes"`
+	Images         ImageOrganizationScope `json:"-"`
 }
 type AIRoute struct {
 	Name                            string `json:"name"`

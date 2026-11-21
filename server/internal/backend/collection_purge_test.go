@@ -113,3 +113,50 @@ func TestPurgeHidesCollectionAndBlocksCreateReplay(t *testing.T) {
 	client.do("POST", "/collections", input, key).want(t, 409)
 	client.do("POST", "/collections", input, uuid.NewString()).want(t, 409)
 }
+
+func TestSessionReportsPurgeCapabilityAndKeepsReceipts(t *testing.T) {
+	app, base := testBackend(t)
+	const email = "purge-capability@example.test"
+	if err := app.BootstrapAdmin(t.Context(), email, "test-password-12345"); err != nil {
+		t.Fatal(err)
+	}
+	owner := newClient(t, app, base)
+	owner.signIn(email)
+	assertCapability := func(enabled bool) {
+		t.Helper()
+		session := owner.do("GET", "/auth/session", nil, "").want(t, 200)
+		if session["purge_enabled"] != enabled {
+			t.Fatalf("session purge_enabled = %v, want %v", session["purge_enabled"], enabled)
+		}
+	}
+	trash := func() string {
+		t.Helper()
+		id := uuid.NewString()
+		owner.do("POST", "/collections", collectionInput(id, "合成回收站数据"), uuid.NewString()).want(t, 201)
+		path := "/collections/" + id
+		owner.do("DELETE", path, map[string]any{"base_resource_version": 1}, "").want(t, 200)
+		return path
+	}
+
+	assertCapability(false)
+	path := trash()
+	version := map[string]any{"base_resource_version": 2}
+	key := uuid.NewString()
+	owner.do("POST", path+"/purge", version, key).want(t, 503)
+	app.Config.PurgeEnabled = true
+	assertCapability(true)
+	receipt := owner.do("POST", path+"/purge", version, key).want(t, 202)
+	app.Config.PurgeEnabled = false
+	assertCapability(false)
+	replay := owner.do("POST", path+"/purge", version, key)
+	if replay.want(t, 202)["operation_id"] != receipt["operation_id"] || replay.header.Get("Idempotent-Replayed") != "true" {
+		t.Fatal("turning off new purge registrations lost the original receipt")
+	}
+	if owner.do("GET", path+"/purge", nil, "").want(t, 200)["operation_id"] != receipt["operation_id"] {
+		t.Fatal("turning off new purge registrations blocked reading a receipt")
+	}
+	owner.do("POST", path+"/restore", version, "").want(t, 404)
+	unregistered := trash()
+	owner.do("POST", unregistered+"/purge", version, uuid.NewString()).want(t, 503)
+	owner.do("POST", unregistered+"/restore", version, "").want(t, 200)
+}

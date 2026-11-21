@@ -1,10 +1,11 @@
+import { MoreProjectChoices, useProjectChoices } from '../components/ProjectChoices';
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
 import type { CollectionSummary } from '../api/types';
-import { getFriendlyErrorMessage } from '../api/errors';
-import { decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
+import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
+import { pendingSuggestionOptions, decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
@@ -24,23 +25,14 @@ export function UnclassifiedPage() {
 
   const activeTab = searchParams.get('tab') === 'suggested' ? 'suggested' : 'all';
 
-  const unclassifiedQuery = useInfiniteQuery({
-    queryKey: ['collections', 'unclassified', activeTab],
-    queryFn: ({ pageParam, signal }) =>
-      api.listCollections(
-        activeTab === 'suggested'
-          ? { scope: 'active', has_suggestion: true, cursor: pageParam, limit: 30 }
-          : { scope: 'unclassified', cursor: pageParam, limit: 30 },
-        signal,
-      ),
+  const unclassifiedQuery = useInfiniteQuery(activeTab === 'suggested' ? pendingSuggestionOptions(api) : {
+    queryKey: ['collections', 'unclassified', 'all'],
+    queryFn: ({ pageParam, signal }) => api.listCollections({ scope: 'unclassified', cursor: pageParam, limit: 30 }, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor,
   });
 
-  const projectsQuery = useQuery({
-    queryKey: ['projects', 'all-for-select'],
-    queryFn: () => api.listProjects({ limit: 100 }),
-  });
+  const projectsQuery = useProjectChoices();
 
   const decideMutation = useMutation({
     mutationFn: (params: {
@@ -56,25 +48,31 @@ export function UnclassifiedPage() {
       pushToast({
         message: vars.action === 'include' ? '已归入项目' : '已忽略建议关联',
       });
-      void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['projects'] });
-      void queryClient.invalidateQueries({ queryKey: ['project'] });
-      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
+      void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
+      if (vars.action === 'include') {
+        void queryClient.invalidateQueries({ queryKey: ['projects'] });
+        void queryClient.invalidateQueries({ queryKey: ['project', vars.projectId] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
+      }
     },
     onError: (err, vars) => {
       if (err instanceof StaleSuggestionError) {
         markSuggestionPromptHandled(vars.collectionId);
         queryClient.setQueryData(['collection', vars.collectionId], err.freshCollection);
-        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
         setActionError(err.message);
         return;
+      }
+      if (isApiErrorCode(err, 'suggestion_conflict') || isApiErrorCode(err, 'decision_conflict')) {
+        void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
       }
       setActionError(getFriendlyErrorMessage(err));
     },
   });
 
   const items = unclassifiedQuery.data?.pages.flatMap((p) => p.items) ?? [];
-  const projects = projectsQuery.data?.items ?? [];
+  const projects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
 
   const renderQuickClassify = (col: CollectionSummary) => {
     const suggested = col.projects.filter((p) => p.decision === 'suggested');
@@ -209,7 +207,8 @@ export function UnclassifiedPage() {
         </button>
       </div>
 
-      {projects.length === 0 && !projectsQuery.isLoading && (
+      <MoreProjectChoices query={projectsQuery} />
+      {projects.length === 0 && projectsQuery.isSuccess && (
         <div className="sp-banner sp-banner--info sp-spaced">
           <span>
             还没有项目，尚未归类的资料会暂时保留在这里。随时可以去{' '}

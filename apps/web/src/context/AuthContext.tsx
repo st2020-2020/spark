@@ -13,6 +13,7 @@ import { isApiErrorCode } from '../api/errors';
 import { showAccountAppearance, type PaletteId, type ThemePref } from '../lib/appearance';
 import { clearUserDrafts } from '../lib/drafts';
 import { useApi } from './ApiContext';
+import { useToast } from './ToastContext';
 
 interface AuthState {
   user: User | null;
@@ -20,6 +21,8 @@ interface AuthState {
   expiresAt: string | null;
   aiTrialEligible: boolean;
   aiPlatformEnabled: boolean;
+  purgeEnabled: boolean;
+  urlExtractionEnabled: boolean;
   isLoading: boolean;
   sessionError: string | null;
 }
@@ -38,6 +41,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const api = useApi();
+  const { pushToast } = useToast();
+  const activeToken = useRef<string | null>(null);
+  const exitingToken = useRef<string | null>(null);
   const queryClient = useQueryClient();
   const [state, setState] = useState<AuthState>({
     user: null,
@@ -45,6 +51,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     expiresAt: null,
     aiTrialEligible: true,
     aiPlatformEnabled: true,
+    purgeEnabled: false,
+    urlExtractionEnabled: false,
     isLoading: true,
     sessionError: null,
   });
@@ -69,6 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       sessionGeneration.current += 1;
       currentUserIdRef.current = session.user.id;
+      activeToken.current = session.csrf_token;
       api.setCsrfToken(session.csrf_token);
       setState({
         user: session.user,
@@ -76,6 +85,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expiresAt: session.expires_at,
         aiTrialEligible: session.ai_trial_eligible ?? true,
         aiPlatformEnabled: session.ai_platform_enabled ?? true,
+        purgeEnabled: session.purge_enabled === true,
+        urlExtractionEnabled: session.url_extraction_enabled === true,
         isLoading: false,
         sessionError: null,
       });
@@ -87,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (message: string | null = null) => {
       sessionGeneration.current += 1;
       currentUserIdRef.current = null;
+      activeToken.current = null;
       api.setCsrfToken(null);
       appearanceRequest.current = null;
       setAppearancePending(false);
@@ -97,6 +109,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expiresAt: null,
         aiTrialEligible: false,
         aiPlatformEnabled: false,
+        purgeEnabled: false,
+        urlExtractionEnabled: false,
         isLoading: false,
         sessionError: message,
       });
@@ -160,22 +174,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(
     async (options?: { clearDrafts?: boolean }) => {
-      const prevUserId = state.user?.id;
+      const token = activeToken.current;
+      const userId = currentUserIdRef.current;
+      if (!token || !userId || exitingToken.current === token) return;
+      exitingToken.current = token;
       try {
         await api.logout();
-      } finally {
-        if (prevUserId && options?.clearDrafts !== false) {
-          clearUserDrafts(prevUserId);
-        }
+        if (activeToken.current !== token) return;
+        if (options?.clearDrafts !== false) clearUserDrafts(userId);
         clearSessionState(null);
+      } catch {
+        if (activeToken.current !== token) return;
+        try {
+          const session = await api.currentSession();
+          if (activeToken.current !== token) return;
+          applySession(session);
+          if (session.user.id !== userId) return;
+          pushToast({ message: '尚未退出登录，草稿已保留，请重试退出。', tone: 'error' });
+        } catch (error) {
+          if (activeToken.current !== token) return;
+          if (isApiErrorCode(error, 'session_expired') || isApiErrorCode(error, 'authentication_failed')) {
+            clearSessionState(null);
+          } else {
+            pushToast({ message: '无法确认退出结果，草稿已保留。请在网络恢复后重试退出。', tone: 'error' });
+          }
+        }
+      } finally {
+        if (exitingToken.current === token) exitingToken.current = null;
       }
     },
-    [api, clearSessionState, state.user?.id],
+    [api, applySession, clearSessionState, pushToast],
   );
 
   const applyAiPreferences = useCallback((user: User) => {
     setState((prev) => prev.user?.id === user.id ? { ...prev, user: {
       ...prev.user, ai_enabled: user.ai_enabled, ai_policy_version: user.ai_policy_version,
+      ai_consent_version: user.ai_consent_version,
     } } : prev);
   }, []);
 

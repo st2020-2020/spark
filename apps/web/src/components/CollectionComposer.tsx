@@ -1,3 +1,4 @@
+import { MoreProjectChoices, useProjectChoices } from './ProjectChoices';
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -124,7 +125,13 @@ export function CollectionComposer({
   const saveBtnRef = useRef<HTMLButtonElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const pendingCollapseAfterSaveRef = useRef(false);
-  const uploader = useImageUploader(api, { accountKey: userId });
+  const uploader = useImageUploader(api, { accountKey: userId, draftImages: initialDraft.images,
+    draftCollectionId: initialDraft.collectionId });
+  const hasLocalFiles = uploader.items.some(item => item.file && item.status !== 'ready');
+  const images = useMemo(() => uploader.items.map(item => ({
+    name: item.name, size: item.size,
+    uploadId: item.restored || item.status === 'ready' ? item.uploadId : undefined,
+  })), [uploader.items]);
 
   useEffect(() => {
     const onOnline = () => setIsOnline(true);
@@ -171,12 +178,9 @@ export function CollectionComposer({
     }
   }, [projectPickerOpen]);
 
-  const projectsQuery = useQuery({
-    queryKey: ['projects', 'all-for-select'],
-    queryFn: () => api.listProjects({ limit: 100 }),
-  });
+  const projectsQuery = useProjectChoices();
 
-  const allProjects = projectsQuery.data?.items ?? [];
+  const allProjects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase();
     if (!q) return allProjects;
@@ -223,7 +227,7 @@ export function CollectionComposer({
       intent,
       originalUrl,
       manualTitle,
-      projectIds, tagIds, associationNames: names,
+      projectIds, tagIds, associationNames: names, images,
       aiExcluded,
       updatedAt: new Date().toISOString(),
     });
@@ -238,7 +242,7 @@ export function CollectionComposer({
     intent,
     originalUrl,
     manualTitle,
-    projectIds, tagIds, names,
+    projectIds, tagIds, names, images,
     aiExcluded,
   ]);
 
@@ -397,7 +401,7 @@ export function CollectionComposer({
 
   return (
     <section
-      data-pending-images={uploader.items.length || undefined}
+      data-pending-images={hasLocalFiles || (storageWarning && isDirty) || undefined}
       className={`sp-composer ${effectiveActivated ? 'sp-composer--active' : ''} ${
         variant === 'sheet' ? 'sp-composer--sheet' : ''
       }`}
@@ -512,7 +516,7 @@ export function CollectionComposer({
                     />
                     {filteredProjects.length === 0 ? (
                       <span className="sp-picker-empty">
-                        {allProjects.length === 0 ? '暂无项目，保存后可在待归类查看' : '没有匹配的项目'}
+                        {projectsQuery.isLoading ? '正在加载项目…' : projectsQuery.hasNextPage ? '已加载的项目中没有匹配项' : allProjects.length ? '没有匹配的项目' : '暂无项目'}
                       </span>
                     ) : (
                       <div className="sp-picker-list">
@@ -524,7 +528,10 @@ export function CollectionComposer({
                               type="button"
                               className="sp-menu-item"
                               aria-pressed={checked}
-                              onClick={() => toggleProject(proj.id)}
+                              onClick={() => {
+                                setNames(old => ({ ...old, [proj.id]: proj.name }));
+                                toggleProject(proj.id);
+                              }}
                             >
                               <Folder size={16} strokeWidth={2} aria-hidden="true" />
                               <span className="sp-truncate">{proj.name}</span>
@@ -541,6 +548,7 @@ export function CollectionComposer({
                         })}
                       </div>
                     )}
+                    <MoreProjectChoices query={projectsQuery} />
                   </div>
                 </div>
               )}
@@ -549,6 +557,7 @@ export function CollectionComposer({
         }
         betweenEditorAndToolbar={
           <>
+            {hasLocalFiles && <p className="sp-help">上传完成前离开，未就绪的图片需要重新选择。</p>}
             <UploadQueueTray
               pendingItems={uploader.items}
               validationError={uploader.validationError}

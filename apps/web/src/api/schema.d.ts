@@ -1048,6 +1048,8 @@ export interface components {
             ai_policy_version: number;
             palette?: components["schemas"]["Palette"];
             theme?: components["schemas"]["Theme"];
+            /** @description 最近一次接受的文字整理处理说明版本。是否启用仍由 ai_enabled 表示。 */
+            ai_consent_version?: string;
         };
         SessionResult: {
             user: components["schemas"]["User"];
@@ -1058,6 +1060,10 @@ export interface components {
             ai_trial_eligible?: boolean;
             /** @description 平台文字整理总开关。 */
             ai_platform_enabled?: boolean;
+            /** @description 是否开放登记新的永久删除。字段缺失视为关闭。 */
+            purge_enabled?: boolean;
+            /** @description 是否开放网页信息提取和手动重新抓取。字段缺失视为关闭。 */
+            url_extraction_enabled?: boolean;
         };
         Session: {
             /** Format: uuid */
@@ -1299,6 +1305,11 @@ export interface components {
             error_code?: string;
             /** Format: date-time */
             updated_at: string;
+            /**
+             * @description 分别表示可用图片材料需要新版文字授权、正在等待图片提取、此轮成功或部分成功使用了图片衍生材料。
+             * @enum {string}
+             */
+            image_material_status?: "consent_required" | "waiting" | "included";
         };
         Collection: {
             /** Format: uuid */
@@ -1585,8 +1596,8 @@ export interface components {
             items: components["schemas"]["FailureSummary"][];
         };
         ProjectEvidence: {
-            /** @enum {string} */
-            source_id: "original_text" | "intent";
+            /** @description 原文字段，或 image_text:/image_description: 加附件 UUID。 */
+            source_id: string;
             quote: string;
         };
         OrganizationEvent: {

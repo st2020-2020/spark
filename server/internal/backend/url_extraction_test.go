@@ -20,6 +20,42 @@ import (
 	"spark/server/internal/webextract"
 )
 
+func TestSessionReportsURLExtractionCapability(t *testing.T) {
+	app, addr := testBackend(t)
+	const email = "url-capability@example.test"
+	if err := app.BootstrapAdmin(t.Context(), email, "test-password-12345"); err != nil {
+		t.Fatal(err)
+	}
+	client := newClient(t, app, addr)
+	login := client.do("POST", "/auth/login", map[string]any{"email": email, "password": "test-password-12345"}, "").want(t, 200)
+	if login["url_extraction_enabled"] != false {
+		t.Fatalf("login should report extraction disabled by default: %v", login["url_extraction_enabled"])
+	}
+	client.csrf = login["csrf_token"].(string)
+	id := uuid.NewString()
+	input := collectionInput(id, "合成网页资料")
+	input["original_url"] = "https://example.test/capability"
+	client.do("POST", "/collections", input, uuid.NewString()).want(t, 201)
+	path := "/collections/" + id + "/extractions"
+	for _, enabled := range []bool{false, true, false} {
+		app.Config.URLExtractEnabled = enabled
+		session := client.do("GET", "/auth/session", nil, "").want(t, 200)
+		if session["url_extraction_enabled"] != enabled {
+			t.Fatalf("session url_extraction_enabled = %v, want %v", session["url_extraction_enabled"], enabled)
+		}
+		refresh := client.do("POST", path, nil, uuid.NewString())
+		if enabled {
+			if body := refresh.want(t, 202); body["status"] != "queued" || body["source_kind"] != "url" {
+				t.Fatalf("enabled refresh did not queue the URL: %v", body)
+			}
+		} else {
+			if body := refresh.want(t, 503); body["error"].(map[string]any)["code"] != "integration_not_configured" {
+				t.Fatalf("disabled refresh reported an unexpected error: %v", body)
+			}
+		}
+	}
+}
+
 func TestURLExtractionWithIsolatedRiver(t *testing.T) {
 	app, addr := testBackend(t)
 	ctx := t.Context()

@@ -123,7 +123,7 @@ export function UploadQueueTray({
                     {item.previewUrl ? (
                       <img
                         src={item.previewUrl}
-                        alt={item.file.name}
+                        alt={item.name}
                         className="sp-attachment-img sp-attachment-img--tray"
                       />
                     ) : (
@@ -134,8 +134,8 @@ export function UploadQueueTray({
                   </div>
 
                   <div className="sp-upload-info">
-                    <span className="sp-upload-name sp-truncate" title={item.file.name}>
-                      {item.file.name}
+                    <span className="sp-upload-name sp-truncate" title={item.name}>
+                      {item.name}
                     </span>
 
                     {item.status === 'uploading' && (
@@ -145,7 +145,7 @@ export function UploadQueueTray({
                           className="sp-upload-progress"
                           value={item.progress}
                           max={100}
-                          aria-label={`${item.file.name} 上传进度`}
+                          aria-label={`${item.name} 上传进度`}
                         />
                       </>
                     )}
@@ -153,7 +153,7 @@ export function UploadQueueTray({
                     {item.status === 'verifying' && <span className="sp-help">校验中…</span>}
 
                     {item.status === 'ready' && (
-                      <span className="sp-help">已就绪 · {formatBytes(item.file.size)}</span>
+                      <span className="sp-help">{item.alreadyAttached ? '已绑定，可重试确认保存' : '已就绪'} · {formatBytes(item.size)}</span>
                     )}
 
                     {item.status === 'failed' && (
@@ -169,7 +169,7 @@ export function UploadQueueTray({
                         <button
                           type="button"
                           className="sp-icon-btn sp-upload-action-btn"
-                          aria-label={`前移待保存图片 ${item.file.name}`}
+                          aria-label={`前移待保存图片 ${item.name}`}
                           disabled={disabled || idx === 0}
                           onClick={() => onMovePending(item.localId, -1)}
                         >
@@ -178,7 +178,7 @@ export function UploadQueueTray({
                         <button
                           type="button"
                           className="sp-icon-btn sp-upload-action-btn"
-                          aria-label={`后移待保存图片 ${item.file.name}`}
+                          aria-label={`后移待保存图片 ${item.name}`}
                           disabled={disabled || idx === pendingItems.length - 1}
                           onClick={() => onMovePending(item.localId, 1)}
                         >
@@ -191,7 +191,7 @@ export function UploadQueueTray({
                       <button
                         type="button"
                         className="sp-btn sp-btn--sm sp-btn--quiet"
-                        aria-label={`取消上传 ${item.file.name}`}
+                        aria-label={`取消上传 ${item.name}`}
                         disabled={disabled}
                         onClick={() => onCancelPending(item.localId)}
                       >
@@ -199,11 +199,11 @@ export function UploadQueueTray({
                       </button>
                     ) : (
                       <>
-                        {item.status === 'failed' && (
+                        {item.status === 'failed' && (item.file || item.errorCode === 'recheck') && (
                           <button
                             type="button"
                             className="sp-btn sp-btn--sm"
-                            aria-label={`重试上传 ${item.file.name}`}
+                            aria-label={`${item.file ? '重试上传' : '重新核对'} ${item.name}`}
                             disabled={disabled}
                             onClick={() => onRetryPending(item.localId)}
                           >
@@ -214,7 +214,7 @@ export function UploadQueueTray({
                         <button
                           type="button"
                           className="sp-icon-btn sp-upload-action-btn"
-                          aria-label={`移除图片 ${item.file.name}`}
+                          aria-label={`移除图片 ${item.name}`}
                           disabled={disabled}
                           onClick={() => onRemovePending(item.localId)}
                         >

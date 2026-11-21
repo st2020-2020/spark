@@ -2,7 +2,14 @@ import { useEffect } from 'react';
 import type { SparkDocument } from '../api/types';
 import { inspectSparkDocumentSupport } from './document';
 
+export interface DraftImage {
+  uploadId?: string;
+  name: string;
+  size: number;
+}
+
 export interface CollectionDraft {
+  images?: DraftImage[];
   collectionId: string;
   idempotencyKey: string;
   document: SparkDocument;
@@ -79,8 +86,8 @@ export function clearUserDrafts(userId: string): void {
 }
 
 /** File objects in an open upload queue cannot be recovered from the text draft. */
-export function confirmLeavingImageDraft(): boolean {
-  return !document.querySelector('[data-pending-images]') ||
+export function confirmLeavingImageDraft(root: ParentNode = document): boolean {
+  return !root.querySelector('[data-pending-images]') ||
     window.confirm('离开后，未保存的图片需要重新选择。仍要离开吗？');
 }
 

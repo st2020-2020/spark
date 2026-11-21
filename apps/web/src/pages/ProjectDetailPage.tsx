@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, Search, X } from 'lucide-react';
 import type { CollectionType, ProjectState } from '../api/types';
@@ -11,7 +11,7 @@ import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
 import { useToast } from '../context/ToastContext';
-import { projectStateLabel } from '../lib/format';
+import { contentTypeLabels, projectStateLabel } from '../lib/format';
 import { projectToneClass } from '../lib/projectTone';
 
 export function ProjectDetailPage() {
@@ -20,10 +20,19 @@ export function ProjectDetailPage() {
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
-  const [typeFilter, setTypeFilter] = useState<CollectionType | ''>('');
-  const [unreadOnly, setUnreadOnly] = useState(false);
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [debouncedKeyword, setDebouncedKeyword] = useState('');
+  const [params, setParams] = useSearchParams();
+  const typeFilter = (params.get('type') ?? '') as CollectionType | '';
+  const unreadOnly = params.get('read') === 'false';
+  const searchKeyword = params.get('q') ?? '';
+  const [debouncedKeyword, setDebouncedKeyword] = useState(searchKeyword.trim());
+  function updateFilter(name: string, value: string) {
+    setParams(previous => {
+      const next = new URLSearchParams(previous);
+      if (value) next.set(name, value);
+      else next.delete(name);
+      return next;
+    }, { replace: true });
+  }
   const [editOpen, setEditOpen] = useState(false);
 
   const [editName, setEditName] = useState('');
@@ -209,14 +218,14 @@ export function ProjectDetailPage() {
             aria-label="在当前项目内搜索"
             placeholder="在项目内搜索…"
             value={searchKeyword}
-            onChange={(e) => setSearchKeyword(e.target.value)}
+            onChange={(e) => updateFilter('q', e.target.value)}
           />
         </div>
         <button
           type="button"
           className="sp-btn--quiet"
           aria-pressed={unreadOnly}
-          onClick={() => setUnreadOnly((v) => !v)}
+          onClick={() => updateFilter('read', unreadOnly ? '' : 'false')}
         >
           未读
         </button>
@@ -224,11 +233,12 @@ export function ProjectDetailPage() {
           aria-label="筛选类型"
           className="sp-select sp-select--compact"
           value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value as CollectionType | '')}
+          onChange={(e) => updateFilter('type', e.target.value)}
         >
           <option value="">全部类型</option>
-          <option value="text">文字</option>
-          <option value="url">网址</option>
+          {Object.entries(contentTypeLabels).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
         </select>
       </div>
 

@@ -1,3 +1,4 @@
+import { infiniteQueryOptions } from '@tanstack/react-query';
 import type { SparkApi } from '../api/client';
 import type {
   AssociationUpdate,
@@ -7,6 +8,18 @@ import type {
   ProjectAssociation,
   Stage,
 } from '../api/types';
+
+export const pendingSuggestionKey = ['collections', 'unclassified', 'suggested'] as const;
+
+export function pendingSuggestionOptions(api: SparkApi) {
+  return infiniteQueryOptions({
+    queryKey: pendingSuggestionKey as readonly string[],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => api.listCollections({ scope: 'active', has_suggestion: true, cursor: pageParam, limit: 20 }, signal),
+    getNextPageParam: page => page.next_cursor,
+    staleTime: 60_000,
+  });
+}
 
 export type OrganizationDisplayKind =
   | 'excluded'
@@ -58,8 +71,14 @@ export function stageStatusLabel(status: Stage['status']): string {
   return labels[status] ?? status;
 }
 
-export function evidenceSourceLabel(sourceId: string): string {
+export function evidenceSourceLabel(sourceId: string, attachments?: Collection['attachments']): string {
   const normalized = sourceId.trim().toLowerCase();
+  const image = /^(image_text|image_description):([^:]+)$/.exec(normalized);
+  if (image) {
+    const field = image[1] === 'image_text' ? '图中文字' : 'AI 画面描述';
+    const source = attachments?.find(a => a.id.toLowerCase() === image[2]);
+    return source ? field + ' · ' + source.filename : field;
+  }
   if (!normalized) return '原文材料';
   if (normalized === 'intent' || normalized.startsWith('intent:')) return '用途说明';
   if (normalized === 'url' || normalized === 'original_url' || normalized.startsWith('url:')) {
@@ -95,7 +114,7 @@ export function organizationErrorMessage(errorCode?: string): string {
     case 'insufficient_material':
     case 'empty_input':
     case 'no_text_material':
-      return '当前收藏缺少可供整理的文字或用途说明（例如仅保存了网址），补充文字或用途后可重新整理。';
+      return '本次没有可用的整理材料。可补充正文或用途说明后重新整理。';
     case 'rate_limited':
     case 'provider_rate_limited':
       return '当前模型请求较繁忙，原文已安全保存，请稍后重试整理。';
@@ -114,6 +133,8 @@ export function organizationErrorMessage(errorCode?: string): string {
       return '本次生成结果未通过内容与引用校验，已自动舍弃并保留原文，可点击重试整理。';
     case 'usage_uncertain':
       return '本次整理计费确认超时，原文已安全保存，请稍后刷新或重试整理。';
+    case 'image_material_timeout':
+      return '等待图片识别超时，本次整理未使用图片材料。识别完成后可重新整理。';
     case 'queue_expired':
       return '整理排队超时未执行，原文已完整保存，可点击重试整理。';
     case 'attempts_exhausted':
@@ -160,10 +181,12 @@ export function classifyOrganizationDisplay(params: {
   if (organization.status === 'queued' || organization.status === 'running') {
     return {
       kind: 'active',
-      badgeLabel: organization.status === 'queued' ? '整理排队中' : '正在整理',
+      badgeLabel: organization.image_material_status === 'waiting' ? '等待图片识别' : organization.status === 'queued' ? '整理排队中' : '正在整理',
       pillTone: 'default',
       description:
-        organization.status === 'queued'
+        organization.image_material_status === 'waiting'
+          ? '正在等待本条图片的识别结果，项目匹配尚未完成。'
+          : organization.status === 'queued'
           ? '已加入后台整理队列，离开页面仍会继续处理，原文不会被覆盖。'
           : '正在提取与整理标题、摘要和项目建议，离开页面不会中断处理。',
       canTrigger: false,
@@ -292,12 +315,10 @@ export function classifyOrganizationDisplay(params: {
       kind: 'partial',
       badgeLabel: '部分完成',
       pillTone: 'warning',
-      description: hasSuggestedOrEffective
-        ? '已生成部分整理结果；未完成阶段不影响原文和已有项目关联，可重新整理。'
-        : '已生成部分整理结果，暂无匹配的项目建议；可随时重新整理。',
+      description: '部分整理阶段未完成。可查看各阶段的状态，或重新整理。',
       canTrigger: true,
       triggerLabel: '重试整理',
-      noProjectSuggestion: !hasSuggestedOrEffective,
+      noProjectSuggestion: false,
     };
   }
 
@@ -306,8 +327,9 @@ export function classifyOrganizationDisplay(params: {
       kind: 'succeeded',
       badgeLabel: '已整理',
       pillTone: 'green',
-      description: hasSuggestedOrEffective
-        ? '已完成整理，以下建议依据收藏原文与项目描述生成，仅作参考。'
+      description: projects.some(p => p.decision === 'suggested')
+        ? '有项目建议待确认，可查看引文后加入项目或忽略。'
+        : projects.length ? '本次整理已完成，当前没有待确认的项目建议。'
         : '已完成整理，暂无匹配的项目建议；你仍可手动将本条加入项目。',
       canTrigger: true,
       triggerLabel: '重新整理',

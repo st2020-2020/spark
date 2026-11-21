@@ -62,6 +62,10 @@ queued → running；running → succeeded、partial、failed、blocked 或 supe
 
 图片从已确认 OSS 对象读取。OCR 字词作为 extracted_text，视觉描述记录为 inference，区别于原图可直接确认的文字。图像处理设置并发、像素、格式和响应大小上限。对纯风景或图标图片允许识别文字为空，后续依赖用途说明或视觉描述。
 
+现行图片整理同时要求 `deepseek-images-v1` 图片授权和 `spark-ai-image-material-v1` 文字授权，并各自校验试用资格和收藏排除。使用已确认且仍有效附件的图中文字与 AI 画面描述，分别作为 `image_text:<附件 UUID>` 和 `image_description:<附件 UUID>`。文字 Worker 只访问这些派生文本，沿用原有模型、额度、结果校验和人工决定优先规则。旧授权仍可整理原有文字。主动重整可复用合格历史提取，无需再次读取原图或调用识别。
+
+在已有同版本活动运行上等待图片，使用 River 延时重查释放 Worker 并发，不占用文字预算。提取终止后合格材料与正文一同进入一次正常整理。超过十分钟队列总期限时记录 `image_material_timeout`，识别完成可主动重整。图片状态、运行变化和授权撤回通过已有 SSE 通知账号。
+
 ## 项目匹配策略
 
 1. 读取用户活动项目及其版本，用户明确指定项目作为已确认关联。

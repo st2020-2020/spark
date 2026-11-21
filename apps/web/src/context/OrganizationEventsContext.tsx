@@ -7,10 +7,10 @@ import {
   type ReactNode,
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { type InfiniteData, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Collection, CollectionPage, CollectionSummary, OrganizationEvent } from '../api/types';
+import { type InfiniteData, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import type { CollectionPage, CollectionSummary, OrganizationEvent, SearchHit } from '../api/types';
 import { useRecordOpened } from '../components/CollectionLink';
-import { isOrganizationActiveStatus } from '../lib/organization';
+import { isOrganizationActiveStatus, pendingSuggestionKey, pendingSuggestionOptions } from '../lib/organization';
 import { useApi } from './ApiContext';
 import { useAuth } from './AuthContext';
 import { useToast } from './ToastContext';
@@ -27,20 +27,28 @@ const OrganizationEventsContext = createContext<OrganizationEventsContextValue |
 
 const MAX_NOTIFIED_HISTORY = 200;
 
+type ListRow = CollectionSummary | SearchHit;
+type ListData = InfiniteData<{ items: ListRow[]; next_cursor?: string }>;
+const listCaches = { predicate: ({ queryKey }: { queryKey: readonly unknown[] }) =>
+  queryKey[0] === 'collections' || queryKey[0] === 'project-collections' };
+function summaryOf(row: ListRow) {
+  return 'collection' in row ? row.collection : row;
+}
+
 function patchInfiniteCollectionItem(
-  data: InfiniteData<CollectionPage> | undefined,
+  data: ListData | undefined,
   collectionId: string,
   updater: (item: CollectionSummary) => CollectionSummary,
-): InfiniteData<CollectionPage> | undefined {
-  if (!data) return data;
+): ListData | undefined {
+  if (!data || !('pages' in data)) return data;
   let changed = false;
   const pages = data.pages.map((page) => {
     let pageChanged = false;
     const items = page.items.map((item) => {
-      if (item.id !== collectionId) return item;
+      if (summaryOf(item).id !== collectionId) return item;
       pageChanged = true;
       changed = true;
-      return updater(item);
+      return 'collection' in item ? { ...item, collection: updater(item.collection) } : updater(item);
     });
     return pageChanged ? { ...page, items } : page;
   });
@@ -65,13 +73,7 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
   locationPathRef.current = location.pathname;
   navigateRef.current = navigate;
 
-  const pendingSuggestionsQuery = useQuery({
-    queryKey: ['collections', 'pending-suggestions'],
-    queryFn: ({ signal }) =>
-      api.listCollections({ scope: 'active', has_suggestion: true, limit: 20 }, signal),
-    enabled: Boolean(user?.id),
-    staleTime: 60_000,
-  });
+  const pendingSuggestionsQuery = useInfiniteQuery({ ...pendingSuggestionOptions(api), enabled: Boolean(user?.id) });
 
   const syncOrganizationViews = useCallback(() => {
     const now = Date.now();
@@ -88,7 +90,9 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
     });
     void queryClient.invalidateQueries({ queryKey: ['project-collections'], refetchType: 'active' });
     void queryClient.invalidateQueries({ queryKey: ['me', 'usage'], refetchType: 'active' });
-  }, [queryClient]);
+    void queryClient.invalidateQueries({ queryKey: ['me', 'image-analysis'], refetchType: 'active' });
+    void refreshSession();
+  }, [queryClient, refreshSession]);
 
   const markSuggestionPromptHandled = useCallback((collectionId: string) => {
     notifiedSuggestionsRef.current.add(collectionId);
@@ -109,43 +113,10 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
 
   const applyEventStatusToCaches = useCallback(
     (event: OrganizationEvent) => {
-      queryClient.setQueryData<Collection | undefined>(
-        ['collection', event.collection_id],
-        (prev) =>
-          prev
-            ? {
-                ...prev,
-                has_suggestion: event.has_suggestion,
-                organization: {
-                  ...prev.organization,
-                  status: event.status,
-                },
-              }
-            : prev,
-      );
-
-      queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-        { queryKey: ['collections'] },
-        (old) => {
-          if (!old || !('pages' in old)) return old;
-          return patchInfiniteCollectionItem(old, event.collection_id, (item) => ({
-            ...item,
-            organization_status: event.status,
-            has_suggestion: event.has_suggestion,
-          }));
-        },
-      );
-
-      queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-        { queryKey: ['project-collections'] },
-        (old) => {
-          if (!old || !('pages' in old)) return old;
-          return patchInfiniteCollectionItem(old, event.collection_id, (item) => ({
-            ...item,
-            organization_status: event.status,
-            has_suggestion: event.has_suggestion,
-          }));
-        },
+      queryClient.setQueriesData<ListData>(listCaches, old =>
+        patchInfiniteCollectionItem(old, event.collection_id, item => ({
+          ...item, organization_status: event.status, has_suggestion: event.has_suggestion,
+        })),
       );
     },
     [queryClient],
@@ -155,7 +126,23 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
     (event: OrganizationEvent) => {
       applyEventStatusToCaches(event);
 
+      const detailKey = ['collection', event.collection_id];
+      // The SSE payload has no extraction results, stages or image-use status. Read the snapshots together.
+      void queryClient.invalidateQueries({ queryKey: ['collection-extractions', event.collection_id], exact: true });
+      const pending = queryClient.getQueryData<InfiniteData<CollectionPage>>(pendingSuggestionKey);
+      const loaded = pending?.pages.flatMap(page => page.items) ?? [];
+      // A removed suggestion may sit beyond the loaded pages while still contributing to the badge.
+      const pendingFilter = { queryKey: pendingSuggestionKey, exact: true };
+      const fetching = queryClient.isFetching(pendingFilter) > 0;
+      if (!pending && fetching) {
+        // Invalidation alone reuses the first request while it is still in flight.
+        void queryClient.cancelQueries(pendingFilter).then(() => queryClient.invalidateQueries(pendingFilter));
+      } else if (event.has_suggestion || loaded.some(item => item.id === event.collection_id) ||
+          (pending?.pages[0].total ?? 0) > loaded.length || fetching) {
+        void queryClient.invalidateQueries(pendingFilter);
+      }
       if (isOrganizationActiveStatus(event.status)) {
+        void queryClient.invalidateQueries({ queryKey: detailKey, exact: true });
         notifiedSuggestionsRef.current.delete(event.collection_id);
         return;
       }
@@ -164,22 +151,23 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
       const hadDetailMounted =
         queryClient.getQueryState(['collection', event.collection_id]) !== undefined;
       const isInAnyLoadedList = queryClient
-        .getQueriesData<InfiniteData<CollectionPage>>({ queryKey: ['collections'] })
+        .getQueriesData<ListData>(listCaches)
         .some(([, data]) =>
           Boolean(
             data &&
               'pages' in data &&
-              data.pages.some((p) => p.items.some((i) => i.id === event.collection_id)),
+              data.pages.some((p) => p.items.some((i) => summaryOf(i).id === event.collection_id)),
           ),
         );
 
       if (hadDetailMounted || isInAnyLoadedList) {
         const generation = subscriptionGeneration.current;
-        void api
-          .getCollection(event.collection_id)
+        void queryClient.cancelQueries({ queryKey: detailKey, exact: true }).then(() => {
+          if (subscriptionGeneration.current !== generation) return undefined;
+          return queryClient.fetchQuery({ queryKey: detailKey, queryFn: ({ signal }) => api.getCollection(event.collection_id, signal) });
+        })
           .then((fresh) => {
-            if (subscriptionGeneration.current !== generation) return;
-            queryClient.setQueryData(['collection', event.collection_id], fresh);
+            if (!fresh || subscriptionGeneration.current !== generation) return;
             const sortedAttachments = [...fresh.attachments].sort(
               (a, b) => a.position - b.position,
             );
@@ -197,19 +185,8 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
               updated_at: fresh.updated_at,
               resource_version: fresh.resource_version,
             });
-            queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-              { queryKey: ['collections'] },
-              (old) =>
-                old && 'pages' in old
-                  ? patchInfiniteCollectionItem(old, fresh.id, patchItem)
-                  : old,
-            );
-            queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-              { queryKey: ['project-collections'] },
-              (old) =>
-                old && 'pages' in old
-                  ? patchInfiniteCollectionItem(old, fresh.id, patchItem)
-                  : old,
+            queryClient.setQueriesData<ListData>(listCaches, old =>
+              patchInfiniteCollectionItem(old, fresh.id, patchItem),
             );
           })
           .catch(() => {
@@ -222,21 +199,7 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
         const filters = query.queryKey[2];
         return !!filters && typeof filters === 'object' && 'tagId' in filters && !!filters.tagId;
       } });
-      const cachedPending = queryClient.getQueryData<CollectionPage>([
-        'collections',
-        'pending-suggestions',
-      ]);
-      const wasInPendingList = Boolean(
-        cachedPending?.items.some((item) => item.id === event.collection_id),
-      );
-      if (event.has_suggestion || wasInPendingList) {
-        void queryClient.invalidateQueries({ queryKey: ['collections', 'pending-suggestions'] });
-      }
       void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
-      void queryClient.invalidateQueries({
-        queryKey: ['collection-extractions', event.collection_id],
-        refetchType: 'active',
-      });
 
       if (!event.has_suggestion) {
         return;
@@ -250,7 +213,7 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
         {
           variant: 'ai-suggestion',
           dedupeKey: `ai-suggestion:${event.collection_id}`,
-          message: 'AI 已整理完成并生成项目建议，等待你的确认',
+          message: '有一条收藏的项目建议待确认',
           actionLabel: '查看并确认',
           onAction: () => {
             const targetPath = `/collections/${event.collection_id}`;
@@ -336,9 +299,9 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
     };
   }, [api, user?.id]);
 
-  const pendingSuggestions = pendingSuggestionsQuery.data?.items ?? [];
+  const pendingSuggestions = pendingSuggestionsQuery.data?.pages[0]?.items ?? [];
   const pendingSuggestionsCount =
-    pendingSuggestionsQuery.data?.total ?? pendingSuggestions.length;
+    pendingSuggestionsQuery.data?.pages[0]?.total ?? pendingSuggestionsQuery.data?.pages.reduce((n, page) => n + page.items.length, 0) ?? 0;
 
   return (
     <OrganizationEventsContext.Provider

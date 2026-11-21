@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -112,6 +112,51 @@ describe('capture and recall', () => {
     await screen.findByRole('link', { name: '#校对' });
     expect(body).toHaveBeenCalledOnce();
     expect((await api.getCollection(id)).tags).toHaveLength(1);
+  });
+
+  it('retains a full edit draft across a reload and compares a later remote version before any write', async () => {
+    const ui = userEvent.setup();
+    const id = crypto.randomUUID();
+    const path = '/collections/' + id;
+    const api = await setup(path, async a => {
+      await a.createTag({ name: '留存' }, 'tag');
+      await a.createCollection({ id, document: EMPTY_DOCUMENT, original_url: 'https://example.test/base',
+        intent: '原用途', tag_ids: [], project_ids: [], upload_ids: [] }, 'seed');
+    });
+    await ui.click(await screen.findByRole('button', { name: '编辑' }));
+    const editor = screen.getByRole('textbox', { name: '收藏正文编辑器' });
+    const long = '一段草稿。'.repeat(600) + '最后一句';
+    act(() => editor.focus());
+    paste(editor, long + ' #留');
+    await screen.findByRole('option', { name: '#留存' });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    await screen.findByRole('button', { name: '移除待保存关联 留存' });
+    fireEvent.change(screen.getByLabelText(/可选标题/), { target: { value: '本地标题' } });
+    fireEvent.change(screen.getByLabelText('用途说明'), { target: { value: '本地用途' } });
+    fireEvent.change(screen.getByLabelText(/来源网址/), { target: { value: 'https://example.test/local' } });
+    cleanup();
+    api.simulateExternalCollectionEdit(id, '另一台设备的正文');
+    const write = vi.spyOn(api, 'updateCollection');
+    render(<MemoryRouter initialEntries={[path]}><AppProviders api={api}><AppRoutes /></AppProviders></MemoryRouter>);
+    await ui.click(await screen.findByRole('button', { name: '编辑' }));
+    await screen.findByRole('heading', { name: /内容版本冲突.*v2/ });
+    expect(screen.getByRole('textbox', { name: '收藏正文编辑器' })).toHaveTextContent(long);
+    await ui.click(screen.getByRole('button', { name: '复制本地草稿' }));
+    const copied = await navigator.clipboard.readText();
+    for (const field of [long, '本地用途', '本地标题', 'https://example.test/local', '#留存']) expect(copied).toContain(field);
+    await ui.click(screen.getByRole('button', { name: '保留草稿并退出编辑' }));
+    expect(screen.getByText('另一台设备的正文')).toBeVisible();
+    await ui.click(screen.getByRole('button', { name: '编辑' }));
+    const overwrite = await screen.findByRole('button', { name: /基于服务器 v2 覆盖提交/ });
+    expect(write).not.toHaveBeenCalled();
+    api.simulateExternalCollectionEdit(id, '再次更新');
+    await ui.click(overwrite);
+    await screen.findByRole('button', { name: /基于服务器 v3 覆盖提交/ });
+    expect(screen.getByDisplayValue('本地用途')).toBeVisible();
+    await ui.click(screen.getByRole('button', { name: '放弃本地修改' }));
+    expect(screen.getByRole('textbox', { name: '收藏正文编辑器' })).toHaveTextContent('再次更新');
+    expect(write).toHaveBeenCalledTimes(1);
+    expect((await api.getCollection(id)).content_version).toBe(3);
   });
 
   it('recovers a draft created before association display names were stored', async () => {

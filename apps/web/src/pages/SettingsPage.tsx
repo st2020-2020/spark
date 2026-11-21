@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
-import { AIConsentModal } from '../components/AIConsentModal';
+import { AIConsentModal, SPARK_AI_CONSENT_VERSION } from '../components/AIConsentModal';
 import { ImageAnalysisSettingsCard } from '../components/ImageAnalysisSettingsCard';
 import { ResurfaceSetting } from '../components/Resurface';
 import { DataExport } from '../components/DataExport';
@@ -160,7 +160,7 @@ export function SettingsPage() {
                           : '未开启'}
                   </span>
                   {user?.ai_enabled && (
-                    <span className="sp-help">授权版本 v{user.ai_policy_version}</span>
+                    <span className="sp-help">{user.ai_consent_version === SPARK_AI_CONSENT_VERSION ? '已授权在图片理解开启时使用识别结果' : '现有文字整理授权'}</span>
                   )}
                 </div>
                 <span className="sp-help">
@@ -173,7 +173,7 @@ export function SettingsPage() {
               </div>
               {user?.ai_enabled && aiPlatformEnabled && aiTrialEligible && (
                 <button type="button" className="sp-btn sp-btn--sm" onClick={() => setAiConsentOpen(true)}>
-                  查看整理授权
+                  {user.ai_consent_version === SPARK_AI_CONSENT_VERSION ? '查看整理授权' : '更新整理授权'}
                 </button>
               )}
               {(user?.ai_enabled || (aiPlatformEnabled && aiTrialEligible)) && (

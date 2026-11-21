@@ -202,6 +202,8 @@ func loadDecisionTargets(ctx context.Context, tx pgx.Tx, uid, id string, project
 				JOIN collections c ON (c.user_id,c.id)=(r.user_id,r.collection_id)
 				WHERE r.user_id=p.user_id AND r.collection_id=$2 AND r.id=cp.run_id AND r.content_version=c.content_version
 				AND r.status IN ('succeeded','partial') AND r.applied_at IS NOT NULL
+				AND (r.image_user_policy_version IS NULL OR EXISTS (SELECT 1 FROM organization_current_image_runs ir
+					WHERE (ir.user_id,ir.run_id)=(r.user_id,r.id)))
 				AND NOT EXISTS (SELECT 1 FROM organization_current oc
 					WHERE (oc.user_id,oc.collection_id,oc.content_version)=(r.user_id,r.collection_id,r.content_version)
 					AND oc.run_id<>r.id)

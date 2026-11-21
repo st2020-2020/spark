@@ -1,6 +1,8 @@
+import { MoreProjectChoices, useProjectChoices } from '../components/ProjectChoices';
+import { contentTypeLabels } from '../lib/format';
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { SlidersHorizontal, X } from 'lucide-react';
 import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
@@ -44,10 +46,7 @@ export function CollectionsPage() {
     return () => window.clearTimeout(timer);
   }, [inputQ, searchParams, setSearchParams, location.state]);
 
-  const projectsQuery = useQuery({
-    queryKey: ['projects', 'all-for-select'],
-    queryFn: () => api.listProjects({ limit: 100 }),
-  });
+  const projectsQuery = useProjectChoices();
 
   const listOrSearchQuery = useInfiniteQuery({
     queryKey: ['collections', 'all', { q: debouncedQ, tagId, projectId, typeFilter, readFilter }],
@@ -104,7 +103,7 @@ export function CollectionsPage() {
     setSearchParams(new URLSearchParams(), { replace: true });
   };
 
-  const projects = projectsQuery.data?.items ?? [];
+  const projects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
   const activeProjectName = projects.find((p) => p.id === projectId)?.name;
   const hasFilters = Boolean(debouncedQ || tagId || projectId || typeFilter || readFilter);
   const hits = listOrSearchQuery.data?.pages.flatMap((p) => p.items) ?? [];
@@ -150,12 +149,14 @@ export function CollectionsPage() {
             onChange={(e) => setFilterParam('project_id', e.target.value)}
           >
             <option value="">全部项目</option>
+            {projectId && !activeProjectName && <option value={projectId}>已选项目</option>}
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
               </option>
             ))}
           </select>
+          <MoreProjectChoices query={projectsQuery} />
 
           <select
             aria-label="按类型筛选"
@@ -164,8 +165,9 @@ export function CollectionsPage() {
             onChange={(e) => setFilterParam('type', e.target.value)}
           >
             <option value="">全部类型</option>
-            <option value="text">文字</option>
-            <option value="url">网址</option>
+            {Object.entries(contentTypeLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
           </select>
 
           <select
@@ -201,7 +203,7 @@ export function CollectionsPage() {
           )}
           {typeFilter && (
             <span className="sp-pill sp-pill--green">
-              <span>类型：{typeFilter === 'text' ? '文字' : typeFilter === 'url' ? '网址' : '图片'}</span>
+              <span>类型：{contentTypeLabels[typeFilter] ?? typeFilter}</span>
               <button
                 type="button"
                 className="sp-chip-remove"

@@ -52,7 +52,7 @@ export function ImageAnalysisConsentModal({
           </li>
           <li>
             <strong>与文字 AI 授权互相独立：</strong>
-            此前开启「AI 自动整理」仅覆盖文字与网址，不会自动授权发送图片；你可随时在此页单独关闭图片理解。
+            要将识别结果交给第三方文字模型生成项目建议，还需在「AI 自动整理」确认相应授权。你可随时单独关闭图片理解。
           </li>
           <li>
             <strong>原图保存不受影响：</strong>

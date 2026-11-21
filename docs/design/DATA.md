@@ -68,7 +68,7 @@
 | 表 | 字段 | 约束与索引 |
 | --- | --- | --- |
 | extractions | id, user_id, collection_id, content_version, source_kind enum(url,image), source_id text, attachment_id?, status, text?, source_title?, evidence_meta jsonb, error_code?, extractor_version, image_user_policy_version?, image_collection_policy_version?, created_at, updated_at | 在账号、收藏、内容版本和来源类型内使用来源 ID 与提取版本的固定大小摘要去重。保留并核对原始来源 ID。图片作业按账号、附件和提取版本唯一，引用同账号同收藏的附件。网址来源使用主要网址和内容版本 |
-| organization_runs | id, user_id, collection_id, content_version, user_policy_version, collection_policy_version, status, stages jsonb, model_id?, prompt_version, matching_policy_version, project_snapshot jsonb, result jsonb, error_code?, started_at?, completed_at?, created_at, updated_at | 同输入和策略仅一个活动运行，由部分唯一约束或任务唯一性配合事务保证 |
+| organization_runs | id, user_id, collection_id, content_version, user_policy_version, collection_policy_version, image_waiting, image_user_policy_version?, status, stages jsonb, model_id?, prompt_version, matching_policy_version, project_snapshot jsonb, result jsonb, error_code?, started_at?, completed_at?, created_at, updated_at | 同输入和策略仅一个活动运行，由部分唯一约束或任务唯一性配合事务保证 |
 | organization_current | user_id, collection_id, run_id, generated_title?, summary?, content_version, updated_at | 收藏唯一；仅用于当前版本的显示；过期结果可从运行历史诊断 |
 | usage_reservations | id, user_id, run_id?, image_extraction_id?, attempt_no, budget_day date, reserved_units bigint, actual_units?, state enum(reserved,settled,released,uncertain), created_at, updated_at | UNIQUE(run_id,attempt_no)；图片作业由同账号提取 ID 关联，每作业一条。删除来源后清除外键并保留账务 |
 | daily_budgets | scope enum(platform,user), owner_key, budget_day, limit_units, reserved_units, settled_units | 复合主键(scope,owner_key,budget_day)；事务行锁校验限额 |
@@ -77,6 +77,8 @@
 网页提取写入锁定收藏并核对当前内容版本及删除状态；重复入队保留原结果，写回需匹配本次读取的 `updated_at`。网页结果使用 `source_title` 保存来源标题，`text` 保存有界正文，`evidence_meta` 保存 `site_name` 和 `summary`。同版本手动刷新后以新的提取 ID 标识当前结果。
 
 用户图片授权独立记录 `image_consent_version`、`image_consented_at` 和递增的 `image_policy_version`。图片作业捕获账户和收藏策略版本，派发前及写回时再核对权限、删除状态及附件有效性。附件的已确认身份保持不变时复用结果。图片的已识别文字写入 `text`，画面描述及输出截断标记写入 `evidence_meta`。
+
+v11 文字整理通过账号、收藏、附件和来源 ID 关联提取记录，校验首次绑定的内容版本、当前附件及图片策略。派发前和结果应用时复核此次提交文本的来源和范围。等待时保留同一运行且不预留文字额度。使用图片材料完成时记录所用图片策略版本，待确认建议仅在整理和图片授权仍有效时展示。人工决定保留。迁移保留既有提取和运行，无需补队历史收藏。
 
 图片与文字整理均使用 `daily_budgets` 的平台和用户两行锁，先写账务再外呼。图片作业派发事务同时持久化派发状态及待核对金额，获取可信用量后结算。发送失败、漏计量或进程中断时仍占用原预留，重复投递不会再次发送该图片作业。
 
