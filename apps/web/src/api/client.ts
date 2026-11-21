@@ -16,6 +16,7 @@ import type {
   ExportFormat,
   Extraction,
   ExtractionList,
+  ImageRetryRequest,
   FailureList,
   Health,
   ActivityQuery,
@@ -146,6 +147,7 @@ export interface SparkApi {
   updateTagDecisions(id: string, body: TagDecisionUpdate): Promise<Collection>;
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
+  retryImageAnalysis(attachmentId: string, body: ImageRetryRequest, idempotencyKey: string): Promise<Extraction>;
   getExtractions(id: string): Promise<ExtractionList>;
   refreshUrlExtraction(id: string, idempotencyKey: string): Promise<Extraction>;
   listRevisions(id: string, query?: { cursor?: string; limit?: number }): Promise<RevisionPage>;
@@ -573,6 +575,10 @@ export function createRealApiClient(): SparkApi {
       request<Organization>('POST', `/collections/${encodeURIComponent(id)}/organization`, {
         requiresCsrf: true,
         idempotencyKey,
+      }),
+    retryImageAnalysis: (attachmentId, body, idempotencyKey) =>
+      request<Extraction>('POST', `/attachments/${encodeURIComponent(attachmentId)}/image-analysis/retry`, {
+        body, requiresCsrf: true, idempotencyKey,
       }),
     getExtractions: (id) =>
       request<ExtractionList>('GET', `/collections/${encodeURIComponent(id)}/extractions`),

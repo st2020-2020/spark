@@ -64,6 +64,49 @@ func (q *Queries) EnsureCurrentExtraction(ctx context.Context, arg EnsureCurrent
 	return result.RowsAffected(), nil
 }
 
+const getAttachmentImageExtraction = `-- name: GetAttachmentImageExtraction :one
+SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version FROM extractions e
+WHERE e.user_id=$1 AND e.collection_id=$2 AND e.attachment_id=$3
+ AND e.source_kind='image' AND e.extractor_version=$4 AND e.image_user_policy_version IS NOT NULL
+`
+
+type GetAttachmentImageExtractionParams struct {
+	UserID           pgtype.UUID
+	CollectionID     pgtype.UUID
+	AttachmentID     pgtype.UUID
+	ExtractorVersion string
+}
+
+func (q *Queries) GetAttachmentImageExtraction(ctx context.Context, arg GetAttachmentImageExtractionParams) (Extraction, error) {
+	row := q.db.QueryRow(ctx, getAttachmentImageExtraction,
+		arg.UserID,
+		arg.CollectionID,
+		arg.AttachmentID,
+		arg.ExtractorVersion,
+	)
+	var i Extraction
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CollectionID,
+		&i.ContentVersion,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.AttachmentID,
+		&i.Status,
+		&i.Text,
+		&i.SourceTitle,
+		&i.EvidenceMeta,
+		&i.ErrorCode,
+		&i.ExtractorVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ImageUserPolicyVersion,
+		&i.ImageCollectionPolicyVersion,
+	)
+	return i, err
+}
+
 const getCurrentURLExtraction = `-- name: GetCurrentURLExtraction :one
 SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version FROM extractions e JOIN collections c
  ON (c.user_id, c.id, c.content_version, c.original_url) = (e.user_id, e.collection_id, e.content_version, e.source_id)
@@ -103,12 +146,61 @@ func (q *Queries) GetCurrentURLExtraction(ctx context.Context, arg GetCurrentURL
 	return i, err
 }
 
+const insertImageRecovery = `-- name: InsertImageRecovery :one
+INSERT INTO extractions (id,user_id,collection_id,content_version,source_kind,source_id,attachment_id,extractor_version,
+                         image_user_policy_version,image_collection_policy_version)
+SELECT $1,e.user_id,e.collection_id,e.content_version,'image',e.source_id,e.attachment_id,$2,
+       u.image_policy_version,c.ai_policy_version
+FROM extractions e JOIN collections c ON (e.user_id,e.collection_id)=(c.user_id,c.id)
+ JOIN users u ON u.id=e.user_id
+WHERE e.user_id=$3 AND e.id=$4
+RETURNING id, user_id, collection_id, content_version, source_kind, source_id, attachment_id, status, text, source_title, evidence_meta, error_code, extractor_version, created_at, updated_at, image_user_policy_version, image_collection_policy_version
+`
+
+type InsertImageRecoveryParams struct {
+	ID              pgtype.UUID
+	RecoveryVersion string
+	UserID          pgtype.UUID
+	BaseID          pgtype.UUID
+}
+
+func (q *Queries) InsertImageRecovery(ctx context.Context, arg InsertImageRecoveryParams) (Extraction, error) {
+	row := q.db.QueryRow(ctx, insertImageRecovery,
+		arg.ID,
+		arg.RecoveryVersion,
+		arg.UserID,
+		arg.BaseID,
+	)
+	var i Extraction
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CollectionID,
+		&i.ContentVersion,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.AttachmentID,
+		&i.Status,
+		&i.Text,
+		&i.SourceTitle,
+		&i.EvidenceMeta,
+		&i.ErrorCode,
+		&i.ExtractorVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ImageUserPolicyVersion,
+		&i.ImageCollectionPolicyVersion,
+	)
+	return i, err
+}
+
 const listCurrentExtractions = `-- name: ListCurrentExtractions :many
 SELECT e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version FROM extractions e JOIN collections c
  ON (c.user_id, c.id) = (e.user_id, e.collection_id)
 WHERE e.user_id = $1 AND e.collection_id = $2 AND c.deleted_at IS NULL
  AND ((e.source_kind='url' AND e.content_version=c.content_version AND e.source_id=c.original_url)
  OR (e.source_kind='image' AND (e.image_user_policy_version IS NOT NULL OR e.content_version=c.content_version)
+  AND EXISTS (SELECT 1 FROM current_image_extractions i WHERE i.user_id=e.user_id AND i.id=e.id)
   AND EXISTS (SELECT 1 FROM attachments a
    WHERE (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id) AND a.removed_at IS NULL)))
 ORDER BY e.source_kind, e.source_id, e.created_at DESC, e.id
@@ -155,6 +247,49 @@ func (q *Queries) ListCurrentExtractions(ctx context.Context, arg ListCurrentExt
 		return nil, err
 	}
 	return items, nil
+}
+
+const requeueUnsentImageRecovery = `-- name: RequeueUnsentImageRecovery :one
+UPDATE extractions e
+SET status='queued',error_code=NULL,image_user_policy_version=u.image_policy_version,
+    image_collection_policy_version=c.ai_policy_version,updated_at=clock_timestamp()
+FROM collections c JOIN users u ON u.id=c.user_id
+WHERE (c.user_id,c.id)=(e.user_id,e.collection_id) AND e.user_id=$1 AND e.id=$2
+ AND e.status='blocked' AND e.error_code='quota_exceeded'
+ AND NOT EXISTS(SELECT 1 FROM usage_reservations r WHERE r.image_extraction_id=e.id)
+RETURNING e.id, e.user_id, e.collection_id, e.content_version, e.source_kind, e.source_id, e.attachment_id, e.status, e.text, e.source_title, e.evidence_meta, e.error_code, e.extractor_version, e.created_at, e.updated_at, e.image_user_policy_version, e.image_collection_policy_version
+`
+
+type RequeueUnsentImageRecoveryParams struct {
+	UserID pgtype.UUID
+	ID     pgtype.UUID
+}
+
+// A quota rejection precedes dispatch. Do not reset any job with a ledger,
+// even when a prior attempt released its reservation or remained uncertain.
+func (q *Queries) RequeueUnsentImageRecovery(ctx context.Context, arg RequeueUnsentImageRecoveryParams) (Extraction, error) {
+	row := q.db.QueryRow(ctx, requeueUnsentImageRecovery, arg.UserID, arg.ID)
+	var i Extraction
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.CollectionID,
+		&i.ContentVersion,
+		&i.SourceKind,
+		&i.SourceID,
+		&i.AttachmentID,
+		&i.Status,
+		&i.Text,
+		&i.SourceTitle,
+		&i.EvidenceMeta,
+		&i.ErrorCode,
+		&i.ExtractorVersion,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ImageUserPolicyVersion,
+		&i.ImageCollectionPolicyVersion,
+	)
+	return i, err
 }
 
 const updateCurrentExtraction = `-- name: UpdateCurrentExtraction :one

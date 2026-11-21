@@ -1,12 +1,33 @@
+import { ImageRetryAction } from './ImageRetryAction';
+import { IMAGE_ANALYSIS_CONSENT_VERSION } from './ImageAnalysisConsentModal';
 import { Link } from 'react-router-dom';
 import { Image as ImageIcon, Loader2, RefreshCw } from 'lucide-react';
 import type { Attachment, Extraction, ImageAnalysisPreferences } from '../api/types';
+
+function hasImageContent(ext: Extraction) {
+  return Boolean(ext.text?.trim() || ext.image_description?.trim());
+}
+
+function isTruncatedResult(ext: Extraction) {
+  return (ext.status === 'failed' && ext.error_code === 'image_output_truncated_empty') ||
+    ((ext.status === 'partial' || ext.status === 'succeeded') &&
+      (ext.truncated || ext.error_code === 'image_output_truncated'));
+}
 
 function resolveImageStatusDisplay(ext: Extraction): {
   label: string;
   pillClass: string;
   note?: string;
 } {
+  if (isTruncatedResult(ext)) {
+    const hasContent = hasImageContent(ext);
+    return {
+      label: hasContent ? '识别摘录（已截断）' : '输出已截断',
+      pillClass: 'sp-pill sp-pill--warning',
+      note: [!hasContent && '本次没有可展示的识别摘录，原图仍可查看。',
+        ext.error_code === 'usage_uncertain' && '本次用量待核对。'].filter(Boolean).join(''),
+    };
+  }
   switch (ext.status) {
     case 'queued':
     case 'running':
@@ -17,13 +38,14 @@ function resolveImageStatusDisplay(ext: Extraction): {
       };
     case 'succeeded':
       return {
-        label: '已识别',
+        label: hasImageContent(ext) ? '已识别' : '识别完成',
+        note: hasImageContent(ext) ? undefined : '未提取到文字或画面描述，原图仍可查看。',
         pillClass: 'sp-pill sp-pill--green',
       };
     case 'partial':
       return {
-        label: '部分识别',
-        note: ext.error_code === 'usage_uncertain' ? '识别结果已保留，本次用量待核对。' : undefined,
+        label: hasImageContent(ext) ? '部分识别' : '暂无识别摘录',
+        note: ext.error_code === 'usage_uncertain' ? '本次用量待核对。' : undefined,
         pillClass: 'sp-pill sp-pill--warning',
       };
     case 'blocked':
@@ -55,11 +77,14 @@ export function formatExtractionSummaryText(ext: Extraction): string {
   const parts: string[] = [];
   if (ext.text?.trim()) parts.push(`图中文字：${ext.text.trim()}`);
   if (ext.image_description?.trim()) parts.push(`AI 画面描述：${ext.image_description.trim()}`);
-  if (ext.truncated) parts.push('输出已截断，识别结果可能不完整');
-  return parts.length > 0 ? parts.join(' ｜ ') : ext.status;
+  const display = resolveImageStatusDisplay(ext);
+  if (!parts.length) return [display.label, display.note].filter(Boolean).join(' · ');
+  if (isTruncatedResult(ext)) parts.push('摘录已截断');
+  return parts.join(' ｜ ');
 }
 
 export function ImageAnalysisPanel({
+  collectionId,
   attachments,
   extractions,
   isInTrash,
@@ -70,6 +95,7 @@ export function ImageAnalysisPanel({
   isError,
   onRefreshStatus,
 }: {
+  collectionId: string;
   attachments: Attachment[];
   extractions: Extraction[];
   isInTrash: boolean;
@@ -172,12 +198,11 @@ export function ImageAnalysisPanel({
             const statusDisplay = resolveImageStatusDisplay(extraction);
             const ocrText = extraction.text?.trim() ?? '';
             const visualDesc = extraction.image_description?.trim() ?? '';
-            const isTruncated = Boolean(extraction.truncated);
+            const quotaRequeue = extraction.status === 'blocked' && extraction.error_code === 'quota_exceeded';
+            const eligibleResult = extraction.image_retry_available === true &&
+              (quotaRequeue || isTruncatedResult(extraction)) && !hasImageContent(extraction) &&
+              !isError && !aiExcluded && imagePreferences?.available === true;
             const isPending = extraction.status === 'queued' || extraction.status === 'running';
-            const isEmptySuccess =
-              (extraction.status === 'succeeded' || extraction.status === 'partial') &&
-              !ocrText &&
-              !visualDesc;
 
             return (
               <div
@@ -192,11 +217,6 @@ export function ImageAnalysisPanel({
                       : attachment.filename}
                   </span>
                   <div className="sp-row">
-                    {isTruncated && (
-                      <span className="sp-pill sp-pill--warning">
-                        输出已截断，结果可能不完整
-                      </span>
-                    )}
                     <span className={statusDisplay.pillClass}>
                       {isPending && (
                         <Loader2 size={12} strokeWidth={2} className="sp-spin" aria-hidden="true" />
@@ -220,15 +240,18 @@ export function ImageAnalysisPanel({
                   </div>
                 )}
 
-                {isEmptySuccess && (
-                  <p className="sp-help sp-image-analysis-note">
-                    图片中未识别出有效文字或画面描述，原图已完整保存。
-                  </p>
-                )}
-
                 {statusDisplay.note && (
                   <p className="sp-help sp-image-analysis-note">{statusDisplay.note}</p>
                 )}
+
+                {eligibleResult && !imagePreferences.enabled && (
+                  <Link className="sp-strong" to="/settings">前往设置开启图片理解</Link>
+                )}
+                {eligibleResult && imagePreferences.enabled &&
+                  imagePreferences.required_consent_version === IMAGE_ANALYSIS_CONSENT_VERSION && (
+                    <ImageRetryAction key={extraction.id + ':' + extraction.updated_at} collectionId={collectionId}
+                      attachment={attachment} extraction={extraction} quotaRequeue={quotaRequeue} />
+                  )}
               </div>
             );
           })}

@@ -1713,6 +1713,82 @@
         ]
       }
     },
+    "/attachments/{id}/image-analysis/retry": {
+      "post": {
+        "operationId": "retryImageAnalysis",
+        "summary": "重新识别一个结果为空且截断的已保存附件",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "已登记恢复作业，或返回同一个已有恢复作业的当前结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Extraction"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "description": "须单独确认将该附件的视觉副本再次发给 DeepSeek。每个符合条件的附件至多登记一个恢复作业。若作业因额度不足且从未派发，可用当前恢复作业 ID 和新幂等键重排同一作业。重复请求返回当前结果。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageAnalysisRetry"
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections": {
       "post": {
         "operationId": "createCollection",
@@ -5556,6 +5632,27 @@
           "enabled"
         ]
       },
+      "ImageAnalysisRetry": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_extraction_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "首次重新识别使用空截断提取 ID；因额度不足未派发时使用当前恢复作业 ID。"
+          },
+          "consent_version": {
+            "type": "string",
+            "enum": [
+              "deepseek-image-retry-v1"
+            ]
+          }
+        },
+        "required": [
+          "base_extraction_id",
+          "consent_version"
+        ]
+      },
       "Extraction": {
         "type": "object",
         "additionalProperties": false,
@@ -5620,6 +5717,10 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "image_retry_available": {
+            "type": "boolean",
+            "description": "未登记恢复的空截断图片，或因额度不足且从未派发的恢复作业可返回 true。服务端仍核验开关、独立授权和额度。"
           }
         },
         "required": [

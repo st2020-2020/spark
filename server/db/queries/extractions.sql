@@ -45,6 +45,7 @@ SELECT e.* FROM extractions e JOIN collections c
 WHERE e.user_id = $1 AND e.collection_id = $2 AND c.deleted_at IS NULL
  AND ((e.source_kind='url' AND e.content_version=c.content_version AND e.source_id=c.original_url)
  OR (e.source_kind='image' AND (e.image_user_policy_version IS NOT NULL OR e.content_version=c.content_version)
+  AND EXISTS (SELECT 1 FROM current_image_extractions i WHERE i.user_id=e.user_id AND i.id=e.id)
   AND EXISTS (SELECT 1 FROM attachments a
    WHERE (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id) AND a.removed_at IS NULL)))
 ORDER BY e.source_kind, e.source_id, e.created_at DESC, e.id;
@@ -55,3 +56,30 @@ SELECT e.* FROM extractions e JOIN collections c
 JOIN users u ON u.id = e.user_id
 WHERE e.user_id = $1 AND e.collection_id = $2 AND e.source_kind = 'url' AND e.extractor_version = $3
   AND c.deleted_at IS NULL AND u.status = 'active';
+
+-- name: GetAttachmentImageExtraction :one
+SELECT e.* FROM extractions e
+WHERE e.user_id=$1 AND e.collection_id=$2 AND e.attachment_id=$3
+ AND e.source_kind='image' AND e.extractor_version=$4 AND e.image_user_policy_version IS NOT NULL;
+
+-- name: InsertImageRecovery :one
+INSERT INTO extractions (id,user_id,collection_id,content_version,source_kind,source_id,attachment_id,extractor_version,
+                         image_user_policy_version,image_collection_policy_version)
+SELECT sqlc.arg(id),e.user_id,e.collection_id,e.content_version,'image',e.source_id,e.attachment_id,sqlc.arg(recovery_version),
+       u.image_policy_version,c.ai_policy_version
+FROM extractions e JOIN collections c ON (e.user_id,e.collection_id)=(c.user_id,c.id)
+ JOIN users u ON u.id=e.user_id
+WHERE e.user_id=sqlc.arg(user_id) AND e.id=sqlc.arg(base_id)
+RETURNING *;
+
+-- name: RequeueUnsentImageRecovery :one
+-- A quota rejection precedes dispatch. Do not reset any job with a ledger,
+-- even when a prior attempt released its reservation or remained uncertain.
+UPDATE extractions e
+SET status='queued',error_code=NULL,image_user_policy_version=u.image_policy_version,
+    image_collection_policy_version=c.ai_policy_version,updated_at=clock_timestamp()
+FROM collections c JOIN users u ON u.id=c.user_id
+WHERE (c.user_id,c.id)=(e.user_id,e.collection_id) AND e.user_id=sqlc.arg(user_id) AND e.id=sqlc.arg(id)
+ AND e.status='blocked' AND e.error_code='quota_exceeded'
+ AND NOT EXISTS(SELECT 1 FROM usage_reservations r WHERE r.image_extraction_id=e.id)
+RETURNING e.*;

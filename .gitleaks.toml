@@ -1,11 +1,11 @@
 [extend]
 useDefault = true
 
-# This pair of generated lines belongs to the gzipped public OpenAPI document.
+# These exact matches are fragments of the gzipped public OpenAPI document.
 [[rules]]
 id = "generic-api-key"
 [[rules.allowlists]]
 condition = "AND"
 paths = ['''^server/internal/contract/api\.gen\.go$''']
 regexTarget = "match"
-regexes = ['''AMvDDps9We3vrYvz5ldbc12MBPMadWmL2pVvYaHhBiNPWCqTKEY",\n\t"qHAAcAu/QmBH/zCTkvMZEpdEFfmZPMw9Iw3AyIGU5XFDgxlcdY//mJ6R1zblfIa824BycncO0BtESxn5"''']
+regexes = ['''AMvDDps9We3vrYvz5ldbc12MBPMadWmL2pVvYaHhBiNPWCqTKEY",\n\t"qHAAcAu/QmBH/zCTkvMZEpdEFfmZPMw9Iw3AyIGU5XFDgxlcdY//mJ6R1zblfIa824BycncO0BtESxn5"''', '''4MIjWVW8T4kEY",\n\t"xBE7QvZ7LxtJ8pbpkSAR5QZxFF4IcRaVXLauhxjappUXOcFzA2wY0FPNeBChuyhcV/JYVuJUvRraDnQ7"''']

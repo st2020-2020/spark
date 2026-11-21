@@ -195,6 +195,10 @@ func extractionView(row store.Extraction) (contract.Extraction, error) {
 		if metadata.Truncated {
 			item.Truncated = &metadata.Truncated
 		}
+		if emptyImageTruncation(row, metadata) || quotaBlockedImageRecovery(row) {
+			available := true
+			item.ImageRetryAvailable = &available
+		}
 	}
 	return item, nil
 }

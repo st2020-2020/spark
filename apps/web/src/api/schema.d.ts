@@ -470,6 +470,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/attachments/{id}/image-analysis/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 重新识别一个结果为空且截断的已保存附件
+         * @description 须单独确认将该附件的视觉副本再次发给 DeepSeek。每个符合条件的附件至多登记一个恢复作业。若作业因额度不足且从未派发，可用当前恢复作业 ID 和新幂等键重排同一作业。重复请求返回当前结果。
+         */
+        post: operations["retryImageAnalysis"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections": {
         parameters: {
             query?: never;
@@ -1401,6 +1421,15 @@ export interface components {
             enabled: boolean;
             consent_version?: string;
         };
+        ImageAnalysisRetry: {
+            /**
+             * Format: uuid
+             * @description 首次重新识别使用空截断提取 ID；因额度不足未派发时使用当前恢复作业 ID。
+             */
+            base_extraction_id: string;
+            /** @enum {string} */
+            consent_version: "deepseek-image-retry-v1";
+        };
         Extraction: {
             /** Format: uuid */
             id: string;
@@ -1423,6 +1452,8 @@ export interface components {
             error_code?: string;
             /** Format: date-time */
             updated_at: string;
+            /** @description 未登记恢复的空截断图片，或因额度不足且从未派发的恢复作业可返回 true。服务端仍核验开关、独立授权和额度。 */
+            image_retry_available?: boolean;
         };
         Revision: {
             content_version: number;
@@ -2719,6 +2750,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    retryImageAnalysis: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageAnalysisRetry"];
+            };
+        };
+        responses: {
+            /** @description 已登记恢复作业，或返回同一个已有恢复作业的当前结果 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Extraction"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

@@ -190,6 +190,7 @@ export function createTestAdapter(): TestAdapter {
   let mockUrlExtractionBehavior: MockUrlExtractionBehavior = {};
   let mockPurgeBehavior: MockPurgeBehavior = {};
   let mockImageAnalysisBehavior: MockImageAnalysisBehavior = {};
+  const imageRecoveryByBase = new Map<string, string>();
   const orgSubscribers = new Set<{ userId: string; handlers: OrganizationEventsHandlers }>();
   const pendingOrgTimers = new Map<string, number>();
 
@@ -273,6 +274,7 @@ export function createTestAdapter(): TestAdapter {
     dailyRevisit.clear();
     purges = new Map();
     idempotencyStore = new Map();
+    imageRecoveryByBase.clear();
     projectUndoStore = new Map();
     mockOrganizationMode = 'succeed';
     mockAiTrialEligible = true;
@@ -410,20 +412,19 @@ export function createTestAdapter(): TestAdapter {
       }
       const status = mockImageAnalysisBehavior.status ?? 'succeeded';
       const includeOutput = status === 'succeeded' || status === 'partial';
+      const text = includeOutput ? mockImageAnalysisBehavior.text ?? 'Mock 图中文字：Spark Receipt 2026' : undefined;
+      const description = includeOutput ? mockImageAnalysisBehavior.imageDescription ?? 'Mock AI 画面描述：包含笔记摘要的浅色卡片截图' : undefined;
+      const truncated = mockImageAnalysisBehavior.truncated ?? (status === 'partial' ? true : undefined);
       return {
         id: generateUuid(),
         source_kind: 'image',
         source_id: att.id,
         content_version: contentVersion,
         status,
-        text: includeOutput
-          ? (mockImageAnalysisBehavior.text ?? 'Mock 图中文字：Spark Receipt 2026')
-          : undefined,
-        image_description: includeOutput
-          ? (mockImageAnalysisBehavior.imageDescription ?? 'Mock AI 画面描述：包含笔记摘要的浅色卡片截图')
-          : undefined,
-        truncated:
-          mockImageAnalysisBehavior.truncated ?? (status === 'partial' ? true : undefined),
+        text, image_description: description, truncated,
+        image_retry_available: !text?.trim() && !description?.trim() &&
+          ((status === 'partial' && truncated === true) ||
+           (status === 'failed' && mockImageAnalysisBehavior.errorCode === 'image_output_truncated_empty')),
         error_code: mockImageAnalysisBehavior.errorCode,
         updated_at: now,
       };
@@ -2317,6 +2318,42 @@ export function createTestAdapter(): TestAdapter {
       saveIdempotency(user.id, 'restartOrganization', idempotencyKey, { id }, nextOrg);
       scheduleMockOrganization(col, user);
       return nextOrg;
+    },
+
+    async retryImageAnalysis(attachmentId, body, key) {
+      const user = requireUser(true);
+      const col = collections.find(c => c.user_id === user.id && c.attachments.some(a => a.id === attachmentId));
+      if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '附件不存在' });
+      if (col.deleted_at) throw new ApiError({ status: 409, code: 'collection_in_trash', message: '收藏位于回收站' });
+      if (mockImageAnalysisBehavior.available === false || !user.image_analysis_enabled ||
+          body.consent_version !== 'deepseek-image-retry-v1' || col.ai_excluded) {
+        throw new ApiError({ status: 403, code: 'image_consent_required', message: '无法使用图片理解' });
+      }
+      const current = col.extractions.find(x => x.source_kind === 'image' && x.source_id === attachmentId);
+      const operation = 'retryImage:' + attachmentId;
+      const replay = checkIdempotency<string>(user.id, operation, key, body);
+      const recoveredId = replay ?? imageRecoveryByBase.get(body.base_extraction_id);
+      if (current && recoveredId === current.id) return structuredClone(current);
+      if (!current || current.id !== body.base_extraction_id) {
+        throw new ApiError({ status: 409, code: 'extraction_conflict', message: '图片识别记录已更新' });
+      }
+      if (!current.image_retry_available) {
+        throw new ApiError({ status: 422, code: 'image_retry_not_available', message: '这条记录无法重新识别' });
+      }
+      if (mockImageAnalysisBehavior.quotaExceeded || budgetConfig.user_daily_units <= 0) {
+        throw new ApiError({ status: 429, code: 'quota_exceeded', message: '今日额度不足' });
+      }
+      const requeue = current.status === 'blocked' && current.error_code === 'quota_exceeded';
+      if (current.status === 'blocked' && !requeue) {
+        throw new ApiError({ status: 422, code: 'image_retry_not_available', message: '这条记录无法重新排队' });
+      }
+      const queued: Extraction = { id: requeue ? current.id : generateUuid(), content_version: col.content_version,
+        source_kind: 'image', source_id: attachmentId, status: 'queued', updated_at: new Date().toISOString() };
+      col.extractions = [queued, ...col.extractions.filter(x => x.source_kind !== 'image' || x.source_id !== attachmentId)];
+      if (!requeue) imageRecoveryByBase.set(current.id, queued.id);
+      saveIdempotency(user.id, operation, key, body, queued.id);
+      // Controlled tests supply the worker outcome via setMockCollectionExtractions and SSE.
+      return structuredClone(queued);
     },
 
     async getExtractions(id) {

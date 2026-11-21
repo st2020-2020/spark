@@ -72,8 +72,8 @@ func (w *imageWorker) loadImageJob(ctx context.Context, q querier, args imageAna
 		JOIN collections c ON (c.user_id,c.id)=(e.user_id,e.collection_id)
 		JOIN attachments a ON (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id)
 		WHERE e.user_id=$1 AND e.collection_id=$3 AND e.id=$4 AND e.source_kind='image'
-		  AND e.extractor_version=$5 AND e.image_user_policy_version IS NOT NULL`,
-		args.UserID, w.adminID, args.CollectionID, args.ExtractionID, imageExtractorVersion, imageConsentVersion).
+		  AND e.extractor_version IN ($5,$7) AND e.image_user_policy_version IS NOT NULL`,
+		args.UserID, w.adminID, args.CollectionID, args.ExtractionID, imageExtractorVersion, imageConsentVersion, imageRecoveryExtractorVersion).
 		Scan(&job.Status, &job.Key, &job.Version, &job.MIME, &job.Size, &job.SHA, &job.Eligible)
 	return job, err
 }
@@ -209,9 +209,8 @@ func (w *imageWorker) beginImageDispatch(ctx context.Context, conn *pgxpool.Conn
 		if !job.Eligible {
 			return writeImageResult(ctx, tx, args, "queued", imageModelResult{Status: "skipped", Account: ModelOutput{ErrorCode: "image_authorization_changed"}})
 		}
-		var costLimitViolated bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM ai_route_failures WHERE config_version=$1 AND route=$2)`,
-			imageExtractorVersion, imageAccountingRoute.Name).Scan(&costLimitViolated); err != nil {
+		costLimitViolated, err := imageRouteBlocked(ctx, tx)
+		if err != nil {
 			return err
 		}
 		if costLimitViolated {

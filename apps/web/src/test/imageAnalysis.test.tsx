@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
 import { createRealApiClient } from '../api/client';
 import { ApiError } from '../api/errors';
-import type { Collection, Organization } from '../api/types';
+import type { Collection, Extraction, Organization } from '../api/types';
 import { EMPTY_DOCUMENT } from '../lib/document';
 import { createTestAdapter, type TestAdapter } from '../test-adapter/mockServer';
 
@@ -303,6 +303,207 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(screen.queryByRole('list', { name: '推荐依据摘录' })).toBeNull();
   });
 
+  it.each([
+    { status: 'partial', truncated: true, text: '  ', label: '输出已截断', note: '本次没有可展示的识别摘录' },
+    { status: 'failed', truncated: false, text: '', error_code: 'image_output_truncated_empty',
+      label: '输出已截断', note: '本次没有可展示的识别摘录' },
+    { status: 'succeeded', truncated: false, text: '', label: '识别完成', note: '未提取到文字或画面描述' },
+    { status: 'failed', truncated: false, text: '', label: '识别失败', note: '原图' },
+  ] as const)('distinguishes empty image output for $status without conflicting labels', async row => {
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const col = await createImageAttachmentCollection(api);
+    api.setMockCollectionExtractions(col.id, [{ id: crypto.randomUUID(), source_kind: 'image',
+      source_id: col.attachments[0].id, content_version: 1, updated_at: new Date().toISOString(),
+      status: row.status, truncated: row.truncated, text: row.text,
+      error_code: 'error_code' in row ? row.error_code : undefined }]);
+    renderWithAdapter(['/collections/' + col.id], api);
+    const panel = within(await screen.findByLabelText('图片理解结果'));
+    expect(await panel.findByText(row.label)).toBeVisible();
+    expect(panel.getByText(new RegExp(row.note))).toBeVisible();
+    expect(panel.queryByText('部分识别')).toBeNull();
+    expect(panel.queryByText(/图片中未识别出有效文字/)).toBeNull();
+  });
+
+  it('only submits a confirmed single-image recovery, reuses its key after a lost response and follows SSE', async () => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    const col = await createImageAttachmentCollection(api, { filename: '合成蓝图.png' });
+    const old: Extraction = { id: crypto.randomUUID(), source_id: col.attachments[0].id, source_kind: 'image',
+      status: 'partial', truncated: true, image_retry_available: true, content_version: 1, updated_at: new Date().toISOString() };
+    api.setMockCollectionExtractions(col.id, [old]);
+    let accept!: () => void;
+    const recover = api.retryImageAnalysis.bind(api);
+    const retry = vi.spyOn(api, 'retryImageAnalysis')
+      .mockImplementationOnce(async (...args) => {
+        await recover(...args);
+        throw new ApiError({ status: 0, code: 'network_error', message: '网络中断' });
+      })
+      .mockImplementationOnce(async (...args) => {
+        await new Promise<void>(resolve => { accept = resolve; });
+        return recover(...args);
+      });
+    const organize = vi.spyOn(api, 'restartOrganization');
+    const imageConsent = vi.spyOn(api, 'setImageAnalysisPreferences');
+    renderWithAdapter(['/collections/' + col.id], api);
+    const panel = within(await screen.findByLabelText('图片理解结果'));
+    await panel.findByRole('button', { name: '重新识别这张图片' });
+    await ui.click(panel.getByRole('button', { name: '刷新状态' }));
+    await ui.click(panel.getByRole('button', { name: '重新识别这张图片' }));
+    const dialog = within(screen.getByRole('dialog', { name: '重新识别这张图片' }));
+    expect(dialog.getByText(/DeepSeek/)).toHaveTextContent('合成蓝图.png');
+    expect(dialog.getByText(/额度/)).toBeVisible();
+    await ui.click(dialog.getByRole('button', { name: '取消' }));
+    expect(retry).not.toHaveBeenCalled();
+
+    for (let i = 0; i < 2; i++) {
+      await ui.click(panel.getByRole('button', { name: '重新识别这张图片' }));
+      await ui.dblClick(within(screen.getByRole('dialog')).getByRole('button', { name: '确认重新识别' }));
+      if (i === 0) await panel.findByRole('alert');
+    }
+    expect(retry).toHaveBeenCalledTimes(2);
+    expect(retry.mock.calls[0]).toEqual([old.source_id, {
+      base_extraction_id: old.id, consent_version: 'deepseek-image-retry-v1',
+    }, expect.any(String)]);
+    expect(retry.mock.calls[1]).toEqual(retry.mock.calls[0]);
+    expect(panel.getByRole('button', { name: '正在提交…' })).toBeDisabled();
+    const { items: [queued] } = await api.getExtractions(col.id);
+    expect(queued.status).toBe('queued');
+    expect(queued.id).not.toBe(old.id);
+    await act(async () => accept());
+    await panel.findByText('正在分析图片');
+    expect(panel.queryByRole('button', { name: '重新识别这张图片' })).toBeNull();
+    api.setMockCollectionExtractions(col.id, [{ ...queued, status: 'succeeded', text: '标高 32' }]);
+    act(() => api.emitMockOrganizationEvent({ collection_id: col.id, status: col.organization.status, has_suggestion: false }));
+    await panel.findByText('标高 32');
+    expect(retry).toHaveBeenCalledTimes(2);
+    expect(organize).not.toHaveBeenCalled();
+    expect(imageConsent).not.toHaveBeenCalled();
+  });
+
+  it('requeues only an undispatched quota-blocked recovery with a fresh intent key and its current ID', async () => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    api.setMockImageAnalysisBehavior({ status: 'failed', errorCode: 'image_output_truncated_empty' });
+    const col = await createImageAttachmentCollection(api);
+    const [original] = (await api.getExtractions(col.id)).items;
+    const recover = api.retryImageAnalysis.bind(api);
+    const calls = vi.spyOn(api, 'retryImageAnalysis');
+    renderWithAdapter(['/collections/' + col.id], api);
+    const panel = within(await screen.findByLabelText('图片理解结果'));
+    const confirm = async (name: string) => {
+      await ui.click(await panel.findByRole('button', { name }));
+      await ui.click(within(screen.getByRole('dialog')).getByRole('button', { name: '确认重新识别' }));
+    };
+    await confirm('重新识别这张图片');
+    await panel.findByText('正在分析图片');
+    const [job] = (await api.getExtractions(col.id)).items;
+    expect(job.id).not.toBe(original.id);
+    const block = async (code: string, available: boolean) => {
+      api.setMockCollectionExtractions(col.id, [{ ...job, status: 'blocked', error_code: code,
+        image_retry_available: available, updated_at: new Date().toISOString() }]);
+      await ui.click(panel.getByRole('button', { name: '刷新状态' }));
+      await panel.findByText(code === 'quota_exceeded' ? '今日 AI 额度已暂停' : '暂未执行');
+    };
+    await block('quota_exceeded', false);
+    expect(panel.queryByRole('button', { name: '重新排队' })).toBeNull();
+    await block('usage_uncertain', true);
+    expect(panel.queryByRole('button', { name: '重新排队' })).toBeNull();
+    await block('quota_exceeded', true);
+    expect(calls).toHaveBeenCalledTimes(1);
+
+    api.setMockImageAnalysisBehavior({ quotaExceeded: true });
+    await confirm('重新排队');
+    expect(await panel.findByRole('alert')).toHaveTextContent('额度不足');
+    api.setMockImageAnalysisBehavior({ quotaExceeded: false });
+    calls.mockImplementationOnce(async (...args) => {
+      await recover(...args);
+      throw new ApiError({ status: 0, code: 'network_error', message: '响应丢失' });
+    });
+    await confirm('重新排队');
+    expect(await panel.findByRole('alert')).toHaveTextContent('尚未确认提交结果');
+    await confirm('重新排队');
+    await panel.findByText('正在分析图片');
+    expect(calls).toHaveBeenCalledTimes(4);
+    const [first, refused, lost, replay] = calls.mock.calls;
+    expect(first[1].base_extraction_id).toBe(original.id);
+    expect(refused[1].base_extraction_id).toBe(job.id);
+    expect(lost[1].base_extraction_id).toBe(job.id);
+    expect(new Set([first[2], refused[2], lost[2]]).size).toBe(3);
+    expect(replay).toEqual(lost);
+    expect((await api.getExtractions(col.id)).items).toEqual([expect.objectContaining({ id: job.id, status: 'queued' })]);
+    await block('quota_exceeded', true);
+    await confirm('重新排队');
+    await panel.findByText('正在分析图片');
+    expect(calls.mock.calls[4][2]).not.toBe(replay[2]);
+    expect((await api.getExtractions(col.id)).items[0].id).toBe(job.id);
+  });
+
+  it('reports quota refusal without hiding the original or starting a recovery on refresh', async () => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    api.setMockImageAnalysisBehavior({ status: 'failed', errorCode: 'image_output_truncated_empty' });
+    const col = await createImageAttachmentCollection(api);
+    api.setMockImageAnalysisBehavior({ quotaExceeded: true });
+    const retry = vi.spyOn(api, 'retryImageAnalysis');
+    renderWithAdapter(['/collections/' + col.id], api);
+    const panel = within(await screen.findByLabelText('图片理解结果'));
+    await ui.click(await panel.findByRole('button', { name: '重新识别这张图片' }));
+    await ui.click(within(screen.getByRole('dialog')).getByRole('button', { name: '确认重新识别' }));
+    expect(await panel.findByRole('alert')).toHaveTextContent('额度不足');
+    await ui.click(panel.getByRole('button', { name: '刷新状态' }));
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(panel.getByText('输出已截断')).toBeVisible();
+    expect(screen.getByRole('button', { name: /放大查看图片 whiteboard/ })).toBeVisible();
+  });
+
+  it.each(['no image consent', 'excluded', 'unavailable', 'field absent', 'contains excerpt', 'already running'])(
+    'withholds the recovery action for %s', async reason => {
+      const api = createTestAdapter();
+      await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+      await api.updatePreferences({ ai_enabled: true, consent_version: 'spark-ai-image-material-v1' });
+      if (reason !== 'no image consent') {
+        await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+      }
+      api.setMockImageAnalysisBehavior({ available: reason !== 'unavailable' });
+      const col = await createImageAttachmentCollection(api, { aiExcluded: reason === 'excluded' });
+      api.setMockCollectionExtractions(col.id, [{ id: crypto.randomUUID(), source_kind: 'image',
+        source_id: col.attachments[0].id, content_version: 1, updated_at: new Date().toISOString(),
+        status: reason === 'already running' ? 'running' : 'partial', truncated: true,
+        image_retry_available: reason === 'field absent' ? undefined : true,
+        text: reason === 'contains excerpt' ? '合成摘录' : undefined }]);
+      const retry = vi.spyOn(api, 'retryImageAnalysis');
+      renderWithAdapter(['/collections/' + col.id], api);
+      const panel = within(await screen.findByLabelText('图片理解结果'));
+      await panel.findByText(col.attachments[0].filename);
+      if (reason === 'no image consent') expect(await panel.findByRole('link', { name: '前往设置开启图片理解' })).toBeVisible();
+      expect(panel.queryByRole('button', { name: '重新识别这张图片' })).toBeNull();
+      expect(retry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('posts the selected base extraction and confirmation to the attachment retry endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: 'queued' }), {
+      status: 202, headers: { 'content-type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const api = createRealApiClient();
+    api.setCsrfToken('synthetic-csrf');
+    const body = { base_extraction_id: crypto.randomUUID(), consent_version: 'deepseek-image-retry-v1' } as const;
+    const attachment = crypto.randomUUID();
+    const key = crypto.randomUUID();
+    expect(await api.retryImageAnalysis(attachment, body, key)).toMatchObject({ status: 'queued' });
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith('/api/v1/attachments/' + attachment + '/image-analysis/retry',
+      expect.objectContaining({ method: 'POST', credentials: 'include', body: JSON.stringify(body),
+        headers: expect.objectContaining({ 'X-CSRF-Token': 'synthetic-csrf', 'Idempotency-Key': key }) }));
+  });
+
   it('renders per-attachment OCR text, visual description, truncation warning, and never polls periodically', async () => {
     const user = userEvent.setup();
     const adapter = createTestAdapter();
@@ -331,7 +532,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(screen.getByText('图中文字')).toBeInTheDocument();
     expect(screen.getByText('AI 画面描述')).toBeInTheDocument();
     expect(screen.getByText('白色桌面上的产品手绘图')).toBeInTheDocument();
-    expect(screen.getByText('输出已截断，结果可能不完整')).toBeInTheDocument();
+    expect(screen.getByText('识别摘录（已截断）')).toBeInTheDocument();
 
     // Update attachment state to queued and verify no periodic polling happens
     adapter.setMockCollectionExtractions(col.id, [

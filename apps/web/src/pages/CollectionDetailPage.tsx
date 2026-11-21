@@ -1120,11 +1120,12 @@ export function CollectionDetailPage() {
             </div>
             <AttachmentGallery attachments={collection.attachments} />
             <ImageAnalysisPanel
+              collectionId={id}
               attachments={collection.attachments}
               extractions={extractionsQuery.data?.items ?? []}
               isInTrash={isInTrash}
               aiExcluded={collection.ai_excluded}
-              imagePreferences={imageAnalysisQuery.data}
+              imagePreferences={imageAnalysisQuery.isError ? undefined : imageAnalysisQuery.data}
               isLoading={extractionsQuery.isLoading}
               isFetching={extractionsQuery.isFetching}
               isError={extractionsQuery.isError}
