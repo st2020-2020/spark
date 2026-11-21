@@ -3923,6 +3923,12 @@ a.sp-pill:hover {
   min-width: 0;
 }
 
+.sp-conflict-grid > .sp-conflict-pane {
+  max-block-size: min(26rem, 48vh);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
 .sp-conflict-pane .sp-label {
   display: block;
   margin-bottom: 6px;

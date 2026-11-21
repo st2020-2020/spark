@@ -93,7 +93,7 @@ describe('Platform AI organization & UI states', () => {
     await screen.findByText('example.com');
 
     // Actionable completion prompt arrives via SSE when has_suggestion === true
-    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+    await screen.findByText('有一条收藏的项目建议待确认');
     const toastActionBtn = await screen.findByRole('button', { name: '查看并确认' });
     expect(openedSpy).not.toHaveBeenCalled();
 
@@ -347,7 +347,7 @@ describe('Platform AI organization & UI states', () => {
     expect(listCollectionsSpy.mock.calls.length).toBe(listColsBeforeEvent);
     expect(listProjectsSpy.mock.calls.length).toBe(listProjsBeforeEvent);
     expect(
-      screen.queryByText('AI 已整理完成并生成项目建议，等待你的确认'),
+      screen.queryByText('有一条收藏的项目建议待确认'),
     ).not.toBeInTheDocument();
 
     // Terminal event with has_suggestion=true shows ONE deduplicated confirmation toast even if delivered twice
@@ -363,8 +363,8 @@ describe('Platform AI organization & UI states', () => {
         has_suggestion: true,
       });
     });
-    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
-    expect(screen.getAllByText('AI 已整理完成并生成项目建议，等待你的确认')).toHaveLength(1);
+    await screen.findByText('有一条收藏的项目建议待确认');
+    expect(screen.getAllByText('有一条收藏的项目建议待确认')).toHaveLength(1);
 
     // Burst of ready + online + visibilitychange within coalesce window triggers only ONE compensation sync
     await new Promise((resolve) => setTimeout(resolve, 220));
@@ -521,7 +521,7 @@ describe('Platform AI organization & UI states', () => {
         has_suggestion: true,
       });
     });
-    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+    await screen.findByText('有一条收藏的项目建议待确认');
 
     await user.click(screen.getByRole('button', { name: '账号菜单' }));
     await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
@@ -554,7 +554,7 @@ describe('Platform AI organization & UI states', () => {
         has_suggestion: true,
       });
     });
-    await screen.findByText('AI 已整理完成并生成项目建议，等待你的确认');
+    await screen.findByText('有一条收藏的项目建议待确认');
   }, 15000);
 });
 

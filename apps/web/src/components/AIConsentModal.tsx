@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Modal } from './Modal';
 
-export const SPARK_AI_CONSENT_VERSION = 'spark-ai-tags-v1';
+export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-material-v1';
 
 export function AIConsentModal({
   open,
@@ -17,21 +17,25 @@ export function AIConsentModal({
   onEnabled?: () => void;
 }) {
   const api = useApi();
-  const { applyAiPreferences } = useAuth();
+  const { user, applyAiPreferences } = useAuth();
+  const alreadyEnabled = Boolean(user?.ai_enabled);
+  const currentConsent = alreadyEnabled && user?.ai_consent_version === SPARK_AI_CONSENT_VERSION;
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
   const enableMutation = useMutation({
-    mutationFn: () =>
-      api.updatePreferences({
-        ai_enabled: true,
-        consent_version: SPARK_AI_CONSENT_VERSION,
-      }),
+    mutationFn: async () => {
+      const updated = await api.updatePreferences({ ai_enabled: true, consent_version: SPARK_AI_CONSENT_VERSION });
+      if (!updated.ai_enabled || updated.ai_consent_version !== SPARK_AI_CONSENT_VERSION) {
+        throw new Error('服务器尚未确认本次整理授权，请稍后重试。');
+      }
+      return updated;
+    },
     onSuccess: (updatedUser) => {
       applyAiPreferences(updatedUser);
       onClose();
       void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
-      pushToast({ message: '已开启 AI 自动整理' });
+      pushToast({ message: alreadyEnabled ? '已更新文字整理授权' : '已开启 AI 自动整理' });
       onEnabled?.();
     },
     onError: (err) => {
@@ -40,15 +44,19 @@ export function AIConsentModal({
   });
 
   return (
-    <Modal open={open} title="开启平台 AI 自动整理" onClose={onClose}>
+    <Modal open={open} title={currentConsent ? '当前文字整理授权' : alreadyEnabled ? '更新文字整理授权' : '开启平台 AI 自动整理'} onClose={onClose}>
       <div className="sp-stack sp-stack--loose">
         <p className="sp-consent-intro">
-          开启后，你在保存新收藏时将自动进入后台整理队列，无需自行配置模型或密钥。请确认以下处理范围：
+          新收藏可由平台文字模型整理。以下说明列出会发送的资料、用途和服务方。
         </p>
         <ul className="sp-consent-list">
           <li>
             <strong>发送资料范围：</strong>
-            发送本条正文和用途说明，以及用于匹配的项目资料。正文或用途中出现已有标签名称时，也会发送相应标签的名称和标识。已排除的收藏不会发送。
+            发送本条正文、用途说明和用于匹配的项目资料，以及匹配到的已有标签名称和标识。已排除的收藏不会发送。
+          </li>
+          <li>
+            <strong>图片识别结果：</strong>
+            同时开启图片理解时，第三方文字模型还可使用这条收藏已识别的图中文字和 AI 画面描述生成项目建议。文字模型不会收到原图。发送原图给 DeepSeek 识别需要单独开启图片理解。
           </li>
           <li>
             <strong>处理用途：</strong>
@@ -65,16 +73,16 @@ export function AIConsentModal({
         </ul>
         <div className="sp-form-actions">
           <button type="button" className="sp-btn" onClick={onClose}>
-            取消
+            {currentConsent ? '关闭' : '取消'}
           </button>
-          <button
+          {!currentConsent && <button
             type="button"
             className="sp-btn sp-btn--primary"
             disabled={enableMutation.isPending}
             onClick={() => enableMutation.mutate()}
           >
-            {enableMutation.isPending ? '保存中…' : '我已了解并开启'}
-          </button>
+            {enableMutation.isPending ? '保存中…' : alreadyEnabled ? '确认更新授权' : '我已了解并开启'}
+          </button>}
         </div>
       </div>
     </Modal>

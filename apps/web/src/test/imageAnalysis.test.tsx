@@ -1,9 +1,11 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
 import { createRealApiClient } from '../api/client';
+import { ApiError } from '../api/errors';
+import type { Collection, Organization } from '../api/types';
 import { EMPTY_DOCUMENT } from '../lib/document';
 import { createTestAdapter, type TestAdapter } from '../test-adapter/mockServer';
 
@@ -212,6 +214,93 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(screen.queryByRole('button', { name: '开启图片理解' })).not.toBeInTheDocument();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it('requires the new text disclosure before reusing a historical image and never resubmits the image', async () => {
+    const ui = userEvent.setup();
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    api.setMockImageAnalysisBehavior({ status: 'succeeded', text: '网格间隔 24', imageDescription: '蓝色方格' });
+    const col = await createImageAttachmentCollection(api, { text: '随手一记', filename: '网格.png' });
+    const read = await api.setReadState(col.id, { read: true });
+    await api.updatePreferences({ ai_enabled: true, consent_version: 'spark-ai-tags-v1' });
+    const snapshot: Collection = { ...read, organization: { ...read.organization, status: 'succeeded',
+      error_code: undefined, image_material_status: 'consent_required' } };
+    vi.spyOn(api, 'getCollection').mockImplementation(async () => structuredClone(snapshot));
+    const restart = vi.spyOn(api, 'restartOrganization')
+      .mockRejectedValueOnce(new ApiError({ status: 403, code: 'image_material_consent_required', message: '授权已过期' }))
+      .mockImplementation(async () => {
+        snapshot.organization = { ...snapshot.organization, status: 'queued', image_material_status: undefined };
+        return snapshot.organization;
+      });
+    const upload = vi.spyOn(api, 'createUpload');
+    const imageWrite = vi.spyOn(api, 'setImageAnalysisPreferences');
+    const write = vi.spyOn(api, 'updatePreferences');
+    renderWithAdapter(['/collections/' + col.id], api);
+    await screen.findByText('上次整理缺少使用图片识别结果的授权。');
+    await screen.findByRole('button', { name: '授权使用图片识别结果' });
+    await ui.click(screen.getByRole('button', { name: '重新整理' }));
+    const dialog = await screen.findByRole('dialog', { name: '更新文字整理授权' });
+    expect(dialog).toHaveTextContent('第三方文字模型');
+    expect(dialog).toHaveTextContent('图中文字和 AI 画面描述');
+    await ui.click(within(dialog).getByRole('button', { name: '取消' }));
+    expect(write).not.toHaveBeenCalled();
+    await ui.click(screen.getByRole('button', { name: '授权使用图片识别结果' }));
+    await ui.click(screen.getByRole('button', { name: '确认更新授权' }));
+    await screen.findByText(/重新整理会检查已有识别结果/);
+    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-image-material-v1' });
+    expect(restart).toHaveBeenCalledTimes(1);
+    await ui.click(screen.getByRole('button', { name: '重新整理' }));
+    await screen.findByText('整理排队中');
+    expect(restart).toHaveBeenCalledTimes(2);
+    expect(upload).not.toHaveBeenCalled();
+    expect(imageWrite).not.toHaveBeenCalled();
+  });
+
+  it('refreshes recognition and project matching separately on SSE and labels exact attachment quotes', async () => {
+    const api = createTestAdapter();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await api.setImageAnalysisPreferences({ enabled: true, consent_version: 'deepseek-images-v1' });
+    const col = await createImageAttachmentCollection(api, { text: '周三白板', filename: '网格.png' });
+    const read = await api.setReadState(col.id, { read: true });
+    await api.updatePreferences({ ai_enabled: true, consent_version: 'spark-ai-image-material-v1' });
+    const attachment = col.attachments[0].id;
+    const extraction = { id: crypto.randomUUID(), source_kind: 'image' as const, source_id: attachment,
+      content_version: col.content_version, updated_at: new Date().toISOString() };
+    api.setMockCollectionExtractions(col.id, [{ ...extraction, status: 'queued' }]);
+    const waiting: Organization = { ...col.organization, status: 'queued', error_code: undefined,
+      image_material_status: 'waiting', stages: [{ name: 'extract_images', status: 'queued', attempts: 0 }] };
+    const snapshot: Collection = { ...read, organization: waiting };
+    vi.spyOn(api, 'getCollection').mockImplementation(async () => structuredClone(snapshot));
+    const event = () => act(() => api.emitMockOrganizationEvent({ collection_id: col.id,
+      status: snapshot.organization.status, has_suggestion: Boolean(snapshot.has_suggestion) }));
+    renderWithAdapter(['/collections/' + col.id], api);
+    await screen.findByText('等待图片识别');
+    expect(screen.queryByText(/暂无匹配的项目建议/)).toBeNull();
+    api.setMockCollectionExtractions(col.id, [{ ...extraction, status: 'succeeded', text: '网格间隔 24', image_description: '蓝色方格' }]);
+    snapshot.organization = { ...waiting, status: 'running', image_material_status: undefined, stages: [] };
+    event();
+    await screen.findByText('网格间隔 24');
+    await screen.findByText('正在整理');
+    expect(screen.queryByText('本次整理使用了图片识别结果。')).toBeNull();
+    snapshot.organization = { ...snapshot.organization, status: 'succeeded', image_material_status: 'included' };
+    snapshot.has_suggestion = true;
+    snapshot.projects = [{ project_id: crypto.randomUUID(), name: '网格研究', decision: 'suggested',
+      evidence: [{ source_id: 'image_text:' + attachment, quote: '间隔 24' },
+                 { source_id: 'image_description:' + attachment, quote: '蓝色方格' }] }];
+    event();
+    await screen.findByText('本次整理使用了图片识别结果。');
+    const evidence = within(await screen.findByRole('list', { name: '推荐依据摘录' }));
+    expect(evidence.getByText('图中文字 · 网格.png')).toBeVisible();
+    expect(evidence.getByText('AI 画面描述 · 网格.png')).toBeVisible();
+    expect(evidence.getByText('间隔 24')).toBeVisible();
+    expect(evidence.getByText('蓝色方格')).toBeVisible();
+    snapshot.projects = [];
+    snapshot.has_suggestion = false;
+    event();
+    await screen.findByText(/暂无匹配的项目建议/);
+    expect(screen.queryByRole('list', { name: '推荐依据摘录' })).toBeNull();
   });
 
   it('renders per-attachment OCR text, visual description, truncation warning, and never polls periodically', async () => {

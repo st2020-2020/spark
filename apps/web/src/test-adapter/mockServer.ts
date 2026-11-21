@@ -349,6 +349,7 @@ export function createTestAdapter(): TestAdapter {
       role: u.role,
       status: u.status,
       ai_enabled: u.ai_enabled,
+      ai_consent_version: u.ai_consent_version,
       ai_policy_version: u.ai_policy_version,
     };
   }
@@ -556,6 +557,7 @@ export function createTestAdapter(): TestAdapter {
       expires_at: sess.expires_at,
       ai_trial_eligible: mockAiTrialEligible,
       ai_platform_enabled: mockAiPlatformEnabled,
+      purge_enabled: !mockPurgeBehavior.unconfigured,
     };
   }
 
@@ -1053,6 +1055,7 @@ export function createTestAdapter(): TestAdapter {
         expires_at: sess.expires_at,
         ai_trial_eligible: mockAiTrialEligible,
         ai_platform_enabled: mockAiPlatformEnabled,
+      purge_enabled: !mockPurgeBehavior.unconfigured,
       };
     },
 
@@ -1115,6 +1118,7 @@ export function createTestAdapter(): TestAdapter {
       const user = requireUser(true);
       if (body.ai_enabled !== undefined) {
         user.ai_enabled = body.ai_enabled;
+        user.ai_consent_version = body.ai_enabled ? body.consent_version : undefined;
         user.ai_policy_version += 1;
       }
       if (body.palette) user.palette = body.palette;

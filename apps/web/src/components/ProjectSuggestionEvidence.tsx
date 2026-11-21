@@ -1,11 +1,12 @@
 import { Quote } from 'lucide-react';
-import type { ProjectAssociation } from '../api/types';
+import type { Attachment, ProjectAssociation } from '../api/types';
 import { evidenceSourceLabel } from '../lib/organization';
 
 export function ProjectSuggestionEvidence({
-  association,
+  association, attachments,
 }: {
   association: ProjectAssociation;
+  attachments?: Attachment[];
 }) {
   const evidence = association.evidence ?? [];
   if (!association.reason && evidence.length === 0) {
@@ -23,7 +24,7 @@ export function ProjectSuggestionEvidence({
         <ul className="sp-evidence-list" aria-label="推荐依据摘录">
           {evidence.map((item, idx) => (
             <li key={`${item.source_id}-${idx}`} className="sp-evidence-item">
-              <span className="sp-evidence-source">{evidenceSourceLabel(item.source_id)}</span>
+              <span className="sp-evidence-source">{evidenceSourceLabel(item.source_id, attachments)}</span>
               <span className="sp-evidence-quote sp-break-anywhere">
                 <Quote size={12} strokeWidth={2} aria-hidden="true" />
                 <span>{item.quote}</span>

@@ -1346,7 +1346,7 @@ export function TriagePage() {
                           <span>建议归入：{assoc.name}</span>
                         </span>
                       </div>
-                      <ProjectSuggestionEvidence association={assoc} />
+                      <ProjectSuggestionEvidence association={assoc} attachments={currentDetail?.attachments} />
                     </div>
                   ))}
                 </div>

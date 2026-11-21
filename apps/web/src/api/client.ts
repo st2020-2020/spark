@@ -129,7 +129,7 @@ export interface SparkApi {
 
   createCollection(body: CollectionCreate, idempotencyKey: string): Promise<Collection>;
   listCollections(query?: ListCollectionsQuery, signal?: AbortSignal): Promise<CollectionPage>;
-  getCollection(id: string): Promise<Collection>;
+  getCollection(id: string, signal?: AbortSignal): Promise<Collection>;
   updateCollection(id: string, body: CollectionUpdate): Promise<Collection>;
   trashCollection(id: string, body: ResourceCondition): Promise<Collection>;
   restoreCollection(id: string, body: ResourceCondition): Promise<Collection>;
@@ -519,7 +519,7 @@ export function createRealApiClient(): SparkApi {
       }),
     listCollections: (query, signal) =>
       request<CollectionPage>('GET', `/collections${buildQuery(query)}`, { signal }),
-    getCollection: (id) => request<Collection>('GET', `/collections/${encodeURIComponent(id)}`),
+    getCollection: (id, signal) => request<Collection>('GET', `/collections/${encodeURIComponent(id)}`, { signal }),
     updateCollection: (id, body) =>
       request<Collection>('PATCH', `/collections/${encodeURIComponent(id)}`, {
         body,

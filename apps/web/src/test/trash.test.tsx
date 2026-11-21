@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
+import { saveAcceptedPurges } from '../lib/purge';
 import { createRealApiClient } from '../api/client';
 import { createTestAdapter, type TestAdapter } from '../test-adapter/mockServer';
 
@@ -65,6 +66,29 @@ function makeTextDocument(text: string) {
 }
 
 describe('T08 Trash & permanent purge UI', () => {
+  it.each([false, undefined])('keeps only restore and prior receipts when purge_enabled is %s', async flag => {
+    const api = createTestAdapter();
+    const session = await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const col = await api.createCollection({ id: crypto.randomUUID(), document: makeTextDocument('草图'),
+      intent: '', upload_ids: [], project_ids: [], tag_ids: [] }, 'trash-seed');
+    await api.trashCollection(col.id, { base_resource_version: col.resource_version });
+    vi.spyOn(api, 'currentSession').mockResolvedValue({ ...session, purge_enabled: flag });
+    saveAcceptedPurges(session.user.id, [{ collectionId: crypto.randomUUID(), operationId: crypto.randomUUID(), status: 'queued' }]);
+    const purge = vi.spyOn(api, 'purgeCollection');
+    renderWithAdapter(['/trash'], api);
+    await screen.findByText('草图');
+    expect(screen.getByRole('region', { name: '已受理永久删除任务' })).toHaveTextContent('已受理');
+    expect(screen.queryByRole('button', { name: '永久删除' })).toBeNull();
+    expect(screen.queryByText(/预计到期|自动清理|剩余约/)).toBeNull();
+    await userEvent.click(screen.getByRole('link', { name: '查看详情' }));
+    await screen.findByText('此收藏位于回收站');
+    expect(screen.queryByRole('button', { name: '永久删除' })).toBeNull();
+    expect(screen.queryByText(/到期时间|剩余约/)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: '恢复' }));
+    await screen.findByRole('button', { name: '编辑' });
+    expect(purge).not.toHaveBeenCalled();
+  });
+
   it('supports expiry notice, mutual exclusion, confirmation modal, accepted status & manual refresh without polling', async () => {
     const user = userEvent.setup();
     const adapter = createTestAdapter();

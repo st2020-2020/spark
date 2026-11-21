@@ -20,6 +20,7 @@ interface AuthState {
   expiresAt: string | null;
   aiTrialEligible: boolean;
   aiPlatformEnabled: boolean;
+  purgeEnabled: boolean;
   isLoading: boolean;
   sessionError: string | null;
 }
@@ -45,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     expiresAt: null,
     aiTrialEligible: true,
     aiPlatformEnabled: true,
+    purgeEnabled: false,
     isLoading: true,
     sessionError: null,
   });
@@ -76,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expiresAt: session.expires_at,
         aiTrialEligible: session.ai_trial_eligible ?? true,
         aiPlatformEnabled: session.ai_platform_enabled ?? true,
+        purgeEnabled: session.purge_enabled === true,
         isLoading: false,
         sessionError: null,
       });
@@ -97,6 +100,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         expiresAt: null,
         aiTrialEligible: false,
         aiPlatformEnabled: false,
+        purgeEnabled: false,
         isLoading: false,
         sessionError: message,
       });
@@ -176,6 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyAiPreferences = useCallback((user: User) => {
     setState((prev) => prev.user?.id === user.id ? { ...prev, user: {
       ...prev.user, ai_enabled: user.ai_enabled, ai_policy_version: user.ai_policy_version,
+      ai_consent_version: user.ai_consent_version,
     } } : prev);
   }, []);
 

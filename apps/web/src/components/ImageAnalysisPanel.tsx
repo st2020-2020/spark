@@ -13,7 +13,7 @@ function resolveImageStatusDisplay(ext: Extraction): {
       return {
         label: '正在分析图片',
         pillClass: 'sp-pill',
-        note: '系统正在识别图中文字与画面内容，完成后点击「刷新状态」查看。',
+        note: '系统正在识别图中文字与画面内容，可在此查看最新状态。',
       };
     case 'succeeded':
       return {
@@ -23,19 +23,21 @@ function resolveImageStatusDisplay(ext: Extraction): {
     case 'partial':
       return {
         label: '部分识别',
+        note: ext.error_code === 'usage_uncertain' ? '识别结果已保留，本次用量待核对。' : undefined,
         pillClass: 'sp-pill sp-pill--warning',
       };
     case 'blocked':
       return {
         label: ext.error_code === 'quota_exceeded' ? '今日 AI 额度已暂停' : '暂未执行',
         pillClass: 'sp-pill sp-pill--warning',
-        note: '今日 AI 额度不足或未分配，图片理解已暂停，原图已完整保存并可继续查看。',
+        note: ext.error_code === 'quota_exceeded' ? '今日 AI 额度不足或未分配，原图仍可查看。' : '图片识别暂时受阻，原图仍可查看。',
       };
     case 'skipped':
       return {
         label: '已跳过图片理解',
         pillClass: 'sp-pill',
-        note: '当前未开启图片理解、缺少 DeepSeek 图片授权或已排除 AI 处理，原图仍完整保存。',
+        note: ext.error_code === 'integration_not_configured' ? '平台尚未启用图片理解，原图仍可查看。'
+          : '本次未执行图片识别，原图仍可查看。',
       };
     case 'failed':
       return {
@@ -53,7 +55,7 @@ export function formatExtractionSummaryText(ext: Extraction): string {
   const parts: string[] = [];
   if (ext.text?.trim()) parts.push(`图中文字：${ext.text.trim()}`);
   if (ext.image_description?.trim()) parts.push(`AI 画面描述：${ext.image_description.trim()}`);
-  if (ext.truncated || ext.status === 'partial') parts.push('输出已截断，识别结果可能不完整');
+  if (ext.truncated) parts.push('输出已截断，识别结果可能不完整');
   return parts.length > 0 ? parts.join(' ｜ ') : ext.status;
 }
 
@@ -110,9 +112,6 @@ export function ImageAnalysisPanel({
     !hasResults &&
     (aiExcluded || (imagePreferences?.available && !imagePreferences.enabled));
 
-  if (!isLoading && !isError && !hasResults && !showEmptyDisabledHint) {
-    return null;
-  }
 
   return (
     <div className="sp-image-analysis-panel" aria-label="图片理解结果">
@@ -121,7 +120,7 @@ export function ImageAnalysisPanel({
           <ImageIcon size={14} strokeWidth={2} aria-hidden="true" />
           <span>图片理解</span>
         </span>
-        {(hasResults || isError) && (
+        {!isLoading && (
           <button
             type="button"
             className="sp-btn sp-btn--sm sp-btn--ghost"
@@ -162,13 +161,18 @@ export function ImageAnalysisPanel({
         </p>
       )}
 
+      {!isLoading && !isError && !hasResults && !showEmptyDisabledHint && (
+        <p className="sp-help sp-image-analysis-note">{imagePreferences && !imagePreferences.available
+          ? '当前账号暂未开放图片理解，原图仍可查看。' : '这条收藏暂无图片识别结果。'}</p>
+      )}
+
       {hasResults && (
         <div className="sp-image-analysis-list">
           {matched.map(({ attachment, index, extraction }) => {
             const statusDisplay = resolveImageStatusDisplay(extraction);
             const ocrText = extraction.text?.trim() ?? '';
             const visualDesc = extraction.image_description?.trim() ?? '';
-            const isTruncated = Boolean(extraction.truncated || extraction.status === 'partial');
+            const isTruncated = Boolean(extraction.truncated);
             const isPending = extraction.status === 'queued' || extraction.status === 'running';
             const isEmptySuccess =
               (extraction.status === 'succeeded' || extraction.status === 'partial') &&

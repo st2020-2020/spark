@@ -23,9 +23,11 @@ import type {
   Collection,
   Extraction,
   ExtractionList,
+  ExpectedProjectSuggestion,
   SparkDocument,
 } from '../api/types';
 import { ApiError, getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
+import { AIConsentModal, SPARK_AI_CONSENT_VERSION } from '../components/AIConsentModal';
 import { AttachmentGallery } from '../components/AttachmentGallery';
 import {
   formatExtractionSummaryText,
@@ -52,13 +54,14 @@ import {
   inspectSparkDocumentSupport,
   isValidHttpUrl,
 } from '../lib/document';
-import { loadDraft, removeDraft, saveDraft, useBeforeUnloadWarning } from '../lib/drafts';
+import { confirmLeavingImageDraft, loadDraft, removeDraft, saveDraft, useBeforeUnloadWarning } from '../lib/drafts';
 import { formatDateTime, formatRemainingTrashDays } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { projectToneClass } from '../lib/projectTone';
 import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import {
   classifyOrganizationDisplay,
+  getExpectedProjectSuggestion,
   isOrganizationActiveStatus,
   stageNameLabel,
   stageStatusLabel,
@@ -76,10 +79,27 @@ interface EditDraft {
   keptAttachmentIds: string[];
 }
 
+function draftFromCollection(col: Collection): EditDraft {
+  return {
+    baseContentVersion: col.content_version, baseDecisionVersion: col.decision_version,
+    document: col.document, intent: col.intent, originalUrl: col.original_url ?? '', manualTitle: col.manual_title ?? '',
+    keptAttachmentIds: [...col.attachments].sort((a,b) => a.position - b.position).map(a => a.id),
+  };
+}
+
+function draftFields(draft: EditDraft, col: Collection) {
+  const fields = [draft.manualTitle && '标题：' + draft.manualTitle, draft.intent && '用途：' + draft.intent,
+    draft.originalUrl && '来源：' + draft.originalUrl];
+  if (draft.keptAttachmentIds.length) fields.push('附件：' + draft.keptAttachmentIds.map(id =>
+    col.attachments.find(a => a.id === id)?.filename ?? '已移除附件 ' + id).join('、'));
+  if (draft.additions?.length) fields.push('待保存关联：' + draft.additions.map(a => a.kind + a.name).join('、'));
+  return fields.filter(Boolean);
+}
+
 export function CollectionDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const api = useApi();
-  const { user, aiTrialEligible, aiPlatformEnabled } = useAuth();
+  const { user, aiTrialEligible, aiPlatformEnabled, purgeEnabled } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -101,6 +121,7 @@ export function CollectionDetailPage() {
   const [selectedProjectToAdd, setSelectedProjectToAdd] = useState('');
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
+  const [consentOpen, setConsentOpen] = useState(false);
   const [orgActionError, setOrgActionError] = useState<string | null>(null);
   const [urlRefreshError, setUrlRefreshError] = useState<string | null>(null);
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false);
@@ -123,7 +144,7 @@ export function CollectionDetailPage() {
 
   const collectionQuery = useQuery({
     queryKey: ['collection', id],
-    queryFn: () => api.getCollection(id),
+    queryFn: ({ signal }) => api.getCollection(id, signal),
     enabled: Boolean(id),
   });
 
@@ -244,26 +265,10 @@ export function CollectionDetailPage() {
 
   const startEditing = (col: Collection) => {
     editUploader.clearAll();
-    const sortedAttachments = [...col.attachments].sort((a, b) => a.position - b.position);
-    const validIds = new Set(sortedAttachments.map((a) => a.id));
     const restored = loadDraft<EditDraft>(userId, editDraftScope);
-    if (restored.data && restored.data.baseContentVersion === col.content_version) {
-      setEditDraft({
-        ...restored.data,
-        keptAttachmentIds: restored.data.keptAttachmentIds.filter((aid) => validIds.has(aid)),
-      });
-    } else {
-      setEditDraft({
-        baseContentVersion: col.content_version,
-        baseDecisionVersion: col.decision_version,
-        document: col.document,
-        intent: col.intent,
-        originalUrl: col.original_url ?? '',
-        manualTitle: col.manual_title ?? '',
-        keptAttachmentIds: sortedAttachments.map((a) => a.id),
-      });
-    }
-    setConflictServerDoc(null);
+    if (restored.error) { pushToast({ message: restored.error, tone: 'error' }); return; }
+    setEditDraft(restored.data ?? draftFromCollection(col));
+    setConflictServerDoc(restored.data && restored.data.baseContentVersion !== col.content_version ? col : null);
     setEditError(null);
     setEditorResetToken((n) => n + 1);
     setIsEditing(true);
@@ -282,13 +287,18 @@ export function CollectionDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [routeState?.edit, collection?.id]);
 
-  const cancelEditing = () => {
+  const cancelEditing = (keepDraft = false) => {
+    if (keepDraft && editDraft) {
+      if (editUploader.items.length && !confirmLeavingImageDraft()) return;
+      const result = saveDraft(userId, editDraftScope, editDraft);
+      if (!result.ok) { setEditError(result.error ?? '草稿尚未保存。'); return; }
+    }
     editUploader.clearAll();
     setIsEditing(false);
     setEditDraft(null);
     setConflictServerDoc(null);
     setEditError(null);
-    removeDraft(userId, editDraftScope);
+    if (!keepDraft) removeDraft(userId, editDraftScope);
   };
 
   const editCharCount = useMemo(() => {
@@ -305,6 +315,8 @@ export function CollectionDetailPage() {
       if (editCharCount > MAX_TEXT_AND_INTENT_CHARS) {
         throw new Error(`正文与用途说明合计不能超过 ${MAX_TEXT_AND_INTENT_CHARS} 字`);
       }
+      const keptIds = overrideBaseVersion !== undefined && conflictServerDoc
+        ? draftFromCollection(conflictServerDoc).keptAttachmentIds : editDraft.keptAttachmentIds;
       const trimmedUrl = editDraft.originalUrl.trim();
       if (trimmedUrl && !isValidHttpUrl(trimmedUrl)) {
         throw new Error('来源网址仅支持无凭据的 http:// 或 https:// 地址');
@@ -320,13 +332,13 @@ export function CollectionDetailPage() {
       if (
         !plain &&
         !trimmedUrl &&
-        editDraft.keptAttachmentIds.length === 0 &&
+        keptIds.length === 0 &&
         editUploader.readyUploadIds.length === 0
       ) {
         throw new Error('正文、有效网址或图片附件至少保留一项');
       }
       if (
-        editDraft.keptAttachmentIds.length + editUploader.readyUploadIds.length >
+        keptIds.length + editUploader.readyUploadIds.length >
         MAX_ATTACHMENTS_PER_COLLECTION
       ) {
         throw new Error(`每条收藏最多只能包含 ${MAX_ATTACHMENTS_PER_COLLECTION} 张图片。`);
@@ -345,7 +357,7 @@ export function CollectionDetailPage() {
         intent: editDraft.intent.trim(),
         original_url: trimmedUrl,
         manual_title: editDraft.manualTitle.trim(),
-        attachment_ids: editDraft.keptAttachmentIds,
+        attachment_ids: keptIds,
         upload_ids: editUploader.readyUploadIds,
       });
       if (!additions.length) return saved;
@@ -391,9 +403,9 @@ export function CollectionDetailPage() {
     onError: async (err) => {
       setEditError(getFriendlyErrorMessage(err));
       if (isApiErrorCode(err, 'content_conflict')) {
-        const latest = await api.getCollection(id);
-        queryClient.setQueryData(['collection', id], latest);
-        setConflictServerDoc(latest);
+        const latest = await collectionQuery.refetch();
+        if (latest.isSuccess) setConflictServerDoc(latest.data);
+        else setEditError('服务器版本读取失败。本地草稿已保留，可重新进入编辑获取最新版本。');
       }
     },
   });
@@ -412,10 +424,11 @@ export function CollectionDetailPage() {
       baseVersion: number;
       projectId: string;
       action: 'include' | 'exclude' | 'reset';
+      expectedSuggestion?: ExpectedProjectSuggestion;
     }) =>
       api.updateProjectDecisions(id, {
         base_decision_version: params.baseVersion,
-        operations: [{ id: params.projectId, action: params.action }],
+        operations: [{ id: params.projectId, action: params.action, expected_suggestion: params.expectedSuggestion }],
       }),
     onSuccess: (updated) => {
       setDecisionError(null);
@@ -428,7 +441,7 @@ export function CollectionDetailPage() {
     },
     onError: async (err) => {
       setDecisionError(getFriendlyErrorMessage(err));
-      if (isApiErrorCode(err, 'decision_conflict')) {
+      if (isApiErrorCode(err, 'decision_conflict') || isApiErrorCode(err, 'suggestion_conflict')) {
         const latest = await api.getCollection(id);
         queryClient.setQueryData(['collection', id], latest);
       }
@@ -567,24 +580,20 @@ export function CollectionDetailPage() {
     onSuccess: async (org) => {
       setOrgActionError(null);
       orgRetryKeyRef.current = generateIdempotencyKey();
-      queryClient.setQueryData<Collection | undefined>(['collection', id], (prev) =>
-        prev ? { ...prev, organization: org } : prev,
-      );
-      if (isOrganizationActiveStatus(org.status)) {
-        pushToast({ message: '已加入后台整理队列' });
-      } else {
-        try {
-          const refreshed = await api.getCollection(id);
-          queryClient.setQueryData(['collection', id], refreshed);
-        } catch {
-          // Organization already updated in cache
-        }
-      }
+      if (isOrganizationActiveStatus(org.status)) pushToast({ message: '整理请求已受理' });
+      // An SSE notification can arrive before this request returns. Read the current run and its suggestions.
+      await collectionQuery.refetch();
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
     onError: (err) => {
-      setOrgActionError(getFriendlyErrorMessage(err));
+      setOrgActionError(isApiErrorCode(err, 'image_material_consent_required')
+        ? '尚未授权使用图片识别结果。请确认整理授权后重试。' : getFriendlyErrorMessage(err));
+      if (isApiErrorCode(err, 'image_material_consent_required')) {
+        void collectionQuery.refetch();
+        void imageAnalysisQuery.refetch();
+        if (aiTrialEligible && aiPlatformEnabled) setConsentOpen(true);
+      }
     },
   });
 
@@ -714,6 +723,14 @@ export function CollectionDetailPage() {
     aiExcluded: Boolean(collection.ai_excluded),
     projects: collection.projects,
   });
+  const imageMaterial = collection.organization.image_material_status;
+  const hasExtractedImageText = extractionsQuery.data?.items.some(ext =>
+    ext.source_kind === 'image' && collection.attachments.some(a => a.id === ext.source_id) &&
+    (ext.status === 'succeeded' || ext.status === 'partial') && !!(ext.text?.trim() || ext.image_description?.trim()));
+  const imagePrefs = imageAnalysisQuery.data;
+  const canUseImages = Boolean(imagePrefs?.available && imagePrefs.enabled);
+  const hasTextConsent = user?.ai_enabled && user.ai_consent_version === SPARK_AI_CONSENT_VERSION;
+  const offerImageConsent = !hasTextConsent && aiTrialEligible && aiPlatformEnabled && canUseImages;
   const orgPillClass =
     orgDisplay.pillTone === 'green'
       ? 'sp-pill sp-pill--success'
@@ -775,10 +792,8 @@ export function CollectionDetailPage() {
             <div>
               <strong>此收藏位于回收站</strong>
               <div className="sp-banner-detail">
-                删除于 {formatDateTime(collection.deleted_at!)} ·{' '}
-                {collection.purge_after
-                  ? `到期时间 ${formatDateTime(collection.purge_after)}（${formatRemainingTrashDays(collection.purge_after)}）`
-                  : formatRemainingTrashDays(collection.purge_after)}
+                删除于 {formatDateTime(collection.deleted_at!)}
+                {purgeEnabled && collection.purge_after && ` · 到期时间 ${formatDateTime(collection.purge_after)}（${formatRemainingTrashDays(collection.purge_after)}）`}
               </div>
             </div>
             <div className="sp-row">
@@ -786,18 +801,18 @@ export function CollectionDetailPage() {
                 type="button"
                 className="sp-btn sp-btn--sm sp-btn--primary"
                 disabled={
-                  restoreMutation.isPending || purgeMutation.isPending || purgeConfirmOpen
+                  restoreMutation.isPending || purgeMutation.isPending || (purgeEnabled && purgeConfirmOpen)
                 }
                 onClick={() => restoreMutation.mutate()}
               >
                 <RotateCcw size={14} strokeWidth={2} aria-hidden="true" />
                 <span>{restoreMutation.isPending ? '恢复中…' : '恢复'}</span>
               </button>
-              <button
+              {purgeEnabled && <button
                 type="button"
                 className="sp-btn sp-btn--sm sp-btn--danger"
                 disabled={
-                  restoreMutation.isPending || purgeMutation.isPending || purgeConfirmOpen
+                  restoreMutation.isPending || purgeMutation.isPending || (purgeEnabled && purgeConfirmOpen)
                 }
                 onClick={() => {
                   setPurgeError(null);
@@ -806,7 +821,7 @@ export function CollectionDetailPage() {
               >
                 <Trash2 size={14} strokeWidth={2} aria-hidden="true" />
                 <span>{purgeMutation.isPending ? '删除中…' : '永久删除'}</span>
-              </button>
+              </button>}
             </div>
           </div>
           {purgeError && (
@@ -861,65 +876,54 @@ export function CollectionDetailPage() {
                   <h2 className="sp-conflict-title">
                     检测到内容版本冲突（服务器已更新至 v{conflictServerDoc.content_version}）
                   </h2>
-                  <p className="sp-help">你的本地草稿已完整保留在右侧，请对比后选择处理方式：</p>
+                  <p className="sp-help">草稿基于 v{editDraft.baseContentVersion}，请比较两份内容。覆盖提交会保留服务器当前附件并追加本次新增图片。</p>
                   <div className="sp-conflict-grid">
-                    <div className="sp-conflict-pane">
+                    <div className="sp-conflict-pane" role="region" aria-label="服务器版本" tabIndex={0}>
                       <span className="sp-label">
                         服务器最新版本 (v{conflictServerDoc.content_version})
                       </span>
                       <SafeDocumentView document={conflictServerDoc.document} />
-                      {conflictServerDoc.intent && (
-                        <p className="sp-help">用途：{conflictServerDoc.intent}</p>
-                      )}
+                      {draftFields(draftFromCollection(conflictServerDoc), conflictServerDoc).map(field => <p key={field} className="sp-help sp-break-anywhere">{field}</p>)}
+                      {conflictServerDoc.projects.some(p => p.decision !== 'rejected') && <p className="sp-help">项目：{conflictServerDoc.projects.filter(p => p.decision !== 'rejected').map(p => p.name).join('、')}</p>}
+                      {conflictServerDoc.tags.some(t => t.decision !== 'rejected') && <p className="sp-help">标签：{conflictServerDoc.tags.filter(t => t.decision !== 'rejected').map(t => t.path).join('、')}</p>}
                     </div>
-                    <div className="sp-conflict-pane">
+                    <div className="sp-conflict-pane" role="region" aria-label="本地草稿" tabIndex={0}>
                       <span className="sp-label">你的本地草稿</span>
                       <SafeDocumentView document={editDraft.document} />
-                      {editDraft.intent && <p className="sp-help">用途：{editDraft.intent}</p>}
+                      {draftFields(editDraft, conflictServerDoc).map(field => <p key={field} className="sp-help sp-break-anywhere">{field}</p>)}
                     </div>
                   </div>
                   <div className="sp-row sp-conflict-actions">
                     <button
                       type="button"
                       className="sp-btn sp-btn--sm"
-                      onClick={() => {
-                        void navigator.clipboard?.writeText(derivePlainText(editDraft.document));
-                        pushToast({ message: '已复制本地正文' });
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText([derivePlainText(editDraft.document), ...draftFields(editDraft, conflictServerDoc)].join('\n'));
+                          pushToast({ message: '已复制本地草稿' });
+                        } catch { setEditError('复制失败。可选中本地草稿文字复制，或保留草稿稍后处理。'); }
                       }}
                     >
-                      复制本地正文
+                      复制本地草稿
                     </button>
                     <button
                       type="button"
                       className="sp-btn sp-btn--sm sp-btn--primary"
-                      disabled={saveEditMutation.isPending}
-                      onClick={() => {
-                        setEditDraft((d) =>
-                          d ? { ...d, baseContentVersion: conflictServerDoc.content_version } : d,
-                        );
-                        saveEditMutation.mutate(conflictServerDoc.content_version);
-                      }}
+                      disabled={saveEditMutation.isPending || creatingTag || editUploader.hasInFlight || editUploader.hasFailed}
+                      onClick={() => saveEditMutation.mutate(conflictServerDoc.content_version)}
                     >
                       基于服务器 v{conflictServerDoc.content_version} 覆盖提交
                     </button>
                     <button
                       type="button"
                       className="sp-btn sp-btn--sm"
+                      disabled={saveEditMutation.isPending || creatingTag}
                       onClick={() => {
                         editUploader.clearAll();
-                        setEditDraft({
-                          baseContentVersion: conflictServerDoc.content_version,
-                          document: conflictServerDoc.document,
-                          intent: conflictServerDoc.intent,
-                          originalUrl: conflictServerDoc.original_url ?? '',
-                          manualTitle: conflictServerDoc.manual_title ?? '',
-                          keptAttachmentIds: [...conflictServerDoc.attachments]
-                            .sort((a, b) => a.position - b.position)
-                            .map((a) => a.id),
-                        });
+                        setEditDraft(draftFromCollection(conflictServerDoc));
                         setConflictServerDoc(null);
                         setEditError(null);
-                        setEditorResetToken((n) => n + 1);
+                        setEditorResetToken(n => n + 1);
                       }}
                     >
                       放弃本地修改
@@ -1079,14 +1083,14 @@ export function CollectionDetailPage() {
                   {editCharCount.toLocaleString()} / {MAX_TEXT_AND_INTENT_CHARS.toLocaleString()} 字
                 </span>
                 <div className="sp-form-actions">
-                  <button type="button" className="sp-btn" disabled={saveEditMutation.isPending || creatingTag} onClick={cancelEditing}>
-                    取消
+                  <button type="button" className="sp-btn" disabled={saveEditMutation.isPending || creatingTag} onClick={() => cancelEditing(!!conflictServerDoc)}>
+                    {conflictServerDoc ? '保留草稿并退出编辑' : '取消'}
                   </button>
                   <button
                     type="button"
                     className="sp-btn sp-btn--primary"
                     disabled={
-                      saveEditMutation.isPending || creatingTag ||
+                      !!conflictServerDoc || saveEditMutation.isPending || creatingTag ||
                       editUploader.hasInFlight ||
                       editUploader.hasFailed
                     }
@@ -1116,7 +1120,7 @@ export function CollectionDetailPage() {
               isLoading={extractionsQuery.isLoading}
               isFetching={extractionsQuery.isFetching}
               isError={extractionsQuery.isError}
-              onRefreshStatus={() => void extractionsQuery.refetch()}
+              onRefreshStatus={() => { void extractionsQuery.refetch(); void collectionQuery.refetch(); void imageAnalysisQuery.refetch(); }}
             />
           </section>
         )}
@@ -1202,6 +1206,7 @@ export function CollectionDetailPage() {
                                 projectDecisionMutation.mutate({
                                   baseVersion: collection.decision_version,
                                   projectId: pa.project_id,
+                                  expectedSuggestion: isSuggested ? getExpectedProjectSuggestion(collection, pa.project_id) : undefined,
                                   action: 'include',
                                 })
                               }
@@ -1219,6 +1224,7 @@ export function CollectionDetailPage() {
                                 projectDecisionMutation.mutate({
                                   baseVersion: collection.decision_version,
                                   projectId: pa.project_id,
+                                  expectedSuggestion: isSuggested ? getExpectedProjectSuggestion(collection, pa.project_id) : undefined,
                                   action: 'exclude',
                                 })
                               }
@@ -1247,7 +1253,7 @@ export function CollectionDetailPage() {
                       )}
                     </div>
 
-                    <ProjectSuggestionEvidence association={pa} />
+                    <ProjectSuggestionEvidence association={pa} attachments={collection.attachments} />
                   </div>
                 );
               })}
@@ -1363,6 +1369,24 @@ export function CollectionDetailPage() {
               )}
             </p>
 
+            {imageMaterial === 'included' && (
+              <p className="sp-help">本次整理使用了图片识别结果。</p>
+            )}
+            {!isInTrash && !collection.ai_excluded && !isOrganizationActiveStatus(collection.organization.status) &&
+              (hasExtractedImageText || imageMaterial === 'consent_required') && (
+              <div className="sp-stack sp-stack--tight">
+                {imageMaterial === 'consent_required' && <p className="sp-help">上次整理缺少使用图片识别结果的授权。</p>}
+                {imagePrefs && !canUseImages && <p className="sp-help">{imagePrefs.available
+                  ? <>图片理解已关闭。<Link to="/settings">前往设置</Link>可管理授权。</>
+                  : '当前账号暂未开放图片理解。'}</p>}
+                {offerImageConsent && <div>
+                  <button className="sp-btn sp-btn--sm" type="button" onClick={() => setConsentOpen(true)}>授权使用图片识别结果</button>
+                </div>}
+                {hasTextConsent && canUseImages && orgDisplay.canTrigger && <p className="sp-help">重新整理会检查已有识别结果，符合当前授权的内容可直接用于匹配，无需重新上传图片。</p>}
+              </div>
+            )}
+            <AIConsentModal open={consentOpen} onClose={() => setConsentOpen(false)} onEnabled={() => setOrgActionError(null)} />
+
             {orgActionError && (
               <div className="sp-banner sp-banner--error" role="alert">
                 <span>{orgActionError}</span>
@@ -1474,12 +1498,12 @@ export function CollectionDetailPage() {
       </Modal>
 
       <PurgeConfirmModal
-        open={purgeConfirmOpen}
+        open={purgeEnabled && purgeConfirmOpen}
         targetSummary={collection.display_title}
         isSubmitting={purgeMutation.isPending}
         onCancel={() => setPurgeConfirmOpen(false)}
         onConfirm={() => {
-          if (!restoreMutation.isPending && !purgeMutation.isPending) {
+          if (purgeEnabled && !restoreMutation.isPending && !purgeMutation.isPending) {
             purgeMutation.mutate();
           }
         }}
