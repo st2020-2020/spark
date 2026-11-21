@@ -76,7 +76,7 @@ type textInput struct {
 	tagConsent          bool
 	waitingImages       bool
 	imageArchiveConsent bool
-	imageIDs            []string
+	imageKeys           []string
 	decisionVersion     int64
 	Sources             []textSource   `json:"sources"`
 	Projects            []projectInput `json:"projects"`
@@ -111,7 +111,7 @@ type modelTopic struct {
 }
 
 func (i textInput) archivesImage() bool {
-	return i.imageArchiveConsent && len(i.imageIDs) > 0
+	return i.imageArchiveConsent && len(i.imageKeys) > 0
 }
 
 type runSnapshot struct {
@@ -239,7 +239,7 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 			// A result may have committed just before this expiry check and
 			// found this run still active. Recover without waiting a second
 			// time for sources that remain pending.
-			images, pending, err := w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID)
+			images, pending, err := w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, true)
 			if err != nil {
 				return r, input, false, err
 			}
@@ -262,7 +262,7 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 	var imageSources []textSource
 	if allowsTextImageMaterial(consent) {
 		var pending bool
-		imageSources, pending, err = w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID)
+		imageSources, pending, err = w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, input.imageArchiveConsent)
 		if err != nil {
 			return r, input, false, err
 		}
@@ -276,7 +276,7 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 			return r, input, false, tx.Commit(ctx)
 		}
 	}
-	input.imageIDs = imageExtractionIDs(imageSources)
+	input.imageKeys = imageMaterialKeys(imageSources)
 	if !materialAvailable(text, intent) && len(imageSources) == 0 {
 		if err = setRunState(ctx, tx, r, "skipped", "insufficient_material"); err != nil {
 			return r, input, false, err
@@ -476,17 +476,25 @@ func (w *TextWorker) validateResult(raw string, input textInput) (organizationRe
 	return result, nil
 }
 
-func (w *TextWorker) imageInputChanged(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput) (bool, error) {
+func (w *TextWorker) imageInputChanged(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput) (changed, arrived bool, err error) {
 	if !input.imageArchiveConsent {
-		return false, nil
+		return false, false, nil
 	}
-	current, pending, err := w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID)
-	return pending || !slices.Equal(input.imageIDs, imageExtractionIDs(current)), err
+	current, pending, err := w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, true)
+	if err != nil {
+		return false, false, err
+	}
+	keys := imageMaterialKeys(current)
+	arrived = pending || slices.ContainsFunc(keys, func(key string) bool { return !slices.Contains(input.imageKeys, key) })
+	return arrived || !slices.Equal(input.imageKeys, keys), arrived, nil
 }
 
-func (w *TextWorker) supersedeForImage(ctx context.Context, tx pgx.Tx, r runSnapshot) error {
+func (w *TextWorker) supersedeForImage(ctx context.Context, tx pgx.Tx, r runSnapshot, arrived bool) error {
 	if err := setRunState(ctx, tx, r, "superseded", "input_changed"); err != nil {
 		return err
+	}
+	if !arrived {
+		return nil
 	}
 	return w.Organizer.EnqueueImage(ctx, tx, r.UID, r.CollectionID)
 }
@@ -532,12 +540,12 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 		}
 		return "", "attempts_exhausted", tx.Commit(ctx)
 	}
-	changedImages, err := w.imageInputChanged(ctx, tx, r, input)
+	changedImages, arrived, err := w.imageInputChanged(ctx, tx, r, input)
 	if err != nil {
 		return "", "", err
 	}
 	if changedImages {
-		if err = w.supersedeForImage(ctx, tx, r); err != nil {
+		if err = w.supersedeForImage(ctx, tx, r, arrived); err != nil {
 			return "", "", err
 		}
 		return "", "input_changed", tx.Commit(ctx)
@@ -565,7 +573,7 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 			return "", "", err
 		}
 	} else {
-		if _, err = tx.Exec(ctx, `UPDATE organization_runs SET project_snapshot=$3,image_extraction_ids=$4 WHERE user_id=$1 AND id=$2`, r.UID, r.ID, jsonBytes(input.Projects), input.imageIDs); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE organization_runs SET project_snapshot=$3,image_extraction_ids=$4 WHERE user_id=$1 AND id=$2`, r.UID, r.ID, jsonBytes(input.Projects), input.imageKeys); err != nil {
 			return "", "", err
 		}
 	}
@@ -601,12 +609,12 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		return false, err
 	}
 	if reason == "" && r.State == "running" {
-		changedImages, err := w.imageInputChanged(ctx, tx, r, input)
+		changedImages, arrived, err := w.imageInputChanged(ctx, tx, r, input)
 		if err != nil {
 			return false, err
 		}
 		if changedImages {
-			if err := w.supersedeForImage(ctx, tx, r); err != nil {
+			if err := w.supersedeForImage(ctx, tx, r, arrived); err != nil {
 				return false, err
 			}
 			return false, tx.Commit(ctx)

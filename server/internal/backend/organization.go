@@ -82,7 +82,8 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	if imageEvent && consent != textImageNotesConsentVersion {
 		return "", "", nil
 	}
-	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role)
+	archive := consent == textImageNotesConsentVersion
+	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role, archive)
 	if err != nil {
 		return "", "", err
 	}
@@ -106,12 +107,12 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", "", err
 	}
-	if canUseImages && !pendingImages && consent == textImageNotesConsentVersion {
-		sources, _, err := o.Images.sources(ctx, tx, uid, id)
+	if canUseImages && !pendingImages && archive {
+		sources, _, err := o.Images.sources(ctx, tx, uid, id, true)
 		if err != nil {
 			return "", "", err
 		}
-		ids := imageExtractionIDs(sources)
+		ids := imageMaterialKeys(sources)
 		if len(ids) > 0 {
 			err = tx.QueryRow(ctx, `SELECT id FROM organization_runs
 				WHERE (user_id,collection_id,content_version,user_policy_version,collection_policy_version)=($1,$2,$3,$4,$5)
