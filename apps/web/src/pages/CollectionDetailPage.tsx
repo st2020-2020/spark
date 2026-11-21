@@ -231,12 +231,22 @@ export function CollectionDetailPage() {
     urlRetryContextRef.current = nextContext;
   }, [id, collection?.content_version, collection?.original_url, matchedUrlExtraction?.id]);
 
+  const readAdvance = useRef<{ from: number; to: number } | null>(null);
+  const resourceWriteScope = { id: `collection-state:${userId}:${id}` };
   const readMutation = useMutation({
-    scope: { id: `read:${userId}:${id}` },
-    mutationFn: ({ read }: { read: boolean; automatic?: boolean }) => api.setReadState(id, { read }),
+    scope: resourceWriteScope,
+    mutationFn: async ({ read }: { read: boolean; automatic?: boolean }) => {
+      const before = queryClient.getQueryData<Collection>(['collection', id]);
+      const updated = await api.setReadState(id, { read });
+      if (before && updated.resource_version === before.resource_version + 1 &&
+          Boolean(before.read_at) !== read) {
+        readAdvance.current = { from: before.resource_version, to: updated.resource_version };
+      }
+      return updated;
+    },
     onSuccess: updated => {
       queryClient.setQueryData<Collection>(['collection', id], previous =>
-        previous && { ...previous, read_at: updated.read_at });
+        previous && previous.resource_version <= updated.resource_version ? updated : previous);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
@@ -447,9 +457,11 @@ export function CollectionDetailPage() {
   });
 
   const trashMutation = useMutation({
-    mutationFn: () => {
-      if (!collection) throw new Error('收藏不存在');
-      return api.trashCollection(id, { base_resource_version: collection.resource_version });
+    scope: resourceWriteScope,
+    mutationFn: (visibleVersion: number) => {
+      const advance = readAdvance.current;
+      const version = advance?.from === visibleVersion ? advance.to : visibleVersion;
+      return api.trashCollection(id, { base_resource_version: version });
     },
     onSuccess: (trashed) => {
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
@@ -773,7 +785,7 @@ export function CollectionDetailPage() {
             <button
               type="button"
               className="sp-btn--quiet sp-btn--danger-text"
-              onClick={() => trashMutation.mutate()}
+              onClick={() => trashMutation.mutate(collection.resource_version)}
               disabled={trashMutation.isPending}
             >
               <Trash2 size={16} strokeWidth={2} aria-hidden="true" />

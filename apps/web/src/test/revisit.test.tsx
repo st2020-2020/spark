@@ -42,6 +42,31 @@ it.each([true, false])('preserves an explicit unread choice when initially read=
   expect((await api.getCollection(col.id)).read_at).toBeFalsy();
 });
 
+it.each([false, true])('orders trash after the entry read, preserving external conflicts=%s', async external => {
+  const api = await admin();
+  const ui = userEvent.setup();
+  const col = await api.createCollection({ id: crypto.randomUUID(), document: { schema_version: 1,
+    content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '合成资料' }] }] } },
+    intent: '', upload_ids: [], project_ids: [], tag_ids: [] }, 'trash-race');
+  const write = api.setReadState.bind(api);
+  let release = () => {};
+  const delay = new Promise<void>(resolve => { release = resolve; });
+  vi.spyOn(api, 'setReadState').mockImplementationOnce(async (id, body) => {
+    await delay;
+    const updated = await write(id, body);
+    if (external) await write(id, { read: false });
+    return updated;
+  });
+  const trash = vi.spyOn(api, 'trashCollection');
+  mount(api, `/collections/${col.id}`);
+  await ui.click(await screen.findByRole('button', { name: '移入回收站' }));
+  expect(trash).not.toHaveBeenCalled();
+  release();
+  await screen.findByText(external ? '收藏状态已变更，请刷新后重试' : '已移入回收站');
+  expect(trash).toHaveBeenCalledTimes(1);
+  expect(Boolean((await api.getCollection(col.id)).deleted_at)).toBe(!external);
+});
+
 it('uses server day boundaries even on a 25-hour day and clears the filter', async () => {
   const api = await admin();
   const selected = { date: '2026-11-01', count: 0, created_from: '2026-11-01T04:00:00Z', created_to: '2026-11-02T05:00:00Z' };
