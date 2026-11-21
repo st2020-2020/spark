@@ -72,8 +72,8 @@ func (w *imageWorker) loadImageJob(ctx context.Context, q querier, args imageAna
 		JOIN collections c ON (c.user_id,c.id)=(e.user_id,e.collection_id)
 		JOIN attachments a ON (a.user_id,a.collection_id,a.id)=(e.user_id,e.collection_id,e.attachment_id)
 		WHERE e.user_id=$1 AND e.collection_id=$3 AND e.id=$4 AND e.source_kind='image'
-		  AND e.extractor_version IN ($5,$7) AND e.image_user_policy_version IS NOT NULL`,
-		args.UserID, w.adminID, args.CollectionID, args.ExtractionID, imageExtractorVersion, imageConsentVersion, imageRecoveryExtractorVersion).
+		  AND e.extractor_version=ANY($5::text[]) AND e.image_user_policy_version IS NOT NULL`,
+		args.UserID, w.adminID, args.CollectionID, args.ExtractionID, imageExtractionVersions, imageConsentVersion).
 		Scan(&job.Status, &job.Key, &job.Version, &job.MIME, &job.Size, &job.SHA, &job.Eligible)
 	return job, err
 }

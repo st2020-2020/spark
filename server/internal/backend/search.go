@@ -161,7 +161,7 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 			        string_agg(e.evidence_meta->>'description',E'\n' ORDER BY a.position) AS description
 			 FROM attachments a JOIN current_image_extractions e ON (e.user_id,e.collection_id,e.attachment_id)=(a.user_id,a.collection_id,a.id)
 			 WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL AND c.deleted_at IS NULL
-			   AND e.extractor_version IN ('` + imageExtractorVersion + `','` + imageRecoveryExtractorVersion + `') AND e.status IN ('succeeded','partial')
+			   AND e.extractor_version IN ('` + imageExtractorVersion + `','` + legacyImageRecoveryExtractorVersion + `','` + imageRecoveryExtractorVersion + `') AND e.status IN ('succeeded','partial')
 			) images ON true `
 		for _, term := range terms {
 			args = append(args, term, tagKey(term))

@@ -254,7 +254,7 @@ func TestImageRecoveryDoesNotResendAfterUncertainDispatch(t *testing.T) {
 	key := uuid.NewString()
 	recovery := owner.do("POST", path, body, key).want(t, 202)
 	failed := waitForImageStatus(t, owner, old.id, "failed")
-	if failed["id"] != recovery["id"] || failed["error_code"] != "invalid_model_output" || failed["image_retry_available"] == true {
+	if failed["id"] != recovery["id"] || failed["error_code"] != "image_response_read_failed" || failed["image_retry_available"] == true {
 		t.Fatalf("interrupted dispatched response was presented as retryable: %v", failed)
 	}
 	for _, id := range []string{key, uuid.NewString()} {
