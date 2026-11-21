@@ -99,7 +99,7 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 ## 图片理解
 
-`GET /me/image-analysis` 返回账户的 `enabled`、部署的 `available` 与当前 `required_consent_version`。`PUT /me/image-analysis` 开启时须携带该版本，关闭时发送 `{"enabled":false}`。授权文案须明确说明会将此后新保存的确认图片的视觉副本发送给第三方 DeepSeek，用于识别图中文字并生成 AI 画面描述。副本应用方向并去除 EXIF、GPS 与注释，用户仍可下载原件。图片使用独立授权，并复用收藏的 AI 排除设置。
+`GET /me/image-analysis` 返回账户的 `enabled`、当前账号的 `available`（生产要求平台已启用、UUID 匹配且仍是管理员） 与当前 `required_consent_version`。`PUT /me/image-analysis` 开启时须携带该版本，没有资格的账号请求开启返回 403 `image_analysis_unavailable`。关闭时发送 `{"enabled":false}`，即使失去资格也可以撤回。授权文案须明确说明会将此后新保存的确认图片的视觉副本发送给第三方 DeepSeek，用于识别图中文字并生成 AI 画面描述。副本应用方向并去除 EXIF、GPS 与注释，用户仍可下载原件。图片使用独立授权，并复用收藏的 AI 排除设置。
 
 `GET /collections/{id}/extractions` 中 `source_kind=image` 的 `source_id` 是附件 ID，`text` 与 `image_description` 分别是图中文字和 AI 画面描述。服务截断时返回 `partial` 和 `truncated: true`，客户端可提示结果可能不完整。缺少可靠用量时保留待核对额度。账户或平台额度不足时作业为 `blocked`，`error_code=quota_exceeded`，原收藏已保存。结果随有效附件保留，编辑备注和重排复用结果。图片项的 content_version 为首次绑定版本，读取时按附件 ID 对应。移除附件或进入回收站后，提取接口和搜索均省略该结果。搜索片段分别标为 `image_text`、`image_description`。
 

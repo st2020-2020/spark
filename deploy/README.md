@@ -23,7 +23,7 @@
   - 未传对应标志时，`SPARK_OSS_ENABLED`、`SPARK_URL_EXTRACT_ENABLED`、`SPARK_IMAGE_ANALYSIS_ENABLED`、`SPARK_PURGE_ENABLED` 均不得为 `true`。启用对应能力时：
     - `--with-oss`：校验 `SPARK_OSS_ENABLED=true`、`config.json` 存在、平台凭证权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-oss.yaml` 并启停 `asset-worker`。
     - `--with-url-extract`：校验 `SPARK_URL_EXTRACT_ENABLED=true`，叠加 `compose.v0.3-url-extract.yaml` 并启停 `url-worker`（仅在审批出站规则后开启）。
-    - `--with-image-analysis`：必须同时传 `--with-oss`，校验 `SPARK_IMAGE_ANALYSIS_ENABLED=true` 与模型密钥权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-image-analysis.yaml` 并启停 `image-worker`。
+    - `--with-image-analysis`：必须同时传 `--with-oss`，校验 `SPARK_IMAGE_ANALYSIS_ENABLED=true`、单个管理员 UUID `SPARK_IMAGE_ANALYSIS_ADMIN_ID` 与模型密钥权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-image-analysis.yaml` 并启停 `image-worker`。
     - `--with-purge`：校验 `SPARK_PURGE_ENABLED=true` 与独立故障域的删除回执目录（`SPARK_DELETION_LEDGER_HOST_PATH`，默认 `/var/lib/spark-deletion-ledger`）存在且权限严格为 `0700`（UID `65532` 拥有），叠加 `compose.v0.3-purge.yaml`（若同时 `--with-oss` 则追加 `compose.v0.3-purge-oss.yaml`）并启停 `purge-worker`。
 
 ## 生产发布入口：`deploy/release-prod.sh`
