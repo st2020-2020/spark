@@ -61,11 +61,11 @@
 
 ### 3. 执行不可变发布与显式迁移
 
-从 v0.6.1 升级至 v0.6.2 需要显式迁移 schema v11 → v12。迁移更新图片提取视图，保留已有识别记录及账本。以下示例沿用生产已开启的文字 AI、腾讯云 SES、私有 OSS 和单管理员图片理解。预检也须传入同一组能力标志。
+从 v0.6.2 升级至 v0.6.3 需要显式迁移 schema v12 → v13。迁移更新图片提取与恢复资格视图，保留已有识别记录及账本。历史失败图片由用户在详情中按需恢复。以下示例沿用生产已开启的文字 AI、腾讯云 SES、私有 OSS 和单管理员图片理解。预检也须传入同一组能力标志。
 
 ```sh
 ./deploy/release-prod.sh deploy \
-  --tag v0.6.2 \
+  --tag v0.6.3 \
   --commit <40位发布提交SHA> \
   --host ubuntu@<server-ip> \
   --ssh-key ~/.ssh/id_ed25519 \
@@ -83,7 +83,7 @@
 
 1. **本地、远端预检与结构前置核对**：校验 40 位 SHA 及其对 `--trusted-ref`（默认 `origin/main`，`--mode ssh` 禁止覆盖）的可信祖先关系、Web 生产包无 `test-adapter`（可用 `--skip-web` 跳过 Web）、目标 `.env` 权限与各项启用能力对应的外部文件/账本目录、磁盘空间（≥ 1 GB）。若目标数据库版本低于构建版本（如 `v3 < v7`）但未传 `--migrate`，在修改目标前立即拒绝执行；同时拒绝隐式降级。
 2. **初始备份与按次不可变回退快照**：获取 `${DEPLOY_DIR}/.release.lock` 后，独占创建 `${DEPLOY_DIR}/backups/<release-id>`（防复用），备份现有 `/opt/spark/web`、全部 `deploy/compose*.yaml`、`server/`、绑定运行中 `api` 容器镜像 ID 并打标 `spark-api:rollback-<release-id>`，同时记录 `schema.version`、原 `api.overlays` 及 `worker`/`asset-worker`/`url-worker`/`image-worker`/`purge-worker` 的 `*.was_running`；在已运行的 PostgreSQL 上执行 `pg_dump -Fc` 并校验归档目录（传 `--verify-restore` 时在唯一临时库 `spark_restore_verify_<release_id>` 实测 `pg_restore`）。
-3. **构建与显式迁移切换**。将 `server/` 与全部 `deploy/compose*.yaml` 同步至当次独立的 `*.staging-<release-id>` 空目录并构建 `spark-api:prod`（含 `/spark-api`、`/spark`、`/spark-worker`）。停止全部运行中的 Worker。跨版本发布传入 `--migrate` 后，短暂停止旧 `api` 执行停写期 `pg_dump -Fc`，可选验证恢复，再运行 `tools migrate`。脚本从已审核提交的 `server/db/migrate.go` 读取目标版本，切换前后均核对 `schema_migrations` 的最大版本。v0.6.2 的目标版本为 12。
+3. **构建与显式迁移切换**。将 `server/` 与全部 `deploy/compose*.yaml` 同步至当次独立的 `*.staging-<release-id>` 空目录并构建 `spark-api:prod`（含 `/spark-api`、`/spark`、`/spark-worker`）。停止全部运行中的 Worker。跨版本发布传入 `--migrate` 后，短暂停止旧 `api` 执行停写期 `pg_dump -Fc`，可选验证恢复，再运行 `tools migrate`。脚本从已审核提交的 `server/db/migrate.go` 读取目标版本，切换前后均核对 `schema_migrations` 的最大版本。v0.6.3 的目标版本为 13。
 4. **有界健康检查、可选 Worker 启动与切换**：按生效的 Compose 叠加文件重建 `api` 并探测 `127.0.0.1:${API_PORT}/api/v1/health/{live,ready}`（默认上限 `--health-timeout 60` 秒）。按传入标志逐个启动对应 Worker 并检查 `healthy`，包括 `--with-mail` 选择的邮件 Worker。切换静态 Web 前保留上一版 `index.html` 引用的 `assets/*`，最后按 `--health-url` 复核公网就绪。
 5. **失败后的恢复**。同步、构建或同版本切换失败时，脚本从本次快照恢复 Web、服务端文件、容器镜像和仍获授权的 Worker。自动回退出现能力差异时逐项报告，发布命令保留原失败退出码。跨版本迁移开始后，只有目标端确认迁移流程在启动服务前失败，且该 Compose 项目仅有 PostgreSQL 在运行，才允许自动还原静默期转储。若目标端的迁移结果未确认，或新 API、Worker 已可能写入，脚本以状态码 `2` 退出，保留活库、独立删除回执和 `spark.dump`。先核对服务和反向代理，优先修复后继续部署。需要还原数据时按下一节处置。
 
