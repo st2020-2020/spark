@@ -2,12 +2,14 @@ package db
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river/rivermigrate"
 	"spark/server/internal/store"
@@ -155,5 +157,53 @@ func TestUpgradePreservesExtractionSourceIdentity(t *testing.T) {
 	}
 	if inserted, err := q.EnsureCurrentExtraction(ctx, args); err != nil || inserted != 0 {
 		t.Fatalf("existing raw URL was not deduplicated after upgrade: %d, %v", inserted, err)
+	}
+}
+
+func TestUpgradeAddsRevisitWithoutChangingOldCollections(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:8] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,8)`)
+	owner, other, id := uuid.New(), uuid.New(), uuid.New()
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash)
+		VALUES($1,'revisit-owner@example.test','synthetic'),($2,'revisit-other@example.test','synthetic')`, owner, other)
+	execTestSQL(t, pool, `INSERT INTO collections(id,user_id,document,plain_text,intent,read_at,created_at)
+		VALUES($1,$2,'{}','原内容','原用途','2026-06-02 UTC','2026-06-01 UTC')`, id, owner)
+
+	for range 2 {
+		if err := Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var preserved bool
+	if err := pool.QueryRow(ctx, `SELECT c.last_opened_at IS NULL AND c.read_at='2026-06-02 UTC'
+			AND c.created_at='2026-06-01 UTC' AND c.plain_text='原内容' AND c.intent='原用途' AND u.resurface_enabled
+		FROM collections c JOIN users u ON u.id=c.user_id WHERE c.id=$1`, id).Scan(&preserved); err != nil || !preserved {
+		t.Fatalf("v8 upgrade did not preserve the collection or the new defaults: %v", err)
+	}
+
+	execTestSQL(t, pool, `INSERT INTO resurface_days(user_id,local_date) VALUES($1,'2026-11-20'),($2,'2026-11-20')`, owner, other)
+	_, err := pool.Exec(ctx, `INSERT INTO resurface_items(user_id,local_date,collection_id,position,reason)
+		VALUES($1,'2026-11-20',$2,1,'anniversary')`, other, id)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+		t.Fatalf("cross-account collection reference was not rejected: %v", err)
+	}
+	execTestSQL(t, pool, `INSERT INTO resurface_items(user_id,local_date,collection_id,position,reason)
+		VALUES($1,'2026-11-20',$2,1,'anniversary')`, owner, id)
+	execTestSQL(t, pool, `DELETE FROM collections WHERE id=$1`, id)
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT FROM resurface_days WHERE user_id=$1)
+		AND NOT EXISTS(SELECT FROM resurface_items WHERE user_id=$1)`, owner).Scan(&preserved); err != nil || !preserved {
+		t.Fatalf("permanent deletion should remove the card and retain the daily selection marker: %v", err)
 	}
 }

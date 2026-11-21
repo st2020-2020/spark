@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -120,11 +121,17 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 			where = append(where, "c.read_at IS NULL")
 		}
 	}
-	if from := c.Query("created_from"); from != "" {
-		add("c.created_at >= $%d::timestamptz", from)
+	from, to := c.Query("created_from"), c.Query("created_to")
+	fromTime, _ := time.Parse(time.RFC3339Nano, from) // validateQuery has validated the supplied bounds.
+	toTime, _ := time.Parse(time.RFC3339Nano, to)
+	if from != "" && to != "" && fromTime.After(toTime) {
+		return nil, nil, problem(400, "invalid_request", "创建时间起点不得晚于终点。")
 	}
-	if to := c.Query("created_to"); to != "" {
-		add("c.created_at < $%d::timestamptz", to)
+	if from != "" {
+		add("c.created_at >= $%d::timestamptz", roundUpToMicrosecond(fromTime))
+	}
+	if to != "" {
+		add("c.created_at < $%d::timestamptz", roundUpToMicrosecond(toTime))
 	}
 
 	title := `COALESCE(NULLIF(c.manual_title,''),(SELECT NULLIF(generated_title,'') FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),NULLIF(c.plain_text,''),c.original_url)`
@@ -192,4 +199,14 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 		next = &v
 	}
 	return items, next, nil
+}
+
+// PostgreSQL stores timestamps at microsecond precision. Rounding both
+// bounds up preserves inclusive lower and exclusive upper comparisons.
+func roundUpToMicrosecond(instant time.Time) time.Time {
+	truncated := instant.Truncate(time.Microsecond)
+	if truncated.Before(instant) {
+		return truncated.Add(time.Microsecond)
+	}
+	return truncated
 }

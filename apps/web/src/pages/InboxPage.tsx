@@ -4,6 +4,9 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, SlidersHorizontal, Sparkles } from 'lucide-react';
 import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
+import { Resurface } from '../components/Resurface';
+import { useAuth } from '../context/AuthContext';
+import { useActivity, useLocalCalendar, validDate } from '../lib/revisit';
 import { CollectionComposer } from '../components/CollectionComposer';
 import { PageHeader } from '../components/PageHeader';
 import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner';
@@ -23,12 +26,27 @@ export function InboxPage() {
   const typeFilter = (searchParams.get('type') as CollectionType | null) ?? undefined;
   const shouldFocusComposer = searchParams.get('focus') === 'composer';
 
+  const { user } = useAuth();
+  const { today, tz } = useLocalCalendar();
+  const requestedDate = searchParams.get('date');
+  const date = validDate(requestedDate) ? requestedDate : null;
+  const dateLabel = date ? new Intl.DateTimeFormat('zh-CN', {
+    year: date.slice(0, 4) === today.slice(0, 4) ? undefined : 'numeric',
+    month: 'long', day: 'numeric', timeZone: 'UTC',
+  }).format(new Date(date + 'T00:00:00Z')) : '';
+  const activity = useActivity((date ?? today).slice(0, 7), tz, !!date);
+  const day = activity.data?.days.find(d => d.date === date);
+  const hasInterval = !!day && Date.parse(day.created_from) < Date.parse(day.created_to);
+
   const collectionsQuery = useInfiniteQuery({
-    queryKey: ['collections', 'inbox', { unreadOnly, typeFilter }],
+    queryKey: ['collections', 'inbox', user?.id, { unreadOnly, typeFilter, date, from: day?.created_from, to: day?.created_to }],
+    enabled: !date || hasInterval,
     queryFn: ({ pageParam, signal }) =>
       api.listCollections(
         {
           scope: 'active',
+          created_from: day?.created_from,
+          created_to: day?.created_to,
           read: unreadOnly ? false : undefined,
           type: typeFilter,
           cursor: pageParam,
@@ -54,9 +72,10 @@ export function InboxPage() {
   const dayGroups = useMemo(() => groupByDay(items, (c) => c.created_at), [items]);
   const headerLine = `${greeting()}，${todayLine()}`;
 
-  const updateFilter = (next: { unreadOnly?: boolean; type?: CollectionType | '' }) => {
+  const updateFilter = (next: { unreadOnly?: boolean; type?: CollectionType | ''; clearDate?: boolean }) => {
     const params = new URLSearchParams(searchParams);
     params.delete('focus');
+    if (next.clearDate) params.delete('date');
     if (next.unreadOnly !== undefined) {
       if (next.unreadOnly) params.set('read', 'false');
       else params.delete('read');
@@ -70,10 +89,15 @@ export function InboxPage() {
 
   return (
     <div>
-      <PageHeader title="收件箱" subtitle={headerLine} />
+      <PageHeader title="收件箱" subtitle={headerLine}
+        badge={date && <button type="button" className="sp-btn sp-btn--sm" aria-label={`清除日期筛选，${dateLabel}`}
+          onClick={() => updateFilter({ clearDate: true })}>
+          {dateLabel} ×
+        </button>} />
 
       <CollectionComposer autoFocus={shouldFocusComposer} />
 
+      {!date && <Resurface key={user?.id} />}
       <PendingSuggestionsBanner />
 
       <div className="sp-filter-bar">
@@ -143,7 +167,8 @@ export function InboxPage() {
         </div>
       )}
 
-      {collectionsQuery.isLoading && <LoadingState message="正在加载收件箱…" />}
+      {date && activity.isError && <ErrorBanner error={activity.error} onRetry={() => void activity.refetch()} />}
+      {(collectionsQuery.isLoading || (!!date && activity.isPending)) && <LoadingState message="正在加载收件箱…" />}
       {collectionsQuery.isError && (
         <ErrorBanner
           error={collectionsQuery.error}
@@ -152,16 +177,16 @@ export function InboxPage() {
       )}
       {!collectionsQuery.isLoading &&
         !collectionsQuery.isError &&
-        items.length === 0 &&
-        (unreadOnly || typeFilter ? (
+        (!date || activity.isSuccess) && items.length === 0 &&
+        (date || unreadOnly || typeFilter ? (
           <EmptyState
-            title="当前筛选下没有收藏"
+            title={date ? '这一天没有符合条件的收藏' : '当前筛选下没有收藏'}
             description="可以切换回全部，或先在上方记下新的内容。"
             action={
               <button
                 type="button"
                 className="sp-btn"
-                onClick={() => updateFilter({ unreadOnly: false, type: '' })}
+                onClick={() => updateFilter({ unreadOnly: false, type: '', clearDate: true })}
               >
                 清除筛选
               </button>
@@ -179,7 +204,7 @@ export function InboxPage() {
         {dayGroups.map((group) => (
           <section key={group.stamp.key} className="sp-day">
             <h2
-              className={`sp-day-stamp ${group.stamp.relative === '今天' ? 'sp-day-stamp--today' : ''}`}
+              className={`sp-day-stamp ${date || group.stamp.relative === '今天' ? 'sp-day-stamp--today' : ''}`}
               aria-label={group.stamp.label}
             >
               <span className="sp-day-top" aria-hidden="true">

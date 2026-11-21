@@ -157,6 +157,84 @@ export interface paths {
         patch: operations["updatePreferences"];
         trace?: never;
     };
+    "/me/activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 按当地日期统计当前账号收藏
+         * @description 范围为 1 至 31 个自然日。只统计未删除的收藏，包含零条日期。
+         */
+        get: operations["getActivity"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/resurface": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 读取今日重现
+         * @description 同账号同当地日期最多选取三条。关闭、无候选或全部隐藏时 items 为空。
+         */
+        get: operations["getResurface"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/resurface/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取今日重现偏好 */
+        get: operations["getResurfacePreferences"];
+        /** 设置今日重现偏好 */
+        put: operations["setResurfacePreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/me/resurface/{id}/hidden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * 当天隐藏一张重现卡片
+         * @description 同日重复提交幂等，日期已经切换时返回 409。
+         */
+        put: operations["hideResurfaceItem"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me/image-analysis": {
         parameters: {
             query?: never;
@@ -468,6 +546,26 @@ export interface paths {
         /** 设置阅读状态 */
         put: operations["setReadState"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/collections/{id}/opened": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 记录一次主动详情查看
+         * @description 仅用于用户主动打开有效收藏。回收站收藏返回 409。预取、后台刷新、SSE 补读及普通详情读取不调用。
+         */
+        post: operations["recordCollectionOpened"];
         delete?: never;
         options?: never;
         head?: never;
@@ -999,6 +1097,38 @@ export interface components {
         Preferences: {
             ai_enabled: boolean;
             consent_version?: string;
+        };
+        ActivityDay: {
+            /** Format: date */
+            date: string;
+            /** Format: int64 */
+            count: number;
+            /** Format: date-time */
+            created_from: string;
+            /** Format: date-time */
+            created_to: string;
+        };
+        ActivityResult: {
+            /** Format: date */
+            from: string;
+            /** Format: date */
+            to: string;
+            tz: string;
+            days: components["schemas"]["ActivityDay"][];
+        };
+        ResurfacePreferences: {
+            enabled: boolean;
+        };
+        /** @enum {string} */
+        ResurfaceReason: "unclassified" | "inactive_project" | "anniversary";
+        ResurfaceItem: {
+            collection: components["schemas"]["CollectionSummary"];
+            reason: components["schemas"]["ResurfaceReason"];
+        };
+        ResurfaceResult: {
+            /** Format: date */
+            date: string;
+            items: components["schemas"]["ResurfaceItem"][];
         };
         ProjectCreate: {
             name: string;
@@ -1760,6 +1890,174 @@ export interface operations {
             };
         };
     };
+    getActivity: {
+        parameters: {
+            query: {
+                /** @description 起始当地日期，包含。 */
+                from: string;
+                /** @description 结束当地日期，不包含。 */
+                to: string;
+                /** @description 浏览器 IANA 时区，例如 Asia/Shanghai 或 America/New_York。 */
+                tz: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActivityResult"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getResurface: {
+        parameters: {
+            query: {
+                /** @description 浏览器 IANA 时区，例如 Asia/Shanghai 或 America/New_York。 */
+                tz: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResurfaceResult"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getResurfacePreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResurfacePreferences"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    setResurfacePreferences: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResurfacePreferences"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ResurfacePreferences"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    hideResurfaceItem: {
+        parameters: {
+            query: {
+                /** @description GET /me/resurface 返回的 date。 */
+                date: string;
+                /** @description 浏览器 IANA 时区，例如 Asia/Shanghai 或 America/New_York。 */
+                tz: string;
+            };
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
     getImageAnalysisPreferences: {
         parameters: {
             query?: never;
@@ -2374,7 +2672,9 @@ export interface operations {
                 type?: "text" | "url" | "image";
                 read?: boolean;
                 scope?: "active" | "trash" | "unclassified";
+                /** @description 收藏创建时间下界（包含，RFC3339）。日历日期可直接使用对应 ActivityDay.created_from。 */
                 created_from?: string;
+                /** @description 收藏创建时间上界（不包含，RFC3339）。日历日期可直接使用对应 ActivityDay.created_to。 */
                 created_to?: string;
                 /** @description 按当前有效待确认建议过滤。建议须来自当前正文版本，且项目仍活动、版本匹配。传入时响应包含 total。 */
                 has_suggestion?: boolean;
@@ -2677,6 +2977,37 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["Collection"];
                 };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    recordCollectionOpened: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
             default: {
@@ -3060,7 +3391,9 @@ export interface operations {
                 type?: "text" | "url" | "image";
                 read?: boolean;
                 scope?: "active" | "trash" | "unclassified";
+                /** @description 收藏创建时间下界（包含，RFC3339）。日历日期可直接使用对应 ActivityDay.created_from。 */
                 created_from?: string;
+                /** @description 收藏创建时间上界（不包含，RFC3339）。日历日期可直接使用对应 ActivityDay.created_to。 */
                 created_to?: string;
                 q: string;
             };

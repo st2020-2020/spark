@@ -120,6 +120,13 @@ export function CollectionDetailPage() {
     enabled: Boolean(id),
   });
 
+  const hasCollection = !!collectionQuery.data;
+  useEffect(() => {
+    if (hasCollection && location.hash === '#projects') {
+      document.getElementById('collection-projects')?.focus();
+    }
+  }, [hasCollection, id, location.key, location.hash]);
+
   const purgeStatusQuery = useQuery({
     queryKey: ['collection-purge', id],
     queryFn: () => api.getCollectionPurgeStatus(id),
@@ -1075,7 +1082,7 @@ export function CollectionDetailPage() {
         {/* Project associations */}
         <section className="sp-section">
           <div className="sp-section-head">
-            <h2 className="sp-section-title">关联项目</h2>
+            <h2 id="collection-projects" tabIndex={-1} className="sp-section-title">关联项目</h2>
             <span className="sp-section-note">决定版本 v{collection.decision_version}</span>
           </div>
 

@@ -18,6 +18,10 @@ import type {
   ExtractionList,
   FailureList,
   Health,
+  ActivityQuery,
+  ActivityResult,
+  ResurfaceResult,
+  ResurfacePreferences,
   ImageAnalysisPreferences,
   ImageAnalysisPreferencesUpdate,
   InviteBatch,
@@ -85,6 +89,12 @@ export interface SparkApi {
   resetPassword(body: PasswordReset): Promise<void>;
   logout(): Promise<void>;
   currentSession(): Promise<SessionResult>;
+  getActivity(query: ActivityQuery, signal?: AbortSignal): Promise<ActivityResult>;
+  getResurface(tz: string, signal?: AbortSignal): Promise<ResurfaceResult>;
+  getResurfacePreferences(signal?: AbortSignal): Promise<ResurfacePreferences>;
+  setResurfacePreferences(body: ResurfacePreferences): Promise<ResurfacePreferences>;
+  hideResurfaceItem(id: string, date: string, tz: string): Promise<void>;
+  recordCollectionOpened(id: string): Promise<void>;
   updatePreferences(body: Preferences): Promise<User>;
   getImageAnalysisPreferences(): Promise<ImageAnalysisPreferences>;
   setImageAnalysisPreferences(
@@ -371,6 +381,12 @@ export function createRealApiClient(): SparkApi {
       return session;
     },
 
+    getActivity: (query, signal) => request<ActivityResult>('GET', `/me/activity${buildQuery(query)}`, { signal }),
+    getResurface: (tz, signal) => request<ResurfaceResult>('GET', `/me/resurface${buildQuery({ tz })}`, { signal }),
+    getResurfacePreferences: (signal) => request<ResurfacePreferences>('GET', '/me/resurface/preferences', { signal }),
+    setResurfacePreferences: (body) => request<ResurfacePreferences>('PUT', '/me/resurface/preferences', { body, requiresCsrf: true }),
+    hideResurfaceItem: (id, date, tz) => request<void>('PUT', `/me/resurface/${encodeURIComponent(id)}/hidden${buildQuery({ date, tz })}`, { requiresCsrf: true }),
+    recordCollectionOpened: (id) => request<void>('POST', `/collections/${encodeURIComponent(id)}/opened`, { requiresCsrf: true }),
     updatePreferences: (body) =>
       request<User>('PATCH', '/me/preferences', { body, requiresCsrf: true }),
     getImageAnalysisPreferences: () =>

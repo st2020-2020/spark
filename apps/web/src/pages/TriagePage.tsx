@@ -1,3 +1,4 @@
+import { CollectionLink } from '../components/CollectionLink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -1352,13 +1353,13 @@ export function TriagePage() {
               )}
 
               <div className="sp-triage-card-footer">
-                <Link
-                  to={`/collections/${currentSummary.id}`}
+                <CollectionLink
+                  id={currentSummary.id}
                   className="sp-btn--quiet sp-btn--sm"
                 >
                   <span>查看详情</span>
                   <ArrowRight size={14} strokeWidth={2} aria-hidden="true" />
-                </Link>
+                </CollectionLink>
               </div>
             </article>
           </div>

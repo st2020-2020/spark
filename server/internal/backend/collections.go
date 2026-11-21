@@ -52,10 +52,10 @@ const collectionJSON = `to_jsonb(c)||jsonb_build_object(
 
 const collectionSelect = `SELECT ` + collectionJSON + ` FROM collections c `
 
-func scanCollection(row pgx.Row) (collectionRow, error) {
+func scanCollection(row pgx.Row, extraColumns ...any) (collectionRow, error) {
 	var b []byte
 	var out collectionRow
-	if err := row.Scan(&b); err != nil {
+	if err := row.Scan(append([]any{&b}, extraColumns...)...); err != nil {
 		return out, err
 	}
 	if err := json.Unmarshal(b, &out); err != nil {

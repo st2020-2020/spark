@@ -1,5 +1,5 @@
+import { CollectionLink } from '../components/CollectionLink';
 import { useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   useInfiniteQuery,
   useMutation,
@@ -291,9 +291,9 @@ export function TrashPage() {
 
               {showTitle && (
                 <h3 className="sp-note-title">
-                  <Link to={`/collections/${col.id}`} state={{ from: '/trash' }}>
+                  <CollectionLink id={col.id} state={{ from: '/trash' }}>
                     {col.display_title}
-                  </Link>
+                  </CollectionLink>
                 </h3>
               )}
 
@@ -312,9 +312,9 @@ export function TrashPage() {
               )}
 
               <div className="sp-note-footer">
-                <Link to={`/collections/${col.id}`} state={{ from: '/trash' }} className="sp-help">
+                <CollectionLink id={col.id} state={{ from: '/trash' }} className="sp-help">
                   查看详情
-                </Link>
+                </CollectionLink>
                 <div className="sp-row sp-note-footer-action">
                   <button
                     type="button"

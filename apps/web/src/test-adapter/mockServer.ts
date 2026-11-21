@@ -1,3 +1,4 @@
+import { mockActivity } from './activity';
 import { ApiError } from '../api/errors';
 import type { OrganizationEventsHandlers, SparkApi } from '../api/client';
 import type {
@@ -14,6 +15,7 @@ import type {
   OrganizationEvent,
   Project,
   ProjectAssociation,
+  ResurfaceResult,
   Revision,
   SearchHit,
   Session,
@@ -160,6 +162,9 @@ export function createTestAdapter(): TestAdapter {
   let uploads: Map<string, StoredUpload> = new Map();
   let attachments: Map<string, StoredAttachmentMeta> = new Map();
   let collections: StoredCollection[] = [];
+  const revisitEnabled = new Map<string, boolean>();
+  const openedAt = new Map<string, number>();
+  const dailyRevisit = new Map<string, Array<{ id: string; reason: ResurfaceResult['items'][number]['reason'] }>>();
   let purges: Map<string, { user_id: string; operation_id: string; status: Accepted['status'] }> =
     new Map();
   let idempotencyStore: Map<string, { digest: string; result: unknown }> = new Map();
@@ -263,6 +268,9 @@ export function createTestAdapter(): TestAdapter {
     uploads = new Map();
     attachments = new Map();
     collections = [];
+    revisitEnabled.clear();
+    openedAt.clear();
+    dailyRevisit.clear();
     purges = new Map();
     idempotencyStore = new Map();
     projectUndoStore = new Map();
@@ -1047,6 +1055,61 @@ export function createTestAdapter(): TestAdapter {
       };
     },
 
+    async getActivity(query) {
+      const user = requireUser();
+      return mockActivity(query, collections.filter(c => c.user_id === user.id && !c.deleted_at).map(c => c.created_at));
+    },
+    async recordCollectionOpened(id) {
+      const user = requireUser(true);
+      const c = collections.find(c => c.id === id && c.user_id === user.id);
+      if (!c) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (c.deleted_at) throw new ApiError({ status: 409, code: 'collection_in_trash', message: '收藏位于回收站' });
+      openedAt.set(id, Date.now());
+    },
+    async getResurfacePreferences() {
+      return { enabled: revisitEnabled.get(requireUser().id) ?? true };
+    },
+    async setResurfacePreferences({ enabled }) {
+      revisitEnabled.set(requireUser(true).id, enabled);
+      return { enabled };
+    },
+    async getResurface(tz) {
+      const user = requireUser();
+      const format = new Intl.DateTimeFormat('sv-SE', { timeZone: tz });
+      const now = Date.now();
+      const date = format.format(now);
+      if (revisitEnabled.get(user.id) === false) return { date, items: [] };
+      const key = `${user.id}/${date}`;
+      const visible = collections.filter(c => c.user_id === user.id && !c.deleted_at);
+      if (!dailyRevisit.has(key)) {
+        const reasons = ['unclassified', 'inactive_project', 'anniversary'] as const;
+        const candidates = visible.map(c => {
+          const created = Date.parse(c.created_at);
+          const assigned = c.projects.filter(p => ['manual', 'auto', 'confirmed'].includes(p.decision));
+          const active = assigned.some(p => projects.some(project => project.id === p.project_id && project.state === 'active'));
+          const createdDate = format.format(created);
+          let rank = 3;
+          if (!assigned.length && now - created >= 7 * 86_400_000) rank = 0;
+          else if (active && now - (openedAt.get(c.id) ?? created) >= 30 * 86_400_000) rank = 1;
+          else if (createdDate < date && createdDate.slice(5) === date.slice(5)) rank = 2;
+          return { id: c.id, rank };
+        }).filter(c => c.rank < 3).sort((a, b) => a.rank - b.rank);
+        dailyRevisit.set(key, candidates.slice(0, 3).map(c => ({ id: c.id, reason: reasons[c.rank] })));
+      }
+      const items = (dailyRevisit.get(key) ?? []).flatMap(({ id, reason }) => {
+        const c = visible.find(item => item.id === id);
+        return c ? [{ collection: toSummary(c), reason }] : [];
+      });
+      return { date, items };
+    },
+    async hideResurfaceItem(id, date, tz) {
+      const user = requireUser(true);
+      if (new Intl.DateTimeFormat('sv-SE', { timeZone: tz }).format(Date.now()) !== date) {
+        throw new ApiError({ status: 409, code: 'resource_conflict', message: '日期已更新' });
+      }
+      const key = `${user.id}/${date}`;
+      dailyRevisit.set(key, (dailyRevisit.get(key) ?? []).filter(item => item.id !== id));
+    },
     async updatePreferences(body) {
       const user = requireUser(true);
       user.ai_enabled = body.ai_enabled;
@@ -1601,6 +1664,8 @@ export function createTestAdapter(): TestAdapter {
               (t.decision === 'manual' || t.decision === 'confirmed' || t.decision === 'auto'),
           );
         })
+        .filter(c => !query?.created_from || Date.parse(c.created_at) >= Date.parse(query.created_from))
+        .filter(c => !query?.created_to || Date.parse(c.created_at) < Date.parse(query.created_to))
         .filter((c) => !query?.type || c.content_types.includes(query.type))
         .filter((c) => {
           if (query?.read === undefined) return true;
