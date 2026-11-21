@@ -394,6 +394,35 @@ describe('Platform AI organization & UI states', () => {
     expect(getOrgSpy).not.toHaveBeenCalled();
   }, 12000);
 
+  it('updates a project search hit from live events while preserving its snippet', async () => {
+    const api = createTestAdapter();
+    const ui = userEvent.setup();
+    await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const project = await api.createProject({ name: '项目资料', description: '', focus_points: [] }, 'project');
+    const col = await api.createCollection({ id: crypto.randomUUID(), intent: '', manual_title: '原始标题',
+      document: { schema_version: 1, content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '样本' }] }] } },
+      upload_ids: [], project_ids: [project.id], tag_ids: [] }, 'item');
+    const summary = (await api.listCollections({ project_id: project.id })).items[0];
+    const search = vi.spyOn(api, 'searchCollections').mockResolvedValue({ items: [
+      { collection: summary, snippets: [{ field: 'text', text: '保留这段摘录' }] },
+    ] });
+    renderApp([`/projects/${project.id}`], api);
+    await ui.type(await screen.findByLabelText('在当前项目内搜索'), '样本');
+    await screen.findByText('保留这段摘录');
+    const emit = (status: 'queued' | 'succeeded') => act(() => api.emitMockOrganizationEvent({
+      collection_id: col.id, status, has_suggestion: false,
+    }));
+    emit('queued');
+    await screen.findByText('整理排队中');
+    vi.spyOn(api, 'getCollection').mockResolvedValue({ ...col, display_title: '整理后的标题',
+      organization: { ...col.organization, status: 'succeeded' } });
+    emit('succeeded');
+    await screen.findByRole('article', { name: '整理后的标题' });
+    expect(screen.queryByText('整理排队中')).toBeNull();
+    expect(screen.getByText('保留这段摘录')).toBeVisible();
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
   it.each(['confirm', 'ignore in another tab', 'ignore after reconnect'])('synchronizes a mounted empty suggestions tab through %s', async mode => {
     const ui = userEvent.setup();
     const api = createTestAdapter();

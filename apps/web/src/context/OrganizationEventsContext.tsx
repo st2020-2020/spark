@@ -8,7 +8,7 @@ import {
 } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { type InfiniteData, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import type { CollectionPage, CollectionSummary, OrganizationEvent } from '../api/types';
+import type { CollectionPage, CollectionSummary, OrganizationEvent, SearchHit } from '../api/types';
 import { useRecordOpened } from '../components/CollectionLink';
 import { isOrganizationActiveStatus, pendingSuggestionKey, pendingSuggestionOptions } from '../lib/organization';
 import { useApi } from './ApiContext';
@@ -27,20 +27,28 @@ const OrganizationEventsContext = createContext<OrganizationEventsContextValue |
 
 const MAX_NOTIFIED_HISTORY = 200;
 
+type ListRow = CollectionSummary | SearchHit;
+type ListData = InfiniteData<{ items: ListRow[]; next_cursor?: string }>;
+const listCaches = { predicate: ({ queryKey }: { queryKey: readonly unknown[] }) =>
+  queryKey[0] === 'collections' || queryKey[0] === 'project-collections' };
+function summaryOf(row: ListRow) {
+  return 'collection' in row ? row.collection : row;
+}
+
 function patchInfiniteCollectionItem(
-  data: InfiniteData<CollectionPage> | undefined,
+  data: ListData | undefined,
   collectionId: string,
   updater: (item: CollectionSummary) => CollectionSummary,
-): InfiniteData<CollectionPage> | undefined {
-  if (!data) return data;
+): ListData | undefined {
+  if (!data || !('pages' in data)) return data;
   let changed = false;
   const pages = data.pages.map((page) => {
     let pageChanged = false;
     const items = page.items.map((item) => {
-      if (item.id !== collectionId) return item;
+      if (summaryOf(item).id !== collectionId) return item;
       pageChanged = true;
       changed = true;
-      return updater(item);
+      return 'collection' in item ? { ...item, collection: updater(item.collection) } : updater(item);
     });
     return pageChanged ? { ...page, items } : page;
   });
@@ -105,28 +113,10 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
 
   const applyEventStatusToCaches = useCallback(
     (event: OrganizationEvent) => {
-      queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-        { queryKey: ['collections'] },
-        (old) => {
-          if (!old || !('pages' in old)) return old;
-          return patchInfiniteCollectionItem(old, event.collection_id, (item) => ({
-            ...item,
-            organization_status: event.status,
-            has_suggestion: event.has_suggestion,
-          }));
-        },
-      );
-
-      queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-        { queryKey: ['project-collections'] },
-        (old) => {
-          if (!old || !('pages' in old)) return old;
-          return patchInfiniteCollectionItem(old, event.collection_id, (item) => ({
-            ...item,
-            organization_status: event.status,
-            has_suggestion: event.has_suggestion,
-          }));
-        },
+      queryClient.setQueriesData<ListData>(listCaches, old =>
+        patchInfiniteCollectionItem(old, event.collection_id, item => ({
+          ...item, organization_status: event.status, has_suggestion: event.has_suggestion,
+        })),
       );
     },
     [queryClient],
@@ -161,12 +151,12 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
       const hadDetailMounted =
         queryClient.getQueryState(['collection', event.collection_id]) !== undefined;
       const isInAnyLoadedList = queryClient
-        .getQueriesData<InfiniteData<CollectionPage>>({ queryKey: ['collections'] })
+        .getQueriesData<ListData>(listCaches)
         .some(([, data]) =>
           Boolean(
             data &&
               'pages' in data &&
-              data.pages.some((p) => p.items.some((i) => i.id === event.collection_id)),
+              data.pages.some((p) => p.items.some((i) => summaryOf(i).id === event.collection_id)),
           ),
         );
 
@@ -195,19 +185,8 @@ export function OrganizationEventsProvider({ children }: { children: ReactNode }
               updated_at: fresh.updated_at,
               resource_version: fresh.resource_version,
             });
-            queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-              { queryKey: ['collections'] },
-              (old) =>
-                old && 'pages' in old
-                  ? patchInfiniteCollectionItem(old, fresh.id, patchItem)
-                  : old,
-            );
-            queryClient.setQueriesData<InfiniteData<CollectionPage>>(
-              { queryKey: ['project-collections'] },
-              (old) =>
-                old && 'pages' in old
-                  ? patchInfiniteCollectionItem(old, fresh.id, patchItem)
-                  : old,
+            queryClient.setQueriesData<ListData>(listCaches, old =>
+              patchInfiniteCollectionItem(old, fresh.id, patchItem),
             );
           })
           .catch(() => {
