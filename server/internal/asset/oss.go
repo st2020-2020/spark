@@ -32,6 +32,7 @@ type Storage interface {
 	SignPut(context.Context, string, string, int64, time.Time) (Grant, error)
 	SignGet(context.Context, string, string) (Grant, error)
 	OpenFinal(context.Context, string, string, string, int64) (io.ReadCloser, string, error)
+	ReadFinal(context.Context, string, string, int64) (io.ReadCloser, error)
 	Delete(context.Context, string, string) error
 }
 
