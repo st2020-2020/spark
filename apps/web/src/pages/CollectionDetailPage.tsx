@@ -1,3 +1,4 @@
+import { MoreProjectChoices, useProjectChoices } from '../components/ProjectChoices';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -196,10 +197,7 @@ export function CollectionDetailPage() {
       (collectionQuery.data?.attachments.length ?? 0) > 0,
   });
 
-  const projectsQuery = useQuery({
-    queryKey: ['projects', 'all-for-select'],
-    queryFn: () => api.listProjects({ limit: 100 }),
-  });
+  const projectsQuery = useProjectChoices();
 
   const revisionsQuery = useQuery({
     queryKey: ['collection-revisions', id],
@@ -724,7 +722,7 @@ export function CollectionDetailPage() {
   if (!collection) return null;
 
   const isInTrash = Boolean(collection.deleted_at);
-  const allProjects = projectsQuery.data?.items ?? [];
+  const allProjects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
   const associatedProjectIds = new Set(collection.projects.map((p) => p.project_id));
   const availableProjects = allProjects.filter((p) => !associatedProjectIds.has(p.id));
   const orgDisplay = classifyOrganizationDisplay({
@@ -1305,6 +1303,7 @@ export function CollectionDetailPage() {
               </button>
             </div>
           )}
+          {!isInTrash && <MoreProjectChoices query={projectsQuery} />}
         </section>
 
         {/* AI organization status, controls and results */}

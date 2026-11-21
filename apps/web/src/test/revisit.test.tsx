@@ -67,6 +67,40 @@ it.each([false, true])('orders trash after the entry read, preserving external c
   expect(Boolean((await api.getCollection(col.id)).deleted_at)).toBe(!external);
 });
 
+it.each(['composer', 'filter', 'detail', 'unclassified'])('selects project 101 on demand in the %s', async entry => {
+  const api = await admin();
+  const ui = userEvent.setup();
+  const project = await api.createProject({ name: '第 101 项', description: '', focus_points: [] }, 'last');
+  for (let i = 0; i < 100; i++) {
+    await api.createProject({ name: `项目 ${i}`, description: '', focus_points: [] }, `p-${i}`);
+  }
+  const col = await api.createCollection({ id: crypto.randomUUID(), document: { schema_version: 1,
+    content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '待关联资料' }] }] } },
+    intent: '', upload_ids: [], project_ids: [], tag_ids: [] }, 'note');
+  const list = vi.spyOn(api, 'listProjects');
+  mount(api, entry === 'composer' ? '/inbox' : entry === 'filter' ? '/collections' :
+    entry === 'detail' ? `/collections/${col.id}` : '/unclassified');
+  if (entry === 'composer') await ui.click(await screen.findByRole('button', { name: '添加项目' }));
+  if (entry === 'filter') await ui.click(await screen.findByRole('button', { name: '筛选' }));
+  const more = await screen.findByRole('button', { name: '加载更多项目' });
+  expect(list.mock.calls.some(([q]) => q?.cursor)).toBe(false);
+  await ui.click(more);
+  if (entry === 'composer') {
+    const choice = await screen.findByRole('button', { name: project.name });
+    await ui.click(choice);
+    expect(choice).toHaveAttribute('aria-pressed', 'true');
+  } else {
+    const opt = await screen.findByRole('option', { name: project.name });
+    const select = opt.closest('select')!;
+    await ui.selectOptions(select, opt);
+    expect(select).toHaveValue(project.id);
+    if (entry !== 'filter') {
+      await ui.click(screen.getByRole('button', { name: entry === 'detail' ? '加入项目' : '确认关联' }));
+      await waitFor(async () => expect((await api.getCollection(col.id)).projects.some(p => p.project_id === project.id)).toBe(true));
+    }
+  }
+});
+
 it('uses server day boundaries even on a 25-hour day and clears the filter', async () => {
   const api = await admin();
   const selected = { date: '2026-11-01', count: 0, created_from: '2026-11-01T04:00:00Z', created_to: '2026-11-02T05:00:00Z' };

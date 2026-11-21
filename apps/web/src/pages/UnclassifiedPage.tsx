@@ -1,6 +1,7 @@
+import { MoreProjectChoices, useProjectChoices } from '../components/ProjectChoices';
 import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
 import type { CollectionSummary } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
@@ -31,10 +32,7 @@ export function UnclassifiedPage() {
     getNextPageParam: (last) => last.next_cursor,
   });
 
-  const projectsQuery = useQuery({
-    queryKey: ['projects', 'all-for-select'],
-    queryFn: () => api.listProjects({ limit: 100 }),
-  });
+  const projectsQuery = useProjectChoices();
 
   const decideMutation = useMutation({
     mutationFn: (params: {
@@ -74,7 +72,7 @@ export function UnclassifiedPage() {
   });
 
   const items = unclassifiedQuery.data?.pages.flatMap((p) => p.items) ?? [];
-  const projects = projectsQuery.data?.items ?? [];
+  const projects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
 
   const renderQuickClassify = (col: CollectionSummary) => {
     const suggested = col.projects.filter((p) => p.decision === 'suggested');
@@ -209,7 +207,8 @@ export function UnclassifiedPage() {
         </button>
       </div>
 
-      {projects.length === 0 && !projectsQuery.isLoading && (
+      <MoreProjectChoices query={projectsQuery} />
+      {projects.length === 0 && projectsQuery.isSuccess && (
         <div className="sp-banner sp-banner--info sp-spaced">
           <span>
             还没有项目，尚未归类的资料会暂时保留在这里。随时可以去{' '}

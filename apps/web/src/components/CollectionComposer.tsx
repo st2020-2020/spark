@@ -1,3 +1,4 @@
+import { MoreProjectChoices, useProjectChoices } from './ProjectChoices';
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -177,12 +178,9 @@ export function CollectionComposer({
     }
   }, [projectPickerOpen]);
 
-  const projectsQuery = useQuery({
-    queryKey: ['projects', 'all-for-select'],
-    queryFn: () => api.listProjects({ limit: 100 }),
-  });
+  const projectsQuery = useProjectChoices();
 
-  const allProjects = projectsQuery.data?.items ?? [];
+  const allProjects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase();
     if (!q) return allProjects;
@@ -518,7 +516,7 @@ export function CollectionComposer({
                     />
                     {filteredProjects.length === 0 ? (
                       <span className="sp-picker-empty">
-                        {allProjects.length === 0 ? '暂无项目，保存后可在待归类查看' : '没有匹配的项目'}
+                        {projectsQuery.isLoading ? '正在加载项目…' : projectsQuery.hasNextPage ? '已加载的项目中没有匹配项' : allProjects.length ? '没有匹配的项目' : '暂无项目'}
                       </span>
                     ) : (
                       <div className="sp-picker-list">
@@ -530,7 +528,10 @@ export function CollectionComposer({
                               type="button"
                               className="sp-menu-item"
                               aria-pressed={checked}
-                              onClick={() => toggleProject(proj.id)}
+                              onClick={() => {
+                                setNames(old => ({ ...old, [proj.id]: proj.name }));
+                                toggleProject(proj.id);
+                              }}
                             >
                               <Folder size={16} strokeWidth={2} aria-hidden="true" />
                               <span className="sp-truncate">{proj.name}</span>
@@ -547,6 +548,7 @@ export function CollectionComposer({
                         })}
                       </div>
                     )}
+                    <MoreProjectChoices query={projectsQuery} />
                   </div>
                 </div>
               )}
