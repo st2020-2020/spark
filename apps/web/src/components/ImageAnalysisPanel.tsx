@@ -33,6 +33,7 @@ function imageFailureNote(code?: string): string {
     case 'image_provider_interrupted': return '图片识别服务的生成中断，本次未取得完整结果。';
     case 'image_response_read_failed': return '读取图片识别服务的响应时出错。';
     case 'image_response_invalid': return '图片识别服务的响应格式无法解析。';
+    case 'image_provider_content_invalid': return '服务返回的识别内容格式有误，无法提取文字或画面描述。';
     case 'image_provider_choice_invalid': return '图片识别服务返回的结果结构无法使用。';
     case 'image_provider_finish_invalid': return '图片识别服务返回的结束状态无法确认。';
     case 'usage_uncertain': return '本次识别用量待核对，原图仍可查看。';

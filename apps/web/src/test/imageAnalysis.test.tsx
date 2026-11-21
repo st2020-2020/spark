@@ -402,6 +402,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     ['image_response_read_failed', '读取'],
     ['image_response_invalid', '响应格式'],
     ['image_provider_choice_invalid', '结果结构'],
+    ['image_provider_content_invalid', '识别内容格式有误'],
     ['image_provider_finish_invalid', '结束状态'],
     ['usage_uncertain', '用量待核对'],
     ['unknown_future_code', '原图'],
