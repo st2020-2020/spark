@@ -35,6 +35,27 @@ async function loginAsAdmin(user: ReturnType<typeof userEvent.setup>, adapter = 
 
 describe('Spark Web key flows', () => {
   it.each([
+    ['/inbox', '展开类型筛选', '内容类型'],
+    ['/collections', '筛选', '按类型筛选'],
+    ['/projects/:id', '', '筛选类型'],
+  ])('filters image collections from %s', async (path, toggle, label) => {
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const project = path.includes(':id')
+      ? await adapter.createProject({ name: '图片手记', description: '', focus_points: [] }, 'image-project')
+      : undefined;
+    const list = vi.spyOn(adapter, 'listCollections');
+    const user = userEvent.setup();
+    renderWithAdapter([project ? path.replace(':id', project.id) : path], adapter);
+    if (toggle) await user.click(await screen.findByRole('button', { name: toggle }));
+    const filter = await screen.findByRole('combobox', { name: label });
+    await user.selectOptions(filter, within(filter).getByRole('option', { name: '图片' }));
+    await waitFor(() => expect(list.mock.calls.some(([q]) =>
+      q?.type === 'image' && q.project_id === project?.id,
+    )).toBe(true));
+  });
+
+  it.each([
     ['Android WebView SparkAndroid/2', true],
     ['Android WebView SparkAndroid/20', false],
     ['Android Chrome Mobile', false],

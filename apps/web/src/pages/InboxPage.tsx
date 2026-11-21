@@ -1,3 +1,4 @@
+import { contentTypeLabels } from '../lib/format';
 import { useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
@@ -142,8 +143,9 @@ export function InboxPage() {
             onChange={(e) => updateFilter({ type: e.target.value as CollectionType | '' })}
           >
             <option value="">全部</option>
-            <option value="text">文字</option>
-            <option value="url">网址</option>
+            {Object.entries(contentTypeLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
           </select>
           {typeFilter && (
             <button

@@ -1,3 +1,4 @@
+import { contentTypeLabels } from '../lib/format';
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
@@ -164,8 +165,9 @@ export function CollectionsPage() {
             onChange={(e) => setFilterParam('type', e.target.value)}
           >
             <option value="">全部类型</option>
-            <option value="text">文字</option>
-            <option value="url">网址</option>
+            {Object.entries(contentTypeLabels).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
           </select>
 
           <select
@@ -201,7 +203,7 @@ export function CollectionsPage() {
           )}
           {typeFilter && (
             <span className="sp-pill sp-pill--green">
-              <span>类型：{typeFilter === 'text' ? '文字' : typeFilter === 'url' ? '网址' : '图片'}</span>
+              <span>类型：{contentTypeLabels[typeFilter] ?? typeFilter}</span>
               <button
                 type="button"
                 className="sp-chip-remove"

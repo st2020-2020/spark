@@ -1,3 +1,5 @@
+import type { CollectionType } from '../api/types';
+
 export function formatDateTime(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return iso;
@@ -76,14 +78,11 @@ export function projectStateLabel(state: string): string {
   return labels[state] ?? state;
 }
 
-export function contentTypeLabel(type: string): string {
-  const labels: Record<string, string> = {
-    text: '文字',
-    url: '网址',
-    image: '图片',
-  };
-  return labels[type] ?? type;
-}
+export const contentTypeLabels: Record<NonNullable<CollectionType>, string> = {
+  text: '文字',
+  url: '网址',
+  image: '图片',
+};
 
 export function searchFieldLabel(field: string): string {
   const labels: Record<string, string> = {
