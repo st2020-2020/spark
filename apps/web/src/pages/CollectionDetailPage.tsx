@@ -28,7 +28,7 @@ import type {
   SparkDocument,
 } from '../api/types';
 import { ApiError, getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
-import { AIConsentModal, SPARK_AI_CONSENT_VERSION } from '../components/AIConsentModal';
+import { AIConsentModal, allowsImageFiling } from '../components/AIConsentModal';
 import { AttachmentGallery } from '../components/AttachmentGallery';
 import {
   ImageAnalysisPanel,
@@ -738,7 +738,7 @@ export function CollectionDetailPage() {
     (ext.status === 'succeeded' || ext.status === 'partial') && !!(ext.text?.trim() || ext.image_description?.trim()));
   const imagePrefs = imageAnalysisQuery.data;
   const canUseImages = Boolean(imagePrefs?.available && imagePrefs.enabled);
-  const hasTextConsent = user?.ai_enabled && user.ai_consent_version === SPARK_AI_CONSENT_VERSION;
+  const hasTextConsent = user?.ai_enabled && allowsImageFiling(user.ai_consent_version);
   const offerImageConsent = !hasTextConsent && aiTrialEligible && aiPlatformEnabled && canUseImages;
   const orgPillClass =
     orgDisplay.pillTone === 'green'

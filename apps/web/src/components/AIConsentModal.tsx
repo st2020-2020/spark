@@ -5,7 +5,11 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Modal } from './Modal';
 
-export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-notes-v1';
+export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-notes-v2';
+
+export function allowsImageFiling(version?: string) {
+  return version === SPARK_AI_CONSENT_VERSION || version === 'spark-ai-image-notes-v1';
+}
 
 export function AIConsentModal({
   open,
