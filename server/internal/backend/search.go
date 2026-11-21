@@ -149,7 +149,7 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 	title := `COALESCE(NULLIF(c.manual_title,''),(SELECT NULLIF(generated_title,'') FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),NULLIF(c.plain_text,''),c.original_url)`
 	selectCollections := collectionSelect
 	if len(terms) > 0 {
-		selectCollections = `SELECT ` + collectionJSON + `||jsonb_build_object('url_search_text',page.source_text,'image_search_text',images.image_text,'image_search_description',images.description)
+		selectCollections = `SELECT ` + collectionJSON + `||jsonb_build_object('url_search_text',page.source_text,'image_search_text',images.image_text,'image_search_description',notes.description)
 			FROM collections c LEFT JOIN LATERAL (
 			 SELECT concat_ws(E'\n',e.source_title,e.evidence_meta->>'site_name',e.evidence_meta->>'summary',e.text) AS source_text
 			 FROM extractions e
@@ -157,16 +157,20 @@ func (s *Server) findCollections(c *gin.Context, q querier, terms []string, tota
 			   AND e.source_kind='url' AND e.extractor_version='` + urlExtractorVersion + `' AND e.status='succeeded'
 			   AND c.deleted_at IS NULL
 			) page ON true LEFT JOIN LATERAL (
-			 SELECT string_agg(e.text,E'\n' ORDER BY a.position) AS image_text,
-			        string_agg(e.evidence_meta->>'description',E'\n' ORDER BY a.position) AS description
+			 SELECT string_agg(e.text,E'\n' ORDER BY a.position) AS image_text
 			 FROM attachments a JOIN current_image_extractions e ON (e.user_id,e.collection_id,e.attachment_id)=(a.user_id,a.collection_id,a.id)
 			 WHERE (a.user_id,a.collection_id)=(c.user_id,c.id) AND a.removed_at IS NULL AND c.deleted_at IS NULL
 			   AND e.extractor_version IN ('` + imageExtractorVersion + `','` + legacyImageRecoveryExtractorVersion + `','` + imageRecoveryExtractorVersion + `') AND e.status IN ('succeeded','partial')
-			) images ON true `
+			) images ON true LEFT JOIN LATERAL (
+			 SELECT string_agg(n.text,E'\n' ORDER BY a.position) AS description
+			 FROM collection_image_notes n JOIN attachments a ON (a.user_id,a.collection_id,a.id)=(n.user_id,n.collection_id,n.attachment_id)
+			 WHERE (n.user_id,n.collection_id)=(c.user_id,c.id) AND n.state<>'removed'
+			   AND a.removed_at IS NULL AND c.deleted_at IS NULL
+			) notes ON true `
 		for _, term := range terms {
 			args = append(args, term, tagKey(term))
 			n := len(args) - 1
-			where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0 OR strpos(lower(page.source_text),$%d)>0 OR strpos(lower(images.image_text),$%d)>0 OR strpos(lower(images.description),$%d)>0
+			where = append(where, fmt.Sprintf(`(strpos(lower(%s),$%d)>0 OR strpos(lower(c.plain_text),$%d)>0 OR strpos(lower(c.intent),$%d)>0 OR strpos(lower(c.original_url),$%d)>0 OR strpos(lower(page.source_text),$%d)>0 OR strpos(lower(images.image_text),$%d)>0 OR strpos(lower(notes.description),$%d)>0
 				OR EXISTS(SELECT FROM collection_tags ct JOIN tags t ON (t.user_id,t.id)=(ct.user_id,ct.tag_id)
 					WHERE (ct.user_id,ct.collection_id)=(c.user_id,c.id) AND ct.decision<>'rejected'
 					  AND strpos(t.normalized_name,$%d)>0))`, title, n, n, n, n, n, n, n, n+1))
