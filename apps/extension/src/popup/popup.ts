@@ -65,6 +65,16 @@ export interface PopupControllerOptions {
   openUrl?: (url: string) => void;
 }
 
+interface CompletedReceipt {
+  account_id: string;
+  id: string;
+  replayed: boolean;
+  origin: string;
+  displayTitle: string;
+  originalUrl: string;
+  projectNames: string[];
+}
+
 export async function mountExtensionPopup(opts: PopupControllerOptions): Promise<void> {
   ensureTrustedStorageAccessLevel();
   const sendMessage = opts.sendMessage ?? sendToBackground;
@@ -101,7 +111,8 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
   let submitBusy = false;
   let submitError: string | null = null;
   let submitField: string | undefined;
-  let lastSavedReceipt: { id: string; replayed: boolean; origin: string } | null = null;
+  let completedReceipt: CompletedReceipt | null = null;
+  let pendingFocusId: string | null = null;
   let draftTimer: number | undefined;
 
   function hydrateFormFromState(next: ExtensionStateSnapshot): void {
@@ -205,6 +216,9 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
     const res = await sendMessage({ type: 'GET_STATE' });
     if (res.ok && 'state' in res && res.state) {
       snapshot = res.state;
+      if (!snapshot.session || (completedReceipt && completedReceipt.account_id !== snapshot.session.account_id)) {
+        completedReceipt = null;
+      }
       if (rehydrateForm) {
         hydrateFormFromState(snapshot);
       }
@@ -256,7 +270,7 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
 
   async function handleSubmit(): Promise<void> {
     const session = snapshot?.session;
-    if (!session || submitBusy) return;
+    if (!session || submitBusy || completedReceipt) return;
     if (draftTimer !== undefined) {
       window.clearTimeout(draftTimer);
     }
@@ -271,17 +285,34 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
     if (!validation.ok) {
       submitError = validation.message;
       submitField = validation.field;
+      pendingFocusId =
+        validation.field === 'original_url'
+          ? 'ext-url'
+          : validation.field === 'manual_title'
+            ? 'ext-title'
+            : validation.field === 'selected_text'
+              ? 'ext-text'
+              : validation.field === 'intent'
+                ? 'ext-intent'
+                : 'ext-submit-status';
       render();
       return;
     }
 
-    await persistDraftNow();
+    // Lock synchronously BEFORE awaiting draft flush so rapid double-clicks cannot dispatch twice.
     submitBusy = true;
     submitError = null;
     submitField = undefined;
-    lastSavedReceipt = null;
     hasSubmittedCurrent = true;
     render();
+
+    const savedTitle = validation.payload.manual_title || validation.payload.original_url;
+    const savedUrl = validation.payload.original_url;
+    const savedProjectNames = validation.payload.project_ids.map(
+      (pid) => projectNames[pid] ?? '已选项目',
+    );
+
+    await persistDraftNow();
 
     const res = await sendMessage({
       type: 'SUBMIT_COLLECTION',
@@ -294,14 +325,25 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
     submitBusy = false;
 
     if (res.ok && 'receipt' in res) {
-      lastSavedReceipt = { ...res.receipt, origin: session.origin };
-      manualTitle = '';
-      selectedText = '';
-      intent = '';
-      collectionId = generateUuid();
-      idempotencyKey = generateIdempotencyKey();
-      hasSubmittedCurrent = false;
-      await refreshAll(false);
+      if (snapshot?.session?.account_id !== session.account_id) {
+        render();
+        return;
+      }
+      completedReceipt = {
+        account_id: session.account_id,
+        id: res.receipt.id,
+        replayed: res.receipt.replayed,
+        origin: session.origin,
+        displayTitle: savedTitle,
+        originalUrl: savedUrl,
+        projectNames: savedProjectNames,
+      };
+      pendingFocusId = 'ext-view-saved-btn';
+      render();
+      if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+        window.scrollTo(0, 0);
+      }
+      void refreshAll(false);
       return;
     }
 
@@ -311,16 +353,19 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
         submitField = 'project_ids';
         void loadProjects(true);
       }
+      pendingFocusId = 'ext-submit-status';
       if (res.status === 401) {
         await refreshAll(false);
         return;
       }
       await refreshAll(false);
+      return;
     }
     render();
   }
 
   async function handleRetryPending(item: PendingSubmission, session: PublicSessionInfo): Promise<void> {
+    if (submitBusy || completedReceipt) return;
     submitBusy = true;
     submitError = null;
     render();
@@ -331,13 +376,34 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
     });
     submitBusy = false;
     if (res.ok && 'receipt' in res) {
-      lastSavedReceipt = { ...res.receipt, origin: session.origin };
-      await refreshAll(false);
+      if (snapshot?.session?.account_id !== session.account_id) {
+        render();
+        return;
+      }
+      completedReceipt = {
+        account_id: session.account_id,
+        id: res.receipt.id,
+        replayed: res.receipt.replayed,
+        origin: session.origin,
+        displayTitle: item.payload.manual_title || item.payload.original_url,
+        originalUrl: item.payload.original_url,
+        projectNames: item.payload.project_ids.map(
+          (pid) => item.project_names[pid] ?? projectNames[pid] ?? '已选项目',
+        ),
+      };
+      pendingFocusId = 'ext-view-saved-btn';
+      render();
+      if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+        window.scrollTo(0, 0);
+      }
+      void refreshAll(false);
       return;
     }
     if (!res.ok) {
       submitError = res.message;
+      pendingFocusId = 'ext-submit-status';
       await refreshAll(false);
+      return;
     }
     render();
   }
@@ -523,6 +589,7 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
           sessionBusy = false;
           if (res.ok) {
             sessionPanelOpen = false;
+            completedReceipt = null;
             await refreshAll(true);
           } else {
             sessionError = res.message;
@@ -612,6 +679,65 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
     return box;
   }
 
+  function renderCompletedView(receipt: CompletedReceipt): HTMLElement {
+    const card = el('section', 'sp-card sp-ext-completed');
+    card.setAttribute('aria-label', '保存完成回执');
+
+    const statusPill = el(
+      'span',
+      'sp-pill sp-pill--active',
+      receipt.replayed ? '已保存，无需重复提交' : '已保存到 Spark',
+    );
+    const head = el('div', 'sp-row-between');
+    const heading = el('h2', 'sp-title', receipt.displayTitle);
+    heading.tabIndex = -1;
+    head.append(statusPill);
+    card.append(head, heading, el('p', 'sp-help sp-ext-target-origin', receipt.originalUrl));
+
+    const filingNote = el('div', 'sp-banner sp-banner--success');
+    filingNote.setAttribute('role', 'status');
+    if (receipt.projectNames.length > 0 && !receipt.replayed) {
+      filingNote.append(
+        el('strong', '', `已归入所选项目：${receipt.projectNames.join('、')}`),
+        el('span', '', '如需调整项目或补充内容，可在收藏详情查看。'),
+      );
+    } else if (receipt.projectNames.length > 0) {
+      filingNote.append(
+        el('strong', '', `已保存所选项目：${receipt.projectNames.join('、')}`),
+        el('span', '', '在收藏详情查看当前归属与归类结果。'),
+      );
+    } else {
+      filingNote.append(
+        el('strong', '', '已保存到收件箱'),
+        el('span', '', '在收藏详情查看归类结果'),
+      );
+    }
+    card.append(filingNote);
+
+    const actions = el('div', 'sp-row');
+    const viewBtn = makeBtn('在 Spark 中查看', {
+      className: 'sp-btn sp-btn--primary',
+      onClick: () => openUrl(`${receipt.origin}/collections/${receipt.id}`),
+    });
+    viewBtn.id = 'ext-view-saved-btn';
+
+    const continueBtn = makeBtn('继续收集', {
+      className: 'sp-btn',
+      onClick: async () => {
+        completedReceipt = null;
+        submitError = null;
+        submitField = undefined;
+        pendingFocusId = 'ext-title';
+        await refreshAll(true);
+      },
+    });
+    continueBtn.id = 'ext-continue-collect-btn';
+
+    actions.append(viewBtn, continueBtn);
+    card.append(actions);
+    return card;
+  }
+
   function renderComposer(state: ExtensionStateSnapshot, session: PublicSessionInfo): HTMLElement {
     const container = el('div', 'sp-stack');
 
@@ -638,28 +764,19 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
       container.append(renderSessionPanel(session));
     }
 
-    for (const pending of state.pending_submissions) {
-      container.append(renderPendingBanner(pending, session));
+    if (completedReceipt) {
+      if (completedReceipt.account_id === session.account_id) {
+        container.append(renderCompletedView(completedReceipt));
+        for (const pending of state.pending_submissions) {
+          container.append(renderPendingBanner(pending, session));
+        }
+        return container;
+      }
+      completedReceipt = null;
     }
 
-    if (lastSavedReceipt) {
-      const okBox = el('div', 'sp-banner sp-banner--success');
-      okBox.setAttribute('role', 'status');
-      okBox.append(
-        el(
-          'span',
-          '',
-          lastSavedReceipt.replayed
-            ? '已保存到 Spark（幂等重放命中，未重复创建）。'
-            : '已保存到 Spark。',
-        ),
-      );
-      const linkBtn = makeBtn('在 Spark 中查看', {
-        className: 'sp-link',
-        onClick: () => openUrl(`${lastSavedReceipt!.origin}/collections/${lastSavedReceipt!.id}`),
-      });
-      okBox.append(linkBtn);
-      container.append(okBox);
+    for (const pending of state.pending_submissions) {
+      container.append(renderPendingBanner(pending, session));
     }
 
     const card = el('section', 'sp-card');
@@ -867,6 +984,19 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
     }
     card.append(projField);
 
+    if (submitBusy || submitError) {
+      const inlineStatus = el(
+        'div',
+        `sp-banner ${submitError ? 'sp-banner--error' : 'sp-banner--info'}`,
+      );
+      inlineStatus.id = 'ext-submit-status';
+      inlineStatus.tabIndex = -1;
+      inlineStatus.setAttribute('role', submitError ? 'alert' : 'status');
+      inlineStatus.setAttribute('aria-live', submitError ? 'assertive' : 'polite');
+      inlineStatus.textContent = submitError ?? '正在保存收藏到 Spark…';
+      card.append(inlineStatus);
+    }
+
     const footer = el('div', 'sp-row-between');
     footer.append(
       makeBtn('重置本页草稿', {
@@ -903,7 +1033,9 @@ export async function mountExtensionPopup(opts: PopupControllerOptions): Promise
   }
 
   function render(): void {
-    const activeId = document.activeElement instanceof HTMLElement ? document.activeElement.id : '';
+    const activeId =
+      pendingFocusId ?? (document.activeElement instanceof HTMLElement ? document.activeElement.id : '');
+    pendingFocusId = null;
     const selStart =
       document.activeElement instanceof HTMLInputElement ||
       document.activeElement instanceof HTMLTextAreaElement

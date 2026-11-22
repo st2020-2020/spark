@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Spark 收集助手",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "在浏览网页时保存标题、网址、选区纯文本与用途，并归类到 Spark 项目。",
   "permissions": [
     "activeTab",

@@ -223,14 +223,15 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     await api.updatePreferences({ ai_enabled: true, consent_version: 'spark-ai-image-notes-v1' });
     const write = vi.spyOn(api, 'updatePreferences');
     renderWithAdapter(['/settings'], api);
-    await screen.findByText('已授权图片自动归类。更新整理授权后可自动创建标签。');
+    await screen.findByText('已授权图片自动归类。更新整理授权后可自动创建标签与网页收藏归类。');
     await ui.click(screen.getByRole('button', { name: '更新整理授权' }));
     const dialog = within(await screen.findByRole('dialog'));
     expect(dialog.getByText(/已有同名标签会复用/)).toBeVisible();
+    expect(dialog.getByText(/网页收藏归类：/)).toBeVisible();
     expect(write).not.toHaveBeenCalled();
     await ui.click(dialog.getByRole('button', { name: '确认更新授权' }));
-    expect(await screen.findByText('已授权图片自动归类和自动创建标签')).toBeVisible();
-    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-image-notes-v2' });
+    expect(await screen.findByText('已授权网页收藏归类、图片自动归类和自动创建标签')).toBeVisible();
+    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-extension-archive-v1' });
   });
 
   it('requires the new text disclosure before reusing a historical image and never resubmits the image', async () => {
@@ -267,7 +268,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     await ui.click(screen.getByRole('button', { name: '授权使用图片识别结果' }));
     await ui.click(screen.getByRole('button', { name: '确认更新授权' }));
     await screen.findByText(/重新整理会检查已有识别结果/);
-    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-image-notes-v2' });
+    expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-extension-archive-v1' });
     expect(restart).toHaveBeenCalledTimes(1);
     await ui.click(screen.getByRole('button', { name: '重新整理' }));
     await screen.findByText('整理排队中');

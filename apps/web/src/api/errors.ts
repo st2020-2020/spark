@@ -34,6 +34,8 @@ const DEFAULT_CODE_MESSAGES: Record<string, string> = {
   csrf_failed: '安全校验失效，请刷新页面或重新登录后重试。',
   ai_disabled: 'AI 自动整理已关闭，请先在设置中启用后再试。',
   ai_excluded: '该条收藏已设置不参与 AI 整理，请先解除排除后再试。',
+  web_archive_consent_required: '网页收藏归类需要确认最新 AI 整理授权（包含标题、纯文本选文与用途披露）。',
+  organization_in_progress: '已有其他整理正在处理中，请稍候完成。',
   insufficient_material: '当前收藏缺少可用于整理的文字或用途说明，补充后再试。',
   integration_not_configured: '当前平台尚未配置模型服务凭证，原文已完整保存，可继续手动归类。',
   not_found: '目标内容不存在或无权访问。',

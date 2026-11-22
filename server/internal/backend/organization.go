@@ -46,20 +46,21 @@ func materialAvailable(text, intent string) bool {
 // Caller holds user_change_counters, so new inputs supersede prior runs in the
 // same transaction as content and River insertion. No network work occurs here.
 func (o *Organizer) Enqueue(ctx context.Context, tx pgx.Tx, uid, id string, explicit bool) (string, string, error) {
-	return o.enqueue(ctx, tx, uid, id, explicit, false)
+	return o.enqueue(ctx, tx, uid, id, explicit, false, false)
 }
 
 func (o *Organizer) EnqueueImage(ctx context.Context, tx pgx.Tx, uid, id string) error {
-	_, _, err := o.enqueue(ctx, tx, uid, id, false, true)
+	_, _, err := o.enqueue(ctx, tx, uid, id, false, true, false)
 	return err
 }
 
-func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, explicit, imageEvent bool) (string, string, error) {
+func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, explicit, imageEvent, requestWebArchive bool) (string, string, error) {
 	var enabled, excluded bool
-	var status, text, intent, role, consent string
+	var status, role, consent, pageURL, captureSource string
+	var material webArchiveMaterial
 	var deleted *time.Time
 	var cv, uv, pv int64
-	err := tx.QueryRow(ctx, `SELECT u.ai_enabled,u.status,u.ai_policy_version,c.ai_excluded,c.ai_policy_version,c.content_version,c.plain_text,c.intent,c.deleted_at,u.role,COALESCE(u.ai_consent_version,'') FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, uid, id).Scan(&enabled, &status, &uv, &excluded, &pv, &cv, &text, &intent, &deleted, &role, &consent)
+	err := tx.QueryRow(ctx, `SELECT u.ai_enabled,u.status,u.ai_policy_version,c.ai_excluded,c.ai_policy_version,c.content_version,c.plain_text,c.intent,c.deleted_at,u.role,COALESCE(u.ai_consent_version,''),c.manual_title,c.original_url,coalesce(c.capture_source,'') FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, uid, id).Scan(&enabled, &status, &uv, &excluded, &pv, &cv, &material.text, &material.intent, &deleted, &role, &consent, &material.title, &pageURL, &captureSource)
 	if err != nil {
 		return "", "", err
 	}
@@ -82,17 +83,35 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	if imageEvent && !allowsImageArchive(consent) {
 		return "", "", nil
 	}
+	if requestWebArchive && !allowsWebArchive(consent) {
+		return "", "web_archive_consent_required", nil
+	}
+	webArchive := !imageEvent && (requestWebArchive || captureSource == "extension" && allowsWebArchive(consent) && validURL(pageURL))
+	if webArchive && (!validURL(pageURL) || !material.available()) {
+		return "", "insufficient_material", nil
+	}
 	archive := allowsImageArchive(consent)
-	hasImages, pendingImages, err := o.Images.candidates(ctx, tx, uid, id, role, archive)
-	if err != nil {
-		return "", "", err
+	var hasImages, pendingImages bool
+	if !webArchive {
+		hasImages, pendingImages, err = o.Images.candidates(ctx, tx, uid, id, role, archive)
+		if err != nil {
+			return "", "", err
+		}
 	}
 	canUseImages := hasImages && allowsTextImageMaterial(consent)
-	hasText := materialAvailable(text, intent)
+	text, intent := material.text, material.intent
+	if captureSource == "extension" && !webArchive {
+		clean := material.filtered()
+		text, intent = clean.text, clean.intent
+	}
+	hasText := webArchive || materialAvailable(text, intent)
 	if hasImages && !canUseImages && (explicit || !hasText) {
 		return "", "image_material_consent_required", nil
 	}
 	if !hasText && !canUseImages {
+		if captureSource == "extension" && validURL(pageURL) && material.available() && !allowsWebArchive(consent) {
+			return "", "web_archive_consent_required", nil
+		}
 		return "", "insufficient_material", nil
 	}
 	if imageEvent && !canUseImages {
@@ -100,12 +119,30 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 	}
 	waitImages := canUseImages && pendingImages
 	var active string
-	err = tx.QueryRow(ctx, `SELECT id FROM organization_runs WHERE user_id=$1 AND collection_id=$2 AND content_version=$3 AND user_policy_version=$4 AND collection_policy_version=$5 AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1`, uid, id, cv, uv, pv).Scan(&active)
+	var activeWebArchive bool
+	err = tx.QueryRow(ctx, `SELECT id,web_archive FROM organization_runs WHERE user_id=$1 AND collection_id=$2 AND content_version=$3 AND user_policy_version=$4 AND collection_policy_version=$5 AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1`, uid, id, cv, uv, pv).Scan(&active, &activeWebArchive)
 	if err == nil {
+		if requestWebArchive && !activeWebArchive {
+			return "", "organization_in_progress", nil
+		}
 		return active, "", nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return "", "", err
+	}
+	if webArchive {
+		// Keep the original run if processing finished or a dispatch was
+		// recorded. Only a new explicit request can recover a pre-dispatch failure.
+		err = tx.QueryRow(ctx, `SELECT r.id FROM organization_runs r
+			WHERE (r.user_id,r.collection_id,r.content_version)=($1,$2,$3)
+			  AND r.web_archive AND (
+				((r.user_policy_version,r.collection_policy_version)=($4,$5) AND
+				  (r.status IN ('succeeded','partial') OR (r.status='failed' AND NOT $6::boolean)))
+				OR EXISTS(SELECT 1 FROM usage_reservations u WHERE (u.user_id,u.run_id)=(r.user_id,r.id)))
+			ORDER BY r.created_at DESC,r.id DESC LIMIT 1`, uid, id, cv, uv, pv, explicit).Scan(&active)
+		if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+			return active, "", err
+		}
 	}
 	if canUseImages && !pendingImages && archive {
 		sources, _, err := o.Images.sources(ctx, tx, uid, id, true)
@@ -136,10 +173,10 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 		return "", "", err
 	}
 	run := uuid.NewString()
-	if _, err = tx.Exec(ctx, `INSERT INTO organization_runs(id,user_id,collection_id,content_version,user_policy_version,collection_policy_version,status,stages,image_waiting)
+	if _, err = tx.Exec(ctx, `INSERT INTO organization_runs(id,user_id,collection_id,content_version,user_policy_version,collection_policy_version,status,stages,image_waiting,web_archive)
 		VALUES($1,$2,$3,$4,$5,$6,'queued',CASE WHEN $7
 			THEN '[{"name":"extract_images","status":"queued","attempts":0}]'::jsonb
-			ELSE '[{"name":"generate","status":"queued","attempts":0}]'::jsonb END,$7)`, run, uid, id, cv, uv, pv, waitImages); err != nil {
+			ELSE '[{"name":"generate","status":"queued","attempts":0}]'::jsonb END,$7,$8)`, run, uid, id, cv, uv, pv, waitImages, webArchive); err != nil {
 		return "", "", err
 	}
 	if _, err = o.Queue.InsertTx(ctx, tx, TextOrganizationArgs{UserID: uid, RunID: run}, &river.InsertOpts{MaxAttempts: 5, Queue: "text_organization"}); err != nil {
@@ -239,15 +276,26 @@ func (s *Server) setAIExclusion(c *gin.Context) (any, error) {
 	return row.Collection, nil
 }
 func (s *Server) restartOrganization(c *gin.Context) (any, error) {
+	return s.restartCollectionOrganization(c, false)
+}
+
+func (s *Server) archiveWebCollection(c *gin.Context) (any, error) {
+	return s.restartCollectionOrganization(c, true)
+}
+
+func (s *Server) restartCollectionOrganization(c *gin.Context, webArchive bool) (any, error) {
 	return s.idempotentWithReplay(c, nil, 202, func(tx pgx.Tx) (any, error) {
 		uid, id := current(c).User.ID, c.Param("id")
-		_, reason, err := s.Organizer.Enqueue(c.Request.Context(), tx, uid, id, true)
+		run, reason, err := s.Organizer.enqueue(c.Request.Context(), tx, uid, id, true, false, webArchive)
 		if err != nil {
 			return nil, err
 		}
 		if reason != "" {
 			if reason == aiTrialUnavailable {
 				return nil, problem(403, reason, "AI 整理暂未向此账号开放。")
+			}
+			if reason == "web_archive_consent_required" {
+				return nil, problem(403, reason, "请先确认网页归类资料处理说明。")
 			}
 			if reason == "image_material_consent_required" {
 				return nil, problem(403, reason, "请先确认将已识别的图中文字和画面描述用于文字 AI 整理。")
@@ -258,7 +306,7 @@ func (s *Server) restartOrganization(c *gin.Context) (any, error) {
 				status = 503
 			case "insufficient_material":
 				status = 422
-			case "collection_in_trash":
+			case "collection_in_trash", "organization_in_progress":
 				status = 409
 			case "quota_exceeded":
 				status = 429
@@ -266,7 +314,21 @@ func (s *Server) restartOrganization(c *gin.Context) (any, error) {
 			return nil, problem(status, reason, "当前无法重新整理，请检查处理设置、材料或额度。")
 		}
 		row, err := s.loadCollection(c.Request.Context(), tx, uid, id)
-		return row.Organization, err
+		if err != nil || !webArchive || value(row.Organization.RunId).String() == run {
+			return row.Organization, err
+		}
+		// An earlier web archive can be reused even if a newer general
+		// organization run exists for the same collection.
+		var payload []byte
+		if err := tx.QueryRow(c.Request.Context(), `SELECT `+organizationRunJSON+`
+			FROM organization_runs r WHERE r.user_id=$1 AND r.collection_id=$2 AND r.id=$3`, uid, id, run).Scan(&payload); err != nil {
+			return nil, err
+		}
+		var organization contract.Organization
+		if err := json.Unmarshal(payload, &organization); err != nil {
+			return nil, err
+		}
+		return organization, nil
 	}, func(tx pgx.Tx, response json.RawMessage) (any, error) {
 		_, err := s.loadCollection(c.Request.Context(), tx, current(c).User.ID, c.Param("id"))
 		return response, err

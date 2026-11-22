@@ -20,7 +20,7 @@ import {
   type StorageAreaLike,
 } from '../shared/storage';
 import { validateAndBuildCollectionPayload } from '../shared/validation';
-import { handleExtensionMessage, type BackgroundDeps, type ExtensionMessage } from '../background/serviceWorker';
+import { handleExtensionMessage, type BackgroundDeps, type ExtensionMessage, type ExtensionMessageResult } from '../background/serviceWorker';
 import { mountExtensionPopup } from '../popup/popup';
 
 function createMemoryStorage(): StorageAreaLike & { dump(): Record<string, unknown> } {
@@ -814,7 +814,7 @@ describe('Extension popup DOM interaction & privacy guard', () => {
     let pendingPair = false;
     const sentMessages: ExtensionMessage[] = [];
 
-    const sendMessage = vi.fn(async (msg: ExtensionMessage) => {
+    const sendMessage = vi.fn(async (msg: ExtensionMessage): Promise<ExtensionMessageResult> => {
       sentMessages.push(msg);
       if (msg.type === 'GET_STATE') {
         return {
@@ -968,8 +968,15 @@ describe('Extension popup DOM interaction & privacy guard', () => {
     saveBtn2.click();
 
     await vi.waitFor(() => {
-      expect(root.textContent).toContain('已保存到 Spark');
+      expect(root.textContent).toContain('已归入所选项目：Alpha 研究');
     });
+    expect(root.querySelector('#ext-view-saved-btn')).not.toBeNull();
+    expect(root.querySelector('#ext-continue-collect-btn')).not.toBeNull();
+    // Save button must be gone in completion view so user cannot re-submit an emptied form!
+    expect(
+      Array.from(root.querySelectorAll('button')).find((b) => b.textContent?.includes('保存到 Spark')),
+    ).toBeUndefined();
+
     const submitCall = sentMessages.find((m) => m.type === 'SUBMIT_COLLECTION');
     expect(submitCall).toMatchObject({
       type: 'SUBMIT_COLLECTION',
@@ -990,5 +997,312 @@ describe('Extension popup DOM interaction & privacy guard', () => {
     ]);
     expect(combinedLogs).not.toContain(secretVerifier);
     expect(combinedLogs).not.toContain(secretToken);
+  });
+
+  it('prevents double-click before persistDraftNow, renders honest Inbox completion view, re-initializes cleanly on Continue, and transitions retry to completion view', async () => {
+    vi.stubGlobal('window', window);
+    window.scrollTo = vi.fn();
+    let resolveDraft!: () => void;
+    let resolveSubmit!: (res: { ok: true; receipt: { id: string; replayed: boolean } } | { ok: false; code: string; status: number; message: string }) => void;
+    let submitCount = 0;
+    let pendingItems: Array<{
+      id: string;
+      idempotency_key: string;
+      payload: { id: string; original_url: string; manual_title?: string; selected_text?: string; intent?: string; project_ids: string[] };
+      project_names: Record<string, string>;
+      context_key: string;
+      created_at: string;
+    }> = [];
+    let getStateCount = 0;
+
+    const sendMessage = vi.fn(async (msg: ExtensionMessage): Promise<ExtensionMessageResult> => {
+      if (msg.type === 'GET_STATE') {
+        getStateCount += 1;
+        return {
+          ok: true as const,
+          state: {
+            fixed_origin: FIXED_SPARK_ORIGIN,
+            session: {
+              account_id: 'acc-1',
+              account_label: 'maker@spark.test',
+              expires_at: '2026-11-28T10:00:00Z',
+              origin: FIXED_SPARK_ORIGIN,
+              browser: 'edge' as const,
+              connected_at: '2026-11-21T10:00:00Z',
+            },
+            pending_pairing: null,
+            expired_account_hint: null,
+            active_capture: {
+              url: getStateCount <= 2 ? 'https://example.org/p1' : 'https://example.org/p2',
+              title: getStateCount <= 2 ? '初始标题 P1' : '新标签页标题 P2',
+              selected_text: getStateCount <= 2 ? '' : 'P2 选文',
+              source: 'active_tab' as const,
+            },
+            draft: null,
+            pending_submissions: pendingItems,
+          },
+        };
+      }
+      if (msg.type === 'LIST_PROJECTS') {
+        return { ok: true as const, projects: { items: [] } };
+      }
+      if (msg.type === 'SAVE_DRAFT') {
+        await new Promise<void>((r) => {
+          resolveDraft = r;
+        });
+        return { ok: true as const };
+      }
+      if (msg.type === 'SUBMIT_COLLECTION') {
+        submitCount += 1;
+        return new Promise((r) => {
+          resolveSubmit = r as typeof resolveSubmit;
+        });
+      }
+      if (msg.type === 'RETRY_PENDING') {
+        submitCount += 1;
+        pendingItems = [];
+        return { ok: true as const, receipt: { id: 'col-retry-ok', replayed: true } };
+      }
+      return { ok: true as const };
+    });
+
+    const openUrl = vi.fn();
+    const root = document.getElementById('app')!;
+    await mountExtensionPopup({ root, sendMessage, openUrl });
+
+    const saveBtn = Array.from(root.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('保存到 Spark'),
+    )!;
+    // Rapid double-click while SAVE_DRAFT hasn't resolved yet
+    saveBtn.click();
+    const immediateStatus = root.querySelector('#ext-submit-status');
+    expect(immediateStatus?.textContent).toContain('正在保存收藏到 Spark');
+    const disabledSaveBtn = Array.from(root.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('保存中'),
+    )!;
+    expect(disabledSaveBtn.disabled).toBe(true);
+    disabledSaveBtn.click();
+
+    await vi.waitFor(() => expect(resolveDraft).toBeTypeOf('function'));
+    resolveDraft();
+    await vi.waitFor(() => expect(submitCount).toBe(1));
+
+    // Unknown/network failure -> keeps form and shows retry banner + inline alert
+    pendingItems = [
+      {
+        id: 'col-unknown-1',
+        idempotency_key: 'idem-unknown-123456',
+        payload: {
+          id: 'col-unknown-1',
+          original_url: 'https://example.org/p1',
+          manual_title: '初始标题 P1',
+          project_ids: [],
+        },
+        project_names: {},
+        context_key: 'https://example.org/p1',
+        created_at: '2026-11-21T10:00:00Z',
+      },
+    ];
+    resolveSubmit({ ok: false, code: 'network_error', status: 0, message: '网络断开' });
+
+    await vi.waitFor(() => {
+      expect(root.querySelector('#ext-submit-status')?.textContent).toContain('网络断开');
+    });
+    expect(root.querySelector<HTMLInputElement>('#ext-title')?.value).toBe('初始标题 P1');
+
+    // Click "用原请求重试" -> renders completion view immediately even if GET_STATE is slow
+    let blockGetState = true;
+    const origGetStateImpl = sendMessage.getMockImplementation()!;
+    let releaseSlowGetState!: () => void;
+    sendMessage.mockImplementation(async (msg) => {
+      if (msg.type === 'GET_STATE' && blockGetState) {
+        blockGetState = false;
+        await new Promise<void>((r) => {
+          releaseSlowGetState = r;
+        });
+      }
+      return origGetStateImpl(msg);
+    });
+
+    const retryBtn = Array.from(root.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('用原请求重试'),
+    )!;
+    retryBtn.click();
+
+    await vi.waitFor(() => {
+      expect(root.textContent).toContain('已保存到收件箱');
+    });
+    expect(root.textContent).toContain('在收藏详情查看归类结果');
+    expect(root.textContent).toContain('已保存，无需重复提交');
+    expect(root.textContent).toContain('初始标题 P1');
+    // Immediate focus without waiting for trailing GET_STATE refresh
+    expect(document.activeElement?.id).toBe('ext-view-saved-btn');
+    // Must never claim already auto-classified or expose jargon
+    expect(root.textContent).not.toContain('已自动归入');
+    expect(root.textContent).not.toContain('尚未归入项目');
+    expect(root.textContent).not.toContain('幂等重放命中');
+    expect(submitCount).toBe(2);
+
+    releaseSlowGetState?.();
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Clicking "继续收集" re-initializes from current active tab instead of leaving an empty form
+    root.querySelector<HTMLButtonElement>('#ext-continue-collect-btn')!.click();
+    await vi.waitFor(() => {
+      expect(root.querySelector<HTMLInputElement>('#ext-title')?.value).toBe('新标签页标题 P2');
+    });
+    expect(root.querySelector<HTMLInputElement>('#ext-url')?.value).toBe('https://example.org/p2');
+    expect(root.querySelector<HTMLTextAreaElement>('#ext-text')?.value).toBe('P2 选文');
+  });
+
+  it('ignores late receipt completion view if account disconnected or switched while request was in flight', async () => {
+    let currentAccount: string | null = 'acc-a';
+    let resolveSubmit!: (res: ExtensionMessageResult) => void;
+    const sendMessage = vi.fn(async (msg: ExtensionMessage): Promise<ExtensionMessageResult> => {
+      if (msg.type === 'GET_STATE') {
+        return {
+          ok: true,
+          state: {
+            fixed_origin: FIXED_SPARK_ORIGIN,
+            session: currentAccount
+              ? {
+                  account_id: currentAccount,
+                  account_label: `${currentAccount}@spark.test`,
+                  expires_at: '2026-11-28T10:00:00Z',
+                  origin: FIXED_SPARK_ORIGIN,
+                  browser: 'edge',
+                  connected_at: '2026-11-21T10:00:00Z',
+                }
+              : null,
+            pending_pairing: null,
+            expired_account_hint: null,
+            active_capture: {
+              url: 'https://example.org/late',
+              title: 'Late Check',
+              selected_text: '',
+              source: 'active_tab',
+            },
+            draft: null,
+            pending_submissions: [],
+          },
+        };
+      }
+      if (msg.type === 'LIST_PROJECTS') return { ok: true, projects: { items: [] } };
+      if (msg.type === 'SAVE_DRAFT') return { ok: true };
+      if (msg.type === 'DISCONNECT_SESSION') {
+        currentAccount = 'acc-b';
+        return { ok: true };
+      }
+      if (msg.type === 'SUBMIT_COLLECTION') {
+        return new Promise((r) => {
+          resolveSubmit = r;
+        });
+      }
+      return { ok: true };
+    });
+
+    const root = document.getElementById('app')!;
+    await mountExtensionPopup({ root, sendMessage, openUrl: vi.fn() });
+
+    const saveBtn = Array.from(root.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('保存到 Spark'),
+    )!;
+    saveBtn.click();
+    await vi.waitFor(() => expect(resolveSubmit).toBeTypeOf('function'));
+
+    // Switch session to acc-b before acc-a's submit resolves
+    Array.from(root.querySelectorAll('button')).find((b) => b.textContent?.includes('连接管理'))!.click();
+    Array.from(root.querySelectorAll('button')).find((b) => b.textContent?.includes('撤销设备并切换账号'))!.click();
+    await vi.waitFor(() => expect(root.textContent).toContain('acc-b@spark.test'));
+
+    resolveSubmit({ ok: true, receipt: { id: 'col-late-a', replayed: false } });
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Must NOT show acc-a's completion card under acc-b!
+    expect(root.querySelector('.sp-ext-completed')).toBeNull();
+    expect(root.textContent).toContain('acc-b@spark.test');
+  });
+
+  it('preserves v0.7.1 chrome.storage.local session, drafts and pending submissions across update to v0.7.2', async () => {
+    const storage = createMemoryStorage();
+    await storage.set({
+      spark_ext_session: {
+        token: 'tok-v071',
+        account_id: 'acc-v071',
+        account_label: 'legacy@spark.test',
+        expires_at: '2026-11-29T00:00:00Z',
+        origin: FIXED_SPARK_ORIGIN,
+        browser: 'chrome',
+        connected_at: '2026-11-21T00:00:00Z',
+      },
+      spark_ext_account_buckets: {
+        [`${FIXED_SPARK_ORIGIN}::acc-v071`]: {
+          origin: FIXED_SPARK_ORIGIN,
+          account_id: 'acc-v071',
+          account_label: 'legacy@spark.test',
+          drafts: {
+            'https://legacy.example/page': {
+              context_key: 'https://legacy.example/page',
+              updated_at: '2026-11-21T12:00:00.000Z',
+              manual_title: 'Legacy 0.7.1 Draft',
+              original_url: 'https://legacy.example/page',
+              selected_text: 'legacy text',
+              intent: '',
+              project_ids: [],
+              project_names: {},
+            },
+          },
+          pending_submissions: [
+            {
+              id: 'col-legacy-1',
+              idempotency_key: 'k1',
+              payload: {
+                id: 'col-legacy-1',
+                original_url: 'https://legacy.example/pending',
+                manual_title: 'Legacy Pending Item',
+                project_ids: [],
+              },
+              project_names: {},
+              context_key: 'https://legacy.example/pending',
+              created_at: '2026-11-21T12:00:00.000Z',
+            },
+          ],
+        },
+      },
+    });
+
+    const baseApi = createExtensionApiClient(async () => jsonResponse(500, {}));
+    const deps: BackgroundDeps = {
+      storage,
+      api: {
+        ...baseApi,
+        createCollection: vi.fn(async (_o, _t, p) => ({ id: p.id, replayed: false })),
+      },
+      requestOriginPermission: vi.fn(async () => true),
+      openTab: vi.fn(async () => undefined),
+      readActiveTabCapture: vi.fn(async () => ({
+        url: 'https://legacy.example/page',
+        title: 'Tab Title',
+        selected_text: '',
+        source: 'active_tab' as const,
+      })),
+      now: () => Date.parse('2026-11-22T00:00:00Z'),
+    };
+
+    const stateRes = await handleExtensionMessage({ type: 'GET_STATE' }, deps);
+    expect(stateRes).toMatchObject({
+      ok: true,
+      state: {
+        session: { account_id: 'acc-v071', account_label: 'legacy@spark.test' },
+        draft: { manual_title: 'Legacy 0.7.1 Draft' },
+        pending_submissions: [{ id: 'col-legacy-1', idempotency_key: 'k1' }],
+      },
+    });
+
+    const retryRes = await handleExtensionMessage(
+      { type: 'RETRY_PENDING', account_id: 'acc-v071', submission_id: 'col-legacy-1' },
+      deps,
+    );
+    expect(retryRes).toEqual({ ok: true, receipt: { id: 'col-legacy-1', replayed: false } });
   });
 });

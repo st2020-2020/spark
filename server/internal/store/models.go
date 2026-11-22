@@ -88,6 +88,7 @@ type Collection struct {
 	LastOpenedAt       pgtype.Timestamptz
 	ThreadID           pgtype.UUID
 	SourceCollectionID pgtype.UUID
+	CaptureSource      pgtype.Text
 }
 
 type CollectionImageNote struct {
@@ -343,6 +344,8 @@ type OrganizationRun struct {
 	ImageUserPolicyVersion  pgtype.Int8
 	ImageExtractionIds      []string
 	ImageArchiveStatus      pgtype.Text
+	WebArchive              bool
+	WebArchiveStatus        pgtype.Text
 }
 
 type Project struct {

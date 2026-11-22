@@ -399,3 +399,42 @@ func TestUpgradeV16PreservesWebSessions(t *testing.T) {
 		t.Fatalf("extension token was visible to Web session lookup: %v", err)
 	}
 }
+
+func TestUpgradeV17BackfillsOnlyVerifiedExtensionReceipts(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:17] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,17)`)
+	owner, other, verified, unknown := uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash)
+		VALUES($1,'archive-upgrade@example.test','synthetic'),($2,'archive-upgrade-other@example.test','synthetic')`, owner, other)
+	execTestSQL(t, pool, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title)
+		VALUES($1,$3,'{}','','','https://example.test/verified','已保存标题'),
+		      ($2,$3,'{}','','','https://example.test/unknown','历史标题')`, verified, unknown, owner)
+	execTestSQL(t, pool, `INSERT INTO idempotency_keys(user_id,operation,key,request_digest,response_status,response_json)
+		VALUES($1,'POST /api/v1/extension/collections','verified-receipt',decode('00','hex'),201,jsonb_build_object('id',$3::text)),
+		      ($1,'POST /api/v1/collections','ordinary-receipt',decode('00','hex'),201,jsonb_build_object('id',$4::text)),
+		      ($2,'POST /api/v1/extension/collections','wrong-owner',decode('00','hex'),201,jsonb_build_object('id',$4::text))`,
+		owner, other, verified, unknown)
+	for range 2 {
+		if err := Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	var safe bool
+	if err := pool.QueryRow(ctx, `SELECT a.capture_source='extension' AND b.capture_source IS NULL
+		AND a.manual_title='已保存标题' AND b.manual_title='历史标题'
+		AND NOT EXISTS(SELECT 1 FROM organization_runs)
+		FROM collections a,collections b WHERE a.id=$1 AND b.id=$2`, verified, unknown).Scan(&safe); err != nil || !safe {
+		t.Fatalf("source migration changed historical data, mislabeled an ordinary note, or queued organization: %v", err)
+	}
+}

@@ -51,6 +51,16 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 
 扩展按站点和账号保存提交快照。同账号用原 UUID、原请求和原幂等键重试，成功回放返回同一收藏 ID 和 `Idempotent-Replayed: true`。状态已确认失败时可调整输入。超出 7 天窗口或无法确认结果时，按原 ID 到 Web 核对。同键异体返回 409，永久删除墓碑阻止回放和重建。换号后原账号的待提交快照继续留在原账号。服务端拒绝未知字段，选文和用途合计最多 50,000 字，标题最多 200 字，网址最多 4,096 字。
 
+### 网页收藏归类
+
+文字 AI 已开启且具备试用资格的账号，可通过现有 `PATCH /me/preferences` 确认 `spark-ai-extension-archive-v1`。该版本包含当前文字、标签及有独立授权的图片材料说明，并新增使用已保存的网页标题、纯文本选文和用途匹配或创建主题项目。网页地址、材料内的 HTTP(S) 链接和网页提取正文不进入这次文字模型请求。旧同意仍按原有范围处理选文。只保存网址且没有其余可用材料时不入队，返回 `insufficient_material`。
+
+扩展收藏仍立即返回 `201 {id}`。满足授权和材料条件时在创建事务登记整理任务。模型证据通过验证且项目仍有效时可写入 `auto` 关联。人工决定优先，主题不明确时保留待归类。项目证据可用 `page_title`、`original_text` 和 `intent`。
+
+收藏详情的 `capture_source: extension` 仅表示有创建入口或确切回执证据。对旧记录可在详情确认当前材料后用 Web 会话、CSRF 和幂等键调用 `POST /collections/{id}/organization/web-archive`。即使旧记录无来源证据，也可主动处理当前这一条网址收藏，来源保持未知。可用材料标记为 `web_archive_available`。缺少新同意返回 `403 web_archive_consent_required`，没有材料返回 422，当前另有整理运行时返回 `409 organization_in_progress`。
+
+`Organization.web_archive_status` 区分待同意、关联已有项目、新建项目并归入和证据不足留空。处理进度沿用原有状态和整理事件。`web_archive_retry_available` 标记失败前没有账本记录且仍可处理的运行。同键回放原回执，明确主动的新键可在当前额度允许时重排一次新的运行。已经出现计费或尚待核对的运行不会因此再次调用。对历史记录确认授权不会批量触发整理。
+
 ## 幂等与版本
 
 OpenAPI 中必填的 Idempotency-Key 使用 16 至 128 字符的随机键。项目决定 PATCH 的键为可选，整理模式会提供。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。
