@@ -10,6 +10,7 @@ export interface DraftImage {
 
 export interface CollectionDraft {
   images?: DraftImage[];
+  followUpSourceId?: string;
   collectionId: string;
   idempotencyKey: string;
   document: SparkDocument;

@@ -307,3 +307,57 @@ func testImageMaterialUpgrade(t *testing.T, oldVersion int) {
 		t.Fatalf("upgrade failed to backfill the note without changing content or scheduling more work: %q %q %d, %v", note, original, jobs, err)
 	}
 }
+
+func TestUpgradeV15PreservesCollectionsAndAssignsIndependentThreads(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:15] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,15)`)
+	owner, active, trashed := uuid.New(), uuid.New(), uuid.New()
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash) VALUES($1,'threads@example.test','synthetic')`, owner)
+	execTestSQL(t, pool, `INSERT INTO collections(id,user_id,document,plain_text,intent,manual_title,content_version,resource_version,deleted_at,purge_after)
+		VALUES($1,$3,'{"schema_version":1}','活跃旧正文','保留用途','保留标题',3,7,NULL,NULL),
+		      ($2,$3,'{"schema_version":1}','回收站旧正文','','回收站旧标题',1,2,'2026-11-20 UTC','2026-12-20 UTC')`, active, trashed, owner)
+	execTestSQL(t, pool, `INSERT INTO collection_revisions(user_id,collection_id,content_version,document,intent,original_url,manual_title)
+		SELECT user_id,id,content_version,document,intent,original_url,manual_title FROM collections WHERE id=$1`, active)
+
+	var previousActive, previousTrashed uuid.UUID
+	for range 2 {
+		if err := Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+		if err := Ready(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+		var activeThread, trashedThread uuid.UUID
+		var preserved bool
+		err := pool.QueryRow(ctx, `
+			SELECT c.thread_id,d.thread_id,
+			       c.source_collection_id IS NULL AND d.source_collection_id IS NULL
+			       AND c.plain_text='活跃旧正文' AND c.content_version=3 AND c.resource_version=7
+			       AND r.intent='保留用途' AND r.manual_title='保留标题' AND r.document=c.document
+			       AND d.plain_text='回收站旧正文' AND d.deleted_at='2026-11-20 UTC' AND d.purge_after='2026-12-20 UTC'
+			       AND ca.member_count=1 AND ca.active_count=1 AND cd.member_count=1 AND cd.active_count=0
+			FROM collections c JOIN collections d ON d.user_id=c.user_id
+			JOIN collection_revisions r ON (r.user_id,r.collection_id,r.content_version)=(c.user_id,c.id,c.content_version)
+			JOIN collection_thread_counts ca ON (ca.user_id,ca.thread_id)=(c.user_id,c.thread_id)
+			JOIN collection_thread_counts cd ON (cd.user_id,cd.thread_id)=(d.user_id,d.thread_id)
+			WHERE c.user_id=$1 AND c.id=$2 AND d.id=$3`, owner, active, trashed).Scan(&activeThread, &trashedThread, &preserved)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !preserved || activeThread == uuid.Nil || trashedThread == uuid.Nil || activeThread == trashedThread {
+			t.Fatal("upgrade changed historical content or combined independent collections")
+		}
+		if previousActive != uuid.Nil && (previousActive != activeThread || previousTrashed != trashedThread) {
+			t.Fatal("repeat migration changed existing thread identifiers")
+		}
+		previousActive, previousTrashed = activeThread, trashedThread
+	}
+}

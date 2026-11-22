@@ -561,6 +561,26 @@ export interface paths {
         patch: operations["updateCollection"];
         trace?: never;
     };
+    "/collections/{id}/thread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 按创建时间回看收藏线索
+         * @description 须从本人活跃收藏进入。按创建时间及收藏 ID 升序，回收站成员只返回占位，待永久清理和已清理成员省略。分页需沿用同一入口、账号和查询参数。
+         */
+        get: operations["getCollectionThread"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections/{id}/restore": {
         parameters: {
             query?: never;
@@ -1297,6 +1317,11 @@ export interface components {
             project_ids: string[];
             tag_ids: string[];
             ai_excluded?: boolean;
+            /**
+             * Format: uuid
+             * @description 续写来源。仅可指定当前账号的一条活跃收藏，创建后不可修改。
+             */
+            source_collection_id?: string;
         };
         CollectionUpdate: {
             base_content_version: number;
@@ -1402,6 +1427,18 @@ export interface components {
             undo_receipt?: components["schemas"]["ProjectUndoReceipt"];
             /** @description 按附件排序的图片描述正文段。服务端总返回数组，删除段落省略。 */
             image_notes?: components["schemas"]["ImageNote"][];
+            /**
+             * Format: uuid
+             * @description 收藏所在的稳定线索标识。来源永久清理后保留。
+             */
+            thread_id?: string;
+            /**
+             * Format: uuid
+             * @description 直接续写来源。普通收藏或来源已被永久清理时省略。
+             */
+            source_collection_id?: string;
+            /** @description 同一线索内除当前收藏外的活跃成员数。 */
+            follow_up_count?: number;
         };
         CollectionSummary: {
             /** Format: uuid */
@@ -1436,6 +1473,34 @@ export interface components {
             attachment_count?: number;
             /** @description 当前内容版本与主要网址对应的网页信息提取预览。 */
             link_preview?: components["schemas"]["LinkPreview"];
+            /**
+             * Format: uuid
+             * @description 收藏所在的稳定线索标识。来源永久清理后保留。
+             */
+            thread_id?: string;
+            /**
+             * Format: uuid
+             * @description 直接续写来源。普通收藏或来源已被永久清理时省略。
+             */
+            source_collection_id?: string;
+            /** @description 同一线索内除当前收藏外的活跃成员数。 */
+            follow_up_count?: number;
+        };
+        CollectionThread: {
+            /** Format: uuid */
+            thread_id: string;
+            items: components["schemas"]["CollectionThreadItem"][];
+            next_cursor?: string;
+        };
+        CollectionThreadItem: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @enum {string} */
+            status: "active" | "deleted";
+            /** @description 仅活跃成员返回标题。 */
+            display_title?: string;
         };
         LinkPreview: {
             /** @enum {string} */
@@ -3105,6 +3170,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Collection"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getCollectionThread: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionThread"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

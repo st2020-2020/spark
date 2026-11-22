@@ -67,25 +67,27 @@ type ChangeEvent struct {
 }
 
 type Collection struct {
-	ID               pgtype.UUID
-	UserID           pgtype.UUID
-	Document         []byte
-	PlainText        string
-	Intent           string
-	OriginalUrl      string
-	ManualTitle      string
-	ContentVersion   int64
-	ResourceVersion  int64
-	DecisionVersion  int64
-	ReadAt           pgtype.Timestamptz
-	AiExcluded       bool
-	AiPolicyVersion  int64
-	DeletedAt        pgtype.Timestamptz
-	PurgeAfter       pgtype.Timestamptz
-	CreatedAt        pgtype.Timestamptz
-	UpdatedAt        pgtype.Timestamptz
-	PurgeRequestedAt pgtype.Timestamptz
-	LastOpenedAt     pgtype.Timestamptz
+	ID                 pgtype.UUID
+	UserID             pgtype.UUID
+	Document           []byte
+	PlainText          string
+	Intent             string
+	OriginalUrl        string
+	ManualTitle        string
+	ContentVersion     int64
+	ResourceVersion    int64
+	DecisionVersion    int64
+	ReadAt             pgtype.Timestamptz
+	AiExcluded         bool
+	AiPolicyVersion    int64
+	DeletedAt          pgtype.Timestamptz
+	PurgeAfter         pgtype.Timestamptz
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+	PurgeRequestedAt   pgtype.Timestamptz
+	LastOpenedAt       pgtype.Timestamptz
+	ThreadID           pgtype.UUID
+	SourceCollectionID pgtype.UUID
 }
 
 type CollectionImageNote struct {
@@ -131,6 +133,13 @@ type CollectionTag struct {
 	RunID        pgtype.UUID
 	CreatedAt    pgtype.Timestamptz
 	UpdatedAt    pgtype.Timestamptz
+}
+
+type CollectionThreadCount struct {
+	UserID      pgtype.UUID
+	ThreadID    pgtype.UUID
+	MemberCount int64
+	ActiveCount int64
 }
 
 type CurrentImageExtraction struct {

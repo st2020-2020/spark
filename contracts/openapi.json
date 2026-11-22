@@ -2295,6 +2295,71 @@
         }
       }
     },
+    "/collections/{id}/thread": {
+      "get": {
+        "operationId": "getCollectionThread",
+        "summary": "按创建时间回看收藏线索",
+        "description": "须从本人活跃收藏进入。按创建时间及收藏 ID 升序，回收站成员只返回占位，待永久清理和已清理成员省略。分页需沿用同一入口、账号和查询参数。",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionThread"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/collections/{id}/restore": {
       "post": {
         "operationId": "restoreCollection",
@@ -5157,6 +5222,11 @@
           },
           "ai_excluded": {
             "type": "boolean"
+          },
+          "source_collection_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "续写来源。仅可指定当前账号的一条活跃收藏，创建后不可修改。"
           }
         },
         "required": [
@@ -5547,6 +5617,21 @@
               "$ref": "#/components/schemas/ImageNote"
             },
             "description": "按附件排序的图片描述正文段。服务端总返回数组，删除段落省略。"
+          },
+          "thread_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "收藏所在的稳定线索标识。来源永久清理后保留。"
+          },
+          "source_collection_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "直接续写来源。普通收藏或来源已被永久清理时省略。"
+          },
+          "follow_up_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "同一线索内除当前收藏外的活跃成员数。"
           }
         },
         "required": [
@@ -5655,6 +5740,21 @@
           "link_preview": {
             "$ref": "#/components/schemas/LinkPreview",
             "description": "当前内容版本与主要网址对应的网页信息提取预览。"
+          },
+          "thread_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "收藏所在的稳定线索标识。来源永久清理后保留。"
+          },
+          "source_collection_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "直接续写来源。普通收藏或来源已被永久清理时省略。"
+          },
+          "follow_up_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "同一线索内除当前收藏外的活跃成员数。"
           }
         },
         "required": [
@@ -5668,6 +5768,59 @@
           "created_at",
           "updated_at",
           "resource_version"
+        ]
+      },
+      "CollectionThread": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionThreadItem"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread_id",
+          "items"
+        ]
+      },
+      "CollectionThreadItem": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "deleted"
+            ]
+          },
+          "display_title": {
+            "type": "string",
+            "description": "仅活跃成员返回标题。"
+          }
+        },
+        "required": [
+          "id",
+          "created_at",
+          "status"
         ]
       },
       "LinkPreview": {

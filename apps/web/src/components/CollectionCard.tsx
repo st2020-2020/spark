@@ -1,4 +1,5 @@
 import { confirmLeavingImageDraft } from '../lib/drafts';
+import { followUpCountLabel, toFollowUpSourceFromSummary } from '../lib/followUp';
 import { CollectionLink, useRecordOpened } from './CollectionLink';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -10,12 +11,14 @@ import {
   Mail,
   MailOpen,
   MoreHorizontal,
+  PenLine,
   Pencil,
   Trash2,
 } from 'lucide-react';
 import type { Attachment, CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
+import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
 import {
   formatDateTime,
@@ -59,6 +62,7 @@ export function CollectionCard({
   const recordOpened = useRecordOpened();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const { openFollowUp } = useFollowUp();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapRef = useRef<HTMLDivElement | null>(null);
@@ -107,6 +111,8 @@ export function CollectionCard({
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setMenuOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -118,6 +124,8 @@ export function CollectionCard({
             base_resource_version: trashed.resource_version,
           });
           void queryClient.invalidateQueries({ queryKey: ['collections'] });
+          void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
+          void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
           void queryClient.invalidateQueries({ queryKey: ['projects'] });
           void queryClient.invalidateQueries({ queryKey: ['project'] });
           void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -143,6 +151,7 @@ export function CollectionCard({
   const detailState = { from: `${location.pathname}${location.search}` };
   const hasUrl = collection.content_types.includes('url');
   const hasImage = collection.content_types.includes('image');
+  const followUpCountText = followUpCountLabel(collection.follow_up_count);
 
   return (
     <article data-keyboard-card tabIndex={0} aria-label={collection.display_title}
@@ -155,6 +164,9 @@ export function CollectionCard({
           if (!confirmLeavingImageDraft()) return;
           recordOpened(collection.id);
           navigate(`/collections/${collection.id}`, { state: { ...detailState, edit: key === 'e' } });
+        } else if (key === 'f') {
+          e.preventDefault();
+          openFollowUp(toFollowUpSourceFromSummary(collection));
         } else if (key === 'r' && !toggleReadMutation.isPending) {
           e.preventDefault(); toggleReadMutation.mutate();
         }
@@ -238,6 +250,18 @@ export function CollectionCard({
                     <MailOpen size={16} strokeWidth={2} aria-hidden="true" />
                   )}
                   <span>{collection.read_at ? '标为未读' : '标为已读'}</span>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="sp-menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    openFollowUp(toFollowUpSourceFromSummary(collection));
+                  }}
+                >
+                  <PenLine size={16} strokeWidth={2} aria-hidden="true" />
+                  <span>续写</span>
                 </button>
                 <button
                   type="button"
@@ -355,6 +379,27 @@ export function CollectionCard({
             <span className="sp-truncate">{p.decision === 'auto' && '自动归入 · '}{p.name}</span>
           </Link>
         ))}
+
+        {followUpCountText && (
+          <CollectionLink
+            id={collection.id}
+            state={detailState}
+            hash="#follow-up-thread"
+            className="sp-pill sp-follow-up-pill"
+          >
+            {followUpCountText}
+          </CollectionLink>
+        )}
+
+        <button
+          type="button"
+          className="sp-note-follow-up-btn"
+          aria-label={`续写 ${collection.display_title}`}
+          onClick={() => openFollowUp(toFollowUpSourceFromSummary(collection))}
+        >
+          <PenLine size={14} strokeWidth={2} aria-hidden="true" />
+          <span>续写</span>
+        </button>
 
         <CollectionLink
           id={collection.id}

@@ -33,6 +33,8 @@ type collectionRow struct {
 }
 
 const collectionJSON = `to_jsonb(c)||jsonb_build_object(
+ 'follow_up_count',(SELECT tc.active_count-(c.deleted_at IS NULL)::int FROM collection_thread_counts tc
+  WHERE (tc.user_id,tc.thread_id)=(c.user_id,c.thread_id)),
  'user_ai_enabled',(SELECT ai_enabled FROM users WHERE id=c.user_id),
  'user_ai_consent',(SELECT COALESCE(ai_consent_version,'') FROM users WHERE id=c.user_id),
  'user_role',(SELECT role FROM users WHERE id=c.user_id),
@@ -89,13 +91,12 @@ func scanCollection(row pgx.Row, extraColumns ...any) (collectionRow, error) {
 	if value(out.OriginalUrl) != "" {
 		out.ContentTypes = append(out.ContentTypes, "url")
 	}
-	out.DisplayTitle = titleFor(out.PlainText, value(out.ManualTitle), value(out.OriginalUrl))
+	var coverFilename string
 	if len(out.Attachments) > 0 {
 		out.ContentTypes = append(out.ContentTypes, "image")
-		if out.DisplayTitle == "" || value(out.ManualTitle) == "" && strings.TrimSpace(out.PlainText) == "" && value(out.OriginalUrl) == "" {
-			out.DisplayTitle = out.Attachments[0].Filename
-		}
+		coverFilename = out.Attachments[0].Filename
 	}
+	out.DisplayTitle = collectionDisplayTitle(out.PlainText, value(out.ManualTitle), value(out.OriginalUrl), value(out.GeneratedTitle), coverFilename)
 	code := "integration_not_configured"
 	if !out.UserAIEnabled {
 		code = "ai_disabled"
@@ -110,9 +111,6 @@ func scanCollection(row pgx.Row, extraColumns ...any) (collectionRow, error) {
 	}
 	out.Organization.GeneratedTitle = out.GeneratedTitle
 	out.Organization.Summary = out.GeneratedSummary
-	if value(out.ManualTitle) == "" && value(out.GeneratedTitle) != "" {
-		out.DisplayTitle = *out.GeneratedTitle
-	}
 	return out, nil
 }
 func (s *Server) loadCollection(ctx context.Context, q querier, uid, id string) (collectionRow, error) {
@@ -187,8 +185,19 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 		if err := checkOwnedTags(ctx, tx, uid, req.TagIds); err != nil {
 			return nil, err
 		}
-		if _, err = tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded)); err != nil {
+		// The account change lock serializes source validation with trash and purge.
+		inserted, err := tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded,thread_id,source_collection_id)
+			SELECT $1,$2,$3,$4,$5,$6,$7,$8,coalesce(source.thread_id,gen_random_uuid()),source.id
+			FROM (VALUES ($9::uuid)) requested(id)
+			LEFT JOIN collections source ON (source.user_id,source.id)=($2,requested.id)
+			 AND source.deleted_at IS NULL AND source.purge_requested_at IS NULL
+			WHERE requested.id IS NULL OR source.id IS NOT NULL`,
+			id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded), req.SourceCollectionId)
+		if err != nil {
 			return nil, err
+		}
+		if inserted.RowsAffected() == 0 {
+			return nil, notFound
 		}
 		for _, pid := range req.ProjectIds {
 			if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision) VALUES($1,$2,$3,'manual')`, uid, id, pid.String()); err != nil {
@@ -458,6 +467,7 @@ func summary(row collectionRow) contract.CollectionSummary {
 		OrganizationStatus: contract.CollectionSummaryOrganizationStatus(row.Organization.Status),
 		HasSuggestion:      row.HasSuggestion, ReadAt: row.ReadAt, CreatedAt: row.CreatedAt,
 		UpdatedAt: row.UpdatedAt, ResourceVersion: row.ResourceVersion, LinkPreview: row.LinkPreview,
+		ThreadId: row.ThreadId, SourceCollectionId: row.SourceCollectionId, FollowUpCount: row.FollowUpCount,
 	}
 	if value(row.OriginalUrl) != "" {
 		result.OriginalUrl = row.OriginalUrl

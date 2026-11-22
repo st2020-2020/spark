@@ -43,3 +43,228 @@
 .sp-share-images label { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin-inline-end: 12px; }
 .sp-image-note { margin-block-start: 1rem; }
 .sp-image-note p { margin-block-start: 4px; }
+
+/* ---------- v0.7 笔记续写与线索时间线 ---------- */
+.sp-follow-up-source {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-surface-muted);
+  border: 1px solid var(--sp-border);
+  min-width: 0;
+}
+
+.sp-follow-up-source-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  color: var(--sp-fg);
+}
+
+.sp-follow-up-source-head svg {
+  flex: none;
+  align-self: center;
+  color: var(--sp-muted);
+}
+
+.sp-follow-up-source-label {
+  font-size: var(--sp-text-xs);
+  font-weight: 600;
+  color: var(--sp-muted);
+}
+
+.sp-follow-up-source-title {
+  font-size: var(--sp-text-sm);
+  font-weight: 600;
+  color: var(--sp-fg);
+  min-width: 0;
+}
+
+.sp-follow-up-source-excerpt {
+  margin: 0;
+  font-size: var(--sp-text-sm);
+  line-height: 1.55;
+  color: var(--sp-fg-soft);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.sp-follow-up-source-note {
+  margin: 0;
+}
+
+.sp-follow-up-sheet-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.sp-note-follow-up-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 2px 8px;
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--sp-fg-soft);
+  font-size: var(--sp-text-xs);
+  font-weight: 550;
+  cursor: pointer;
+  transition: background-color 140ms var(--sp-ease-out), color 140ms var(--sp-ease-out);
+}
+
+.sp-note-follow-up-btn:hover {
+  background: var(--sp-surface-hover);
+  color: var(--sp-primary);
+}
+
+.sp-note-follow-up-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--sp-focus-ring);
+}
+
+.sp-follow-up-pill {
+  background: var(--sp-accent);
+  color: var(--sp-accent-fg);
+}
+
+.sp-thread-heading {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sp-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.sp-thread-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px 12px 24px;
+  border-radius: var(--sp-radius-control);
+  min-width: 0;
+}
+
+.sp-thread-item::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--sp-border);
+}
+
+.sp-thread-item:first-child::before {
+  top: 18px;
+}
+
+.sp-thread-item:last-child::before {
+  bottom: auto;
+  height: 18px;
+}
+
+.sp-thread-item:only-child::before {
+  display: none;
+}
+
+.sp-thread-dot {
+  position: absolute;
+  left: 5px;
+  top: 15px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--sp-radius-pill);
+  background: var(--sp-surface);
+  border: 2px solid var(--sp-border-strong);
+  z-index: 1;
+}
+
+.sp-thread-item--current {
+  background: var(--sp-accent);
+}
+
+.sp-thread-item--current .sp-thread-dot {
+  background: var(--sp-primary);
+  border-color: var(--sp-primary);
+}
+
+.sp-thread-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
+.sp-thread-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
+}
+
+.sp-thread-current-title {
+  font-size: var(--sp-text-ui);
+  font-weight: 600;
+  color: var(--sp-fg);
+}
+
+.sp-thread-link {
+  font-size: var(--sp-text-ui);
+  font-weight: 550;
+  color: var(--sp-primary);
+  text-decoration: none;
+}
+
+.sp-thread-link:hover {
+  color: var(--sp-primary-hover);
+  text-decoration: underline;
+}
+
+.sp-thread-deleted {
+  font-size: var(--sp-text-sm);
+  color: var(--sp-muted);
+  font-style: italic;
+}
+
+.sp-thread-more-hint {
+  margin: 8px 0 0;
+}
+
+.sp-thread-more {
+  margin-top: 10px;
+}
+
+@media (max-width: 767px) {
+  .sp-note-follow-up-btn {
+    min-height: 40px;
+    padding: 6px 12px;
+  }
+
+  .sp-follow-up-sheet-actions {
+    width: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+}

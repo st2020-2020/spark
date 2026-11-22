@@ -16,8 +16,22 @@ export function useRecordOpened() {
 }
 
 // Record an explicit link activation, never a detail fetch, render or background update.
-export function CollectionLink({ id, classify, ...props }: Omit<LinkProps, 'to' | 'id'> & { id: string; classify?: boolean }) {
+export function CollectionLink({
+  id,
+  classify,
+  hash,
+  ...props
+}: Omit<LinkProps, 'to' | 'id'> & { id: string; classify?: boolean; hash?: string }) {
   const record = useRecordOpened();
-  return <Link {...props} to={`/collections/${id}${classify ? '#projects' : ''}`}
-    onClick={() => record(id)} onAuxClick={e => { if (e.button === 1) record(id); }} />;
+  const targetHash = hash ?? (classify ? '#projects' : '');
+  return (
+    <Link
+      {...props}
+      to={`/collections/${id}${targetHash}`}
+      onClick={() => record(id)}
+      onAuxClick={(e) => {
+        if (e.button === 1) record(id);
+      }}
+    />
+  );
 }

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Check, Folder, ImagePlus, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
 import type { SparkDocument } from '../api/types';
-import { getFriendlyErrorMessage } from '../api/errors';
+import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -23,6 +23,11 @@ import {
   useBeforeUnloadWarning,
   type CollectionDraft,
 } from '../lib/drafts';
+import {
+  followUpDraftScope,
+  selectInitialFollowUpProjects,
+  type FollowUpSource,
+} from '../lib/followUp';
 import { generateIdempotencyKey, generateUuid } from '../lib/idempotency';
 import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import { AIConsentModal } from './AIConsentModal';
@@ -33,17 +38,21 @@ import { UploadQueueTray } from './UploadQueueTray';
 
 export function CollectionComposer({
   defaultProjectId,
+  followUpSource,
   autoFocus = false,
-  showAiEntry = !defaultProjectId,
+  showAiEntry = !defaultProjectId && !followUpSource,
   variant = 'card',
   onCreated,
+  onCancel,
 }: {
   defaultProjectId?: string;
+  followUpSource?: FollowUpSource;
   autoFocus?: boolean;
   showAiEntry?: boolean;
   /** "sheet" drops the outer card chrome when the composer lives inside the quick-capture sheet. */
   variant?: 'card' | 'sheet';
   onCreated?: () => void;
+  onCancel?: () => void;
 }) {
   const api = useApi();
   const { user, aiTrialEligible, aiPlatformEnabled } = useAuth();
@@ -52,26 +61,58 @@ export function CollectionComposer({
   const [aiConsentOpen, setAiConsentOpen] = useState(false);
 
   const userId = user?.id ?? '';
-  const draftScope = defaultProjectId ? `project:${defaultProjectId}` : 'inbox';
+  const draftScope = followUpSource
+    ? followUpDraftScope(followUpSource.id)
+    : defaultProjectId
+      ? `project:${defaultProjectId}`
+      : 'inbox';
 
-  const initialDraft = useMemo((): CollectionDraft => {
+  const initialState = useMemo((): {
+    draft: CollectionDraft;
+    restored: boolean;
+    defaultProjectIds: string[];
+    error?: string;
+  } => {
     const loaded = loadDraft<CollectionDraft>(userId, draftScope);
-    if (loaded.data) {
-      return loaded.data;
+    const matchesSource =
+      !followUpSource ||
+      !loaded.data?.followUpSourceId ||
+      loaded.data.followUpSourceId === followUpSource.id;
+    const initialProjects = followUpSource
+      ? selectInitialFollowUpProjects(followUpSource.projects)
+      : {
+          projectIds: defaultProjectId ? [defaultProjectId] : [],
+          names: {} as Record<string, string>,
+        };
+    if (loaded.data && matchesSource) {
+      return {
+        draft: loaded.data,
+        restored: true,
+        defaultProjectIds: initialProjects.projectIds,
+        error: loaded.error,
+      };
     }
     return {
-      collectionId: generateUuid(),
-      idempotencyKey: generateIdempotencyKey(),
-      document: EMPTY_DOCUMENT,
-      intent: '',
-      originalUrl: '',
-      manualTitle: '',
-      projectIds: defaultProjectId ? [defaultProjectId] : [],
-      tagIds: [],
-      aiExcluded: false,
-      updatedAt: new Date().toISOString(),
+      restored: false,
+      defaultProjectIds: initialProjects.projectIds,
+      error: loaded.error,
+      draft: {
+        followUpSourceId: followUpSource?.id,
+        collectionId: generateUuid(),
+        idempotencyKey: generateIdempotencyKey(),
+        document: EMPTY_DOCUMENT,
+        intent: '',
+        originalUrl: '',
+        manualTitle: '',
+        projectIds: initialProjects.projectIds,
+        tagIds: [],
+        associationNames: initialProjects.names,
+        aiExcluded: false,
+        updatedAt: new Date().toISOString(),
+      },
     };
-  }, [userId, draftScope, defaultProjectId]);
+  }, [userId, draftScope, defaultProjectId, followUpSource]);
+  const initialDraft = initialState.draft;
 
   const [collectionId, setCollectionId] = useState(initialDraft.collectionId);
   const [idempotencyKey, setIdempotencyKey] = useState(initialDraft.idempotencyKey);
@@ -84,6 +125,9 @@ export function CollectionComposer({
   const [names, setNames] = useState(initialDraft.associationNames ?? {});
   const [creatingTag, setCreatingTag] = useState(false);
   const [aiExcluded, setAiExcluded] = useState(Boolean(initialDraft.aiExcluded));
+  const baselineProjectIdsRef = useRef(initialState.defaultProjectIds);
+  const hadSavedDraftRef = useRef<boolean>(initialState.restored);
+  const projectsTouchedRef = useRef<boolean>(false);
 
   const imageAnalysisQuery = useQuery({
     queryKey: ['me', 'image-analysis'],
@@ -108,10 +152,7 @@ export function CollectionComposer({
     );
   });
 
-  const [storageWarning, setStorageWarning] = useState<string | null>(() => {
-    const loaded = loadDraft<CollectionDraft>(userId, draftScope);
-    return loaded.error ?? null;
-  });
+  const [storageWarning, setStorageWarning] = useState<string | null>(() => initialState.error ?? null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [resetToken, setResetToken] = useState(0);
   const [isOnline, setIsOnline] = useState(
@@ -181,6 +222,28 @@ export function CollectionComposer({
   const projectsQuery = useProjectChoices();
 
   const allProjects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
+
+  // Drop attributed projects that are no longer selectable once the full project list is loaded.
+  useEffect(() => {
+    if (
+      !followUpSource ||
+      !projectsQuery.isSuccess ||
+      projectsQuery.hasNextPage ||
+      hadSavedDraftRef.current ||
+      projectsTouchedRef.current
+    ) {
+      return;
+    }
+    const selectable = selectInitialFollowUpProjects(followUpSource.projects, allProjects);
+    const same =
+      selectable.projectIds.length === baselineProjectIdsRef.current.length &&
+      selectable.projectIds.every((pid, idx) => pid === baselineProjectIdsRef.current[idx]);
+    if (!same) {
+      baselineProjectIdsRef.current = selectable.projectIds;
+      setProjectIds(selectable.projectIds);
+    }
+  }, [followUpSource, projectsQuery.isSuccess, projectsQuery.hasNextPage, allProjects]);
+
   const filteredProjects = useMemo(() => {
     const q = projectSearch.trim().toLowerCase();
     if (!q) return allProjects;
@@ -205,11 +268,16 @@ export function CollectionComposer({
     Boolean(inferredUrl) ||
     uploader.readyUploadIds.length > 0;
 
+  const projectsModified =
+    projectIds.length !== baselineProjectIdsRef.current.length ||
+    projectIds.some((id, idx) => id !== baselineProjectIdsRef.current[idx]);
+
   const isDirty =
-    hasContent || tagIds.length > 0 || projectIds.some(id => id !== defaultProjectId) ||
+    hasContent || tagIds.length > 0 || projectsModified ||
     uploader.items.length > 0 ||
     intent.trim().length > 0 ||
-    manualTitle.trim().length > 0;
+    manualTitle.trim().length > 0 ||
+    aiExcluded;
 
   useBeforeUnloadWarning(isDirty);
 
@@ -221,6 +289,7 @@ export function CollectionComposer({
     }
     pendingCollapseAfterSaveRef.current = false;
     const res = saveDraft<CollectionDraft>(userId, draftScope, {
+      followUpSourceId: followUpSource?.id,
       collectionId,
       idempotencyKey,
       document: documentValue,
@@ -235,6 +304,7 @@ export function CollectionComposer({
   }, [
     userId,
     draftScope,
+    followUpSource?.id,
     isDirty,
     collectionId,
     idempotencyKey,
@@ -247,15 +317,27 @@ export function CollectionComposer({
   ]);
 
   const resetForm = useCallback(() => {
+    const initialProjects = followUpSource
+      ? selectInitialFollowUpProjects(
+          followUpSource.projects,
+          projectsQuery.isSuccess && !projectsQuery.hasNextPage ? allProjects : undefined,
+        )
+      : {
+          projectIds: defaultProjectId ? [defaultProjectId] : [],
+          names: {} as Record<string, string>,
+        };
+    baselineProjectIdsRef.current = initialProjects.projectIds;
+    hadSavedDraftRef.current = false;
+    projectsTouchedRef.current = false;
     setCollectionId(generateUuid());
     setIdempotencyKey(generateIdempotencyKey());
     setDocumentValue(EMPTY_DOCUMENT);
     setIntent('');
     setOriginalUrl('');
     setManualTitle('');
-    setProjectIds(defaultProjectId ? [defaultProjectId] : []);
+    setProjectIds(initialProjects.projectIds);
     setTagIds([]);
-    setNames({});
+    setNames(initialProjects.names);
     setAiExcluded(false);
     setShowIntentField(false);
     setShowUrlField(false);
@@ -266,7 +348,16 @@ export function CollectionComposer({
     uploader.clearAll();
     removeDraft(userId, draftScope);
     setResetToken((n) => n + 1);
-  }, [defaultProjectId, draftScope, uploader, userId]);
+  }, [
+    allProjects,
+    defaultProjectId,
+    draftScope,
+    followUpSource,
+    projectsQuery.hasNextPage,
+    projectsQuery.isSuccess,
+    uploader,
+    userId,
+  ]);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -301,6 +392,7 @@ export function CollectionComposer({
           project_ids: projectIds,
           tag_ids: tagIds,
           ai_excluded: aiExcluded,
+          ...(followUpSource ? { source_collection_id: followUpSource.id } : {}),
         },
         idempotencyKey,
       );
@@ -323,9 +415,19 @@ export function CollectionComposer({
 
       const isQueued =
         created.organization.status === 'queued' || created.organization.status === 'running';
-      pushToast({ message: isQueued ? '已保存，正在后台整理' : '已保存' });
+      pushToast({
+        message: followUpSource
+          ? isQueued
+            ? '已保存续写，正在后台整理'
+            : '已保存续写'
+          : isQueued
+            ? '已保存，正在后台整理'
+            : '已保存',
+      });
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -334,6 +436,12 @@ export function CollectionComposer({
     onError: (err) => {
       pendingCollapseAfterSaveRef.current = false;
       setIsActivated(true);
+      if (followUpSource && isApiErrorCode(err, 'not_found')) {
+        setSubmitError(
+          '来源收藏已不可用（可能已移入回收站或被删除），已保留当前输入，可复制或取消后新建普通收藏。',
+        );
+        return;
+      }
       setSubmitError(getFriendlyErrorMessage(err));
     },
   });
@@ -353,7 +461,13 @@ export function CollectionComposer({
   }, [saveMutation, creatingTag, uploader.hasFailed, uploader.hasInFlight]);
 
   const toggleProject = (pid: string) => {
+    projectsTouchedRef.current = true;
     setProjectIds((prev) => (prev.includes(pid) ? prev.filter((id) => id !== pid) : [...prev, pid]));
+  };
+
+  const clearProjects = () => {
+    projectsTouchedRef.current = true;
+    setProjectIds([]);
   };
 
   const activateComposer = useCallback(() => {
@@ -382,7 +496,8 @@ export function CollectionComposer({
 
   const effectiveActivated =
     isActivated ||
-    isDirty ||
+    hasContent ||
+    uploader.items.length > 0 ||
     Boolean(uploader.validationError) ||
     showIntentField ||
     showUrlField ||
@@ -422,10 +537,13 @@ export function CollectionComposer({
         </div>
       )}
 
-      <div ref={composerRef} onFocusCapture={activateComposer} onBlurCapture={handleBlurCapture}>
+      <div ref={composerRef} onBlurCapture={handleBlurCapture}>
       <RichTextEditor
         suggestions={editor => <MentionPicker editor={editor} onBusy={setCreatingTag} onChoose={choice => {
           setNames(old => ({ ...old, [choice.id]: choice.name }));
+          if (choice.kind === '@') {
+            projectsTouchedRef.current = true;
+          }
           const setIds = choice.kind === '#' ? setTagIds : setProjectIds;
           setIds(old => old.includes(choice.id) ? old : [...old, choice.id]);
         }} />}
@@ -589,6 +707,16 @@ export function CollectionComposer({
                     </button>
                   </span>
                 ))}
+                {followUpSource && selectedProjects.length > 0 && (
+                  <button
+                    type="button"
+                    className="sp-btn--quiet sp-btn--sm"
+                    disabled={saveMutation.isPending}
+                    onClick={clearProjects}
+                  >
+                    清空项目
+                  </button>
+                )}
                 {aiExcluded && (
                   <span className="sp-pill">
                     <span>不参与 AI 整理</span>
@@ -836,6 +964,25 @@ export function CollectionComposer({
       )}
 
       <AIConsentModal open={aiConsentOpen} onClose={() => setAiConsentOpen(false)} />
+
+      {onCancel && (
+        <div className="sp-follow-up-sheet-actions">
+          <button
+            type="button"
+            className="sp-btn sp-btn--sm"
+            disabled={saveMutation.isPending}
+            onClick={() => {
+              if (hasLocalFiles && !window.confirm('取消后，未保存的图片需要重新选择。仍要取消吗？')) {
+                return;
+              }
+              resetForm();
+              onCancel();
+            }}
+          >
+            取消
+          </button>
+        </div>
+      )}
     </section>
   );
 }

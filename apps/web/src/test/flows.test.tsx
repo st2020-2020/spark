@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -6,6 +6,18 @@ import { AppProviders, AppRoutes } from '../App';
 import { createTestAdapter } from '../test-adapter/mockServer';
 import { loadDraft, saveDraft } from '../lib/drafts';
 import { EMPTY_DOCUMENT } from '../lib/document';
+
+beforeAll(() => {
+  if (typeof Range !== 'undefined' && !Range.prototype.getClientRects) {
+    Range.prototype.getClientRects = () =>
+      ({
+        length: 0,
+        item: () => null,
+        [Symbol.iterator]: function* () {},
+      }) as unknown as DOMRectList;
+    Range.prototype.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+  }
+});
 
 function renderWithAdapter(initialEntries: string[] = ['/login'], adapter = createTestAdapter()) {
   return {
@@ -419,5 +431,93 @@ describe('Spark Web key flows', () => {
     const undoBtn = await screen.findByRole('button', { name: '撤销' });
     await user.click(undoBtn);
     await screen.findByText('已恢复收藏');
+  });
+
+  it('removes default project chip on first click without expanding collapsed project composer, persists empty selection across two remounts, and submits project_ids: []', async () => {
+    const adapter = createTestAdapter();
+    const session = await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    const project = await adapter.createProject(
+      { name: '默认胶带项目', description: '', focus_points: [] },
+      'flow-seed-default-chip',
+    );
+    const projectPath = `/projects/${project.id}`;
+    const user = userEvent.setup();
+
+    const first = renderWithAdapter([projectPath], adapter);
+    await screen.findByRole('heading', { name: '默认胶带项目' });
+    const composer = await screen.findByRole('region', { name: '快速收集' });
+    expect(composer).not.toHaveClass('sp-composer--active');
+
+    const removeBtn = await screen.findByRole('button', { name: '移除项目 默认胶带项目' });
+    await user.pointer({ target: removeBtn, keys: '[MouseLeft>]' });
+    expect(removeBtn).toHaveFocus();
+    expect(composer).not.toHaveClass('sp-composer--active');
+
+    await user.pointer({ target: removeBtn, keys: '[/MouseLeft]' });
+    expect(screen.queryByRole('button', { name: /移除项目/ })).not.toBeInTheDocument();
+    expect(loadDraft(session.user.id, `project:${project.id}`).data).toMatchObject({
+      projectIds: [],
+    });
+
+    // Two consecutive remounts must keep projectIds: [] instead of reverting to defaultProjectId.
+    first.unmount();
+    const second = renderWithAdapter([projectPath], adapter);
+    await screen.findByRole('heading', { name: '默认胶带项目' });
+    await screen.findByRole('region', { name: '快速收集' });
+    await screen.findByRole('textbox', { name: '收藏正文编辑器' });
+    expect(screen.queryByRole('button', { name: /移除项目/ })).not.toBeInTheDocument();
+    expect(loadDraft(session.user.id, `project:${project.id}`).data).toMatchObject({
+      projectIds: [],
+    });
+
+    second.unmount();
+    const third = renderWithAdapter([projectPath], adapter);
+    await screen.findByRole('heading', { name: '默认胶带项目' });
+    await screen.findByRole('region', { name: '快速收集' });
+    await screen.findByRole('textbox', { name: '收藏正文编辑器' });
+    expect(screen.queryByRole('button', { name: /移除项目/ })).not.toBeInTheDocument();
+    expect(loadDraft(session.user.id, `project:${project.id}`).data).toMatchObject({
+      projectIds: [],
+    });
+
+    const createSpy = vi.spyOn(adapter, 'createCollection');
+    const editor = await waitFor(() => {
+      const node = screen.getByRole('textbox', { name: '收藏正文编辑器' });
+      node.focus();
+      expect(node).toHaveFocus();
+      return node;
+    });
+    fireEvent.paste(editor, {
+      clipboardData: {
+        files: [],
+        items: [],
+        types: ['text/plain'],
+        getData: (type: string) => (type === 'text/plain' ? '移除默认项目后独立保存' : ''),
+      },
+    });
+    await user.click(screen.getByRole('button', { name: '保存收藏' }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalledTimes(1));
+    expect(createSpy.mock.calls[0]?.[0]).toMatchObject({
+      project_ids: [],
+    });
+    const created = await createSpy.mock.results[0]?.value;
+    expect(created.projects).toEqual([]);
+
+    // Keyboard activation on a fresh project detail composer also removes on first key press without expanding.
+    third.unmount();
+    const kbProject = await adapter.createProject(
+      { name: '键盘胶带项目', description: '', focus_points: [] },
+      'flow-seed-kb-chip',
+    );
+    renderWithAdapter([`/projects/${kbProject.id}`], adapter);
+    await screen.findByRole('heading', { name: '键盘胶带项目' });
+    const kbComposer = await screen.findByRole('region', { name: '快速收集' });
+    const kbRemoveBtn = await screen.findByRole('button', { name: '移除项目 键盘胶带项目' });
+    kbRemoveBtn.focus();
+    expect(kbRemoveBtn).toHaveFocus();
+    expect(kbComposer).not.toHaveClass('sp-composer--active');
+    await user.keyboard('{Enter}');
+    expect(screen.queryByRole('button', { name: /移除项目/ })).not.toBeInTheDocument();
   });
 });

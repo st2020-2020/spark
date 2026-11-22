@@ -95,6 +95,8 @@ export interface MockImageAnalysisBehavior {
 
 interface StoredCollection extends Collection {
   user_id: string;
+  thread_id: string;
+  source_collection_id?: string;
   extractions: Extraction[];
   revisions: Revision[];
   mock_org_step?: number;
@@ -441,6 +443,25 @@ export function createTestAdapter(): TestAdapter {
     );
   }
 
+  function countThreadActivePeers(c: StoredCollection): number {
+    if (c.deleted_at) return 0;
+    return collections.filter(
+      (other) =>
+        other.user_id === c.user_id &&
+        !other.deleted_at &&
+        other.thread_id === c.thread_id &&
+        other.id !== c.id,
+    ).length;
+  }
+
+  function resolveLiveSourceCollectionId(c: StoredCollection): string | undefined {
+    if (!c.source_collection_id) return undefined;
+    const exists = collections.some(
+      (other) => other.user_id === c.user_id && other.id === c.source_collection_id,
+    );
+    return exists ? c.source_collection_id : undefined;
+  }
+
   function toSummary(c: StoredCollection): CollectionSummary {
     const sortedAttachments = [...c.attachments].sort((a, b) => a.position - b.position);
     const matchedUrl = matchCurrentUrlExtraction(c);
@@ -464,6 +485,9 @@ export function createTestAdapter(): TestAdapter {
             summary: matchedUrl.summary,
           }
         : undefined,
+      thread_id: c.thread_id,
+      source_collection_id: resolveLiveSourceCollectionId(c),
+      follow_up_count: countThreadActivePeers(c),
       read_at: c.read_at,
       created_at: c.created_at,
       updated_at: c.updated_at,
@@ -530,6 +554,8 @@ export function createTestAdapter(): TestAdapter {
     const { user_id: _u, extractions: _e, revisions: _r, ...rest } = c;
     return {
       ...structuredClone(rest),
+      source_collection_id: resolveLiveSourceCollectionId(c),
+      follow_up_count: countThreadActivePeers(c),
       has_suggestion: collectionHasActiveSuggestion(c),
     };
   }
@@ -1610,9 +1636,27 @@ export function createTestAdapter(): TestAdapter {
         user,
       );
 
+      let threadId = generateUuid();
+      let sourceCollectionId: string | undefined;
+      if (body.source_collection_id) {
+        const sourceCol = collections.find(
+          (c) =>
+            c.id === body.source_collection_id &&
+            c.user_id === user.id &&
+            !c.deleted_at,
+        );
+        if (!sourceCol) {
+          throw new ApiError({ status: 404, code: 'not_found', message: '续写来源收藏不存在' });
+        }
+        threadId = sourceCol.thread_id;
+        sourceCollectionId = sourceCol.id;
+      }
+
       const col: StoredCollection = {
         id: body.id,
         user_id: user.id,
+        thread_id: threadId,
+        source_collection_id: sourceCollectionId,
         document: body.document,
         intent: normalizedIntent,
         original_url: detectedUrl,
@@ -1966,6 +2010,42 @@ export function createTestAdapter(): TestAdapter {
         throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
       }
       return { operation_id: existing.operation_id, status: existing.status };
+    },
+
+    async getCollectionThread(id, query) {
+      const user = requireUser(false);
+      const entry = collections.find((c) => c.id === id && c.user_id === user.id && !c.deleted_at);
+      if (!entry) {
+        throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      }
+      const limit = Math.max(1, Math.min(100, query?.limit ?? 30));
+      const offset = query?.cursor ? Number.parseInt(query.cursor, 10) : 0;
+      if (Number.isNaN(offset) || offset < 0) {
+        throw new ApiError({ status: 400, code: 'validation_failed', message: '无效分页游标' });
+      }
+      const members = collections
+        .filter((c) => c.user_id === user.id && c.thread_id === entry.thread_id)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+      const slice = members.slice(offset, offset + limit).map((item) =>
+        item.deleted_at
+          ? {
+              id: item.id,
+              created_at: item.created_at,
+              status: 'deleted' as const,
+            }
+          : {
+              id: item.id,
+              created_at: item.created_at,
+              status: 'active' as const,
+              display_title: item.display_title,
+            },
+      );
+      const nextCursor = offset + slice.length < members.length ? String(offset + slice.length) : undefined;
+      return {
+        thread_id: entry.thread_id,
+        items: slice,
+        ...(nextCursor ? { next_cursor: nextCursor } : {}),
+      };
     },
 
     async setReadState(id, body) {
