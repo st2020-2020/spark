@@ -169,3 +169,96 @@ it('登录字段无效时在原位提示，焦点落回需修改的字段', () =
   expect(document.activeElement).toBe(screen.getByLabelText('密码'));
   expect(screen.getByRole('status').textContent).toBe('请输入密码。');
 });
+
+it('空内联编辑器从用途输入按 Esc 收起，有原稿时保留编辑现场', async () => {
+  render(<Book state={state} req={host() as Request} refresh={() => {}} />);
+  fireEvent.click(
+    await screen.findByRole('button', { name: '记下第一条灵感' }),
+  );
+  fireEvent.click(screen.getByRole('button', { name: '用途' }));
+  const purpose = screen.getByRole('textbox', { name: '用途' });
+  fireEvent.keyDown(purpose, { key: 'Escape' });
+  expect(screen.queryByRole('button', { name: /收下/ })).toBeNull();
+  expect(document.activeElement).not.toBe(purpose);
+  fireEvent.click(screen.getByRole('button', { name: /随手记 ⌃⌥␣/ }));
+  const editor = screen.getByRole('textbox', { name: '记录灵感' });
+  fireEvent.change(editor, { target: { value: '明日继续' } });
+  fireEvent.keyDown(editor, { key: 'Escape' });
+  expect(document.activeElement).toBe(editor);
+  expect(screen.getByRole('button', { name: /收下/ })).toBeTruthy();
+});
+
+it('空发件箱可以从浮窗打开手帐', async () => {
+  const req = host();
+  render(<Capture state={state} req={req as Request} />);
+  fireEvent.click(await screen.findByRole('button', { name: '打开手帐 ⌘O' }));
+  expect(req).toHaveBeenCalledWith('window/main', 'POST');
+  expect(screen.queryByText(/待同步/)).toBeNull();
+});
+
+it.each([
+  [0, undefined],
+  [2, 'unknown'],
+  [0, '0001-01-01T00:00:00Z'],
+] as const)(
+  '断开设备时按 %i 条待处理记录说明后果，省略未知日期',
+  async (count, expires_at) => {
+    render(
+      <Book
+        state={{
+          ...state,
+          counts: { local_saved: count },
+          session: { ...state.session, expires_at },
+        }}
+        req={host() as Request}
+        refresh={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /设备与外观/ }));
+    expect(screen.queryByText(/有效至/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '断开此设备' }));
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog.textContent).toContain(
+      count ? '2 条待处理记录' : '需要重新登录',
+    );
+    expect(dialog.textContent).not.toContain('0 条待处理记录');
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+  },
+);
+
+it('手帐搜索按字面高亮，同时呈现已归类项目与本机待同步条目', async () => {
+  const req = host();
+  const searchHost: Request = (path, ...args) =>
+    path.startsWith('search/local')
+      ? Promise.resolve([
+          {
+            id: 'note',
+            display_title: '[草图] 步道',
+            snippet: '河岸',
+            sync_state: 'synced',
+            primary_type: 'image',
+            projects: [
+              { project_id: 'river', name: '河岸手册', decision: 'manual' },
+            ],
+          },
+          {
+            id: 'draft',
+            display_title: '[草图] 入口',
+            snippet: '现场记录',
+            sync_state: 'local_saved',
+            primary_type: 'text',
+          },
+        ] as never)
+      : (req as Request)(path, ...args);
+  render(<Book req={searchHost} state={state} refresh={() => {}} />);
+  const input = screen.getByRole('textbox', { name: '搜索手帐' });
+  fireEvent.change(input, { target: { value: '[草图]' } });
+  expect(
+    (await screen.findAllByText('[草图]', { selector: 'mark' })).length,
+  ).toBe(2);
+  expect(screen.getByRole('button', { name: /步道.*河岸手册/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /入口.*待同步/ })).toBeTruthy();
+  fireEvent.click(screen.getByRole('button', { name: '清空搜索' }));
+  expect(document.activeElement).toBe(input);
+  expect(screen.getByRole('heading', { name: '收件箱' })).toBeTruthy();
+});

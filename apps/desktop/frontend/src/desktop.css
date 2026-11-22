@@ -138,12 +138,16 @@ html[data-window='panel'] #root {
 .panel {
   background: var(--sp-bg-translucent);
   background: color-mix(in srgb, var(--sp-surface) 94%, transparent);
+  /* AppKit draws the floating window shadow outside the WebView. */
+  box-shadow: none;
   -webkit-backdrop-filter: blur(24px);
   backdrop-filter: blur(24px);
   overflow: auto;
   max-height: 552px;
 }
-.panel:focus-within,
+.panel:focus-within {
+  border-color: var(--sp-control-border);
+}
 .inline-capture:focus-within {
   border-color: var(--sp-control-border);
   box-shadow: var(--sp-shadow-composer-active);
@@ -371,8 +375,7 @@ footer {
   min-width: 0;
 }
 .hit strong,
-.hit small,
-.pending-list strong {
+.hit small {
   display: block;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -546,6 +549,7 @@ h2 {
   --wails-draggable: no-drag;
 }
 .searchbox {
+  flex: 0 1 clamp(140px, 18vw, 200px);
   min-width: 0;
   margin-left: auto;
   background: var(--sp-surface-muted);
@@ -554,11 +558,22 @@ h2 {
   padding: 0 8px;
 }
 .searchbox:focus-within {
+  flex-basis: clamp(155px, 23vw, 260px);
   box-shadow: 0 0 0 3px var(--sp-focus-ring);
 }
 .searchbox input {
   height: 28px;
-  width: clamp(90px, 14vw, 160px);
+  flex: 1;
+  width: 0;
+}
+.searchbox kbd {
+  min-width: 30px;
+  text-align: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .searchbox {
+    transition: flex-basis 160ms var(--sp-ease-out);
+  }
 }
 .sync-status {
   flex-shrink: 0;
@@ -602,8 +617,13 @@ nav small {
   margin-left: auto;
 }
 .compose kbd {
-  border: 1px solid currentColor;
-  opacity: 0.8;
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 1px 6px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  opacity: 1;
   font-size: var(--sp-text-xs);
 }
 nav {
@@ -824,7 +844,14 @@ button.card:hover {
   text-align: left;
 }
 .pending-list span {
+  flex: 1;
   min-width: 0;
+}
+.pending-list strong {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .pending-list small {
   display: block;
@@ -1059,15 +1086,6 @@ button.card:hover {
       box-shadow 160ms var(--sp-ease-out),
       border-color 160ms var(--sp-ease-out);
   }
-  .journal-pane[data-folded='true'] .titlebar > .tool {
-    animation: unfold 160ms var(--sp-ease-out);
-  }
-  @keyframes unfold {
-    from {
-      opacity: 0;
-      transform: translateX(5px);
-    }
-  }
 }
 
 .settings {
@@ -1087,4 +1105,45 @@ button.card:hover {
 }
 .search-view .hit:focus-visible {
   outline-offset: -2px;
+}
+
+.panel-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 12px;
+  border-top: 1px solid var(--sp-border);
+}
+.panel-footer button {
+  margin-left: auto;
+  color: var(--sp-fg-soft);
+  font-size: var(--sp-text-xs);
+}
+.grip:focus-visible {
+  outline: none;
+}
+.grip:focus-visible::after {
+  content: '';
+  position: absolute;
+  inset: 42% 1px;
+  border-radius: 2px;
+  background: var(--sp-primary);
+}
+.journal-results:not(:has(> .empty)) {
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-card);
+  padding: 5px;
+}
+.journal-results .hit + .hit {
+  border-top: 1px solid var(--sp-border);
+}
+.labels .domain {
+  overflow-wrap: anywhere;
+  background: var(--sp-surface-muted);
+}
+.day-entries .attachment {
+  display: block;
+  margin: 8px 0;
+  max-height: 94px;
 }

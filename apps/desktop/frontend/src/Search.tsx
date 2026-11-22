@@ -86,6 +86,72 @@ function Highlight({ text, query }: { text: string; query: string }) {
   );
 }
 
+export function SearchResults({
+  hits,
+  query,
+  currentID,
+  onOpen,
+  offline,
+}: {
+  hits: Hit[];
+  query: string;
+  currentID?: string;
+  onOpen: (id: string) => void;
+  offline: boolean;
+}) {
+  const currentRow = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    currentRow.current?.scrollIntoView({ block: 'nearest' });
+  }, [currentID]);
+  return (
+    <>
+      {hits.map((h) => {
+        const project = h.projects?.find((p) => p.name && active(p.decision));
+        const Icon =
+          h.primary_type === 'image'
+            ? FileImage
+            : h.primary_type === 'url'
+              ? Link2
+              : FileText;
+        return (
+          <button
+            className={'hit ' + (h.id === currentID ? 'chosen' : '')}
+            key={h.id}
+            ref={h.id === currentID ? currentRow : undefined}
+            aria-current={h.id === currentID}
+            onClick={() => onOpen(h.id)}
+          >
+            <Icon />
+            <span>
+              <strong>
+                <Highlight text={h.display_title} query={query} />
+              </strong>
+              <small>
+                <Highlight text={h.snippet} query={query} />
+              </small>
+            </span>
+            {h.sync_state !== 'synced' ? (
+              <small className="sync-status">{phase[h.sync_state]}</small>
+            ) : (
+              project && (
+                <small
+                  className={'washi ' + projectToneClass(project.project_id)}
+                >
+                  {project.name}
+                </small>
+              )
+            )}
+          </button>
+        );
+      })}
+      {!hits.length && (
+        <p className="empty">{query ? '没有找到相关收藏' : '还没有最近收藏'}</p>
+      )}
+      {offline && <small className="offline-note">离线 · 仅搜索本机缓存</small>}
+    </>
+  );
+}
+
 export function Search({ req, back }: { req: Request; back: () => void }) {
   const [q, query] = useState(''),
     [committed, commit] = useState(''),
@@ -109,10 +175,6 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
   useEffect(() => {
     focus.current?.focus();
   }, []);
-  const currentRow = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    currentRow.current?.scrollIntoView({ block: 'nearest' });
-  }, [selected]);
   function escape() {
     if (preview) show(false);
     else if (q) set('');
@@ -212,51 +274,16 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
         <button onClick={back}>记一条</button>
       </header>
       <div className="results">
-        {hits.map((h, i) => {
-          const project = h.projects?.find((p) => p.name && active(p.decision));
-          const Icon =
-            h.primary_type === 'image'
-              ? FileImage
-              : h.primary_type === 'url'
-                ? Link2
-                : FileText;
-          return (
-            <button
-              className={'hit ' + (i === index ? 'chosen' : '')}
-              key={h.id}
-              ref={i === index ? currentRow : undefined}
-              aria-current={i === index}
-              onClick={() => {
-                pick(h.id);
-                show(true);
-              }}
-            >
-              <Icon />
-              <span>
-                <strong>
-                  <Highlight text={h.display_title} query={committed} />
-                </strong>
-                <small>
-                  <Highlight text={h.snippet} query={committed} />
-                </small>
-              </span>
-              {h.sync_state !== 'synced' ? (
-                <small className="sync-status">{phase[h.sync_state]}</small>
-              ) : (
-                project && (
-                  <small
-                    className={'washi ' + projectToneClass(project.project_id)}
-                  >
-                    {project.name}
-                  </small>
-                )
-              )}
-            </button>
-          );
-        })}
-        {!hits.length && (
-          <p className="empty">{q ? '没有找到相关收藏' : '还没有最近收藏'}</p>
-        )}
+        <SearchResults
+          hits={hits}
+          query={committed}
+          currentID={hit?.id}
+          offline={offline}
+          onOpen={(id) => {
+            pick(id);
+            show(true);
+          }}
+        />
         {preview && hit && <Preview req={req} id={hit.id} />}
       </div>
       <footer>
@@ -273,7 +300,7 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
           <kbd>Esc</kbd>返回
         </button>
       </footer>
-      {offline && <small className="offline-note">离线 · 仅搜索本机缓存</small>}
+
       <Notice text={error || feedback} />
     </section>
   );

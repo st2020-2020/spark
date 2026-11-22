@@ -90,17 +90,21 @@ export function Capture({
   const linked = url !== removed ? url : '';
   const availableProjects = inline?.projects ?? projects;
   const availableTags = inline?.tags ?? tags;
-  const expanded =
-    floating ||
-    editing ||
-    !!(
-      text ||
-      intent ||
-      images.length ||
-      projectIDs.length ||
-      tagIDs.length ||
-      showIntent
-    );
+  const hasDraft = !!(
+    text.trim() ||
+    intent.trim() ||
+    images.length ||
+    projectIDs.length ||
+    tagIDs.length
+  );
+  const expanded = floating || editing || showIntent || hasDraft;
+  const waiting = (state.counts.local_saved || 0) + (state.counts.syncing || 0);
+  const status = [
+    waiting > 0 && `${waiting} 条待同步`,
+    !!state.counts.needs_review && `${state.counts.needs_review} 条需核对`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const openSearch = () => (inline ? inline.search() : find(true));
   const choices = (mention?.kind === '@' ? availableProjects : availableTags)
     .filter((c) =>
@@ -331,6 +335,12 @@ export function Capture({
         } else if (e.key === 'Escape') {
           if (mention) suggest(null);
           else if (floating && !search) void req('window/hide', 'POST');
+          else if (inline && !hasDraft && !importing) {
+            expand(false);
+            setEditing(false);
+            if (document.activeElement instanceof HTMLElement)
+              document.activeElement.blur();
+          }
         } else if (!search && (e.metaKey || e.ctrlKey) && e.key === 'Enter') {
           e.preventDefault();
           void save();
@@ -586,16 +596,18 @@ export function Capture({
               本机已收下 · 查看刚才的记录 <ArrowUpRight />
             </button>
           )}
-          {floating &&
-          ((state.counts.local_saved || 0) + (state.counts.syncing || 0) > 0 ||
-            state.counts.needs_review) ? (
-            <button className="sub" onClick={() => req('window/main', 'POST')}>
-              {state.counts.needs_review
-                ? `${state.counts.needs_review} 条需要核对`
-                : `本机待同步 ${(state.counts.local_saved || 0) + (state.counts.syncing || 0)} 条`}
-              <span>打开手帐 ⌘O</span>
-            </button>
-          ) : null}
+          {floating && (
+            <div className="panel-footer">
+              {status && <small>{status}</small>}
+              <button
+                onClick={() =>
+                  req('window/main', 'POST').catch((e) => bad(message(e)))
+                }
+              >
+                打开手帐 <kbd>⌘O</kbd>
+              </button>
+            </div>
+          )}
           <Notice text={err} />
           {err.includes('屏幕录制') && (
             <button onClick={() => req('window/settings', 'POST')}>

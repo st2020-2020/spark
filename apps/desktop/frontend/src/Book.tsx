@@ -33,7 +33,47 @@ import { greeting, todayLine, groupByDay } from '../../../web/src/lib/journal';
 import { PALETTES } from '../../../web/src/lib/appearance';
 import { projectToneClass } from '../../../web/src/lib/projectTone';
 import { Capture } from './Panel';
-import { useSearch } from './Search';
+import { extractDomain } from '../../../web/src/lib/format';
+import { SearchResults, useSearch } from './Search';
+function EntryCard({
+  entry,
+  req,
+  onOpen,
+}: {
+  entry: Summary;
+  req: Request;
+  onOpen: () => void;
+}) {
+  const projects =
+    entry.projects?.filter((p) => p.name && active(p.decision)) ?? [];
+  const tags = entry.tags?.filter((t) => t.path && active(t.decision)) ?? [];
+  const domain = extractDomain(entry.original_url);
+  return (
+    <button className="card" onClick={onOpen}>
+      <strong>{entry.display_title}</strong>
+      {entry.excerpt?.trim() && <p>{entry.excerpt}</p>}
+      {entry.cover_attachment_id && (
+        <ImageView req={req} id={entry.cover_attachment_id} name="收藏缩略图" />
+      )}
+      {(domain || projects.length > 0 || tags.length > 0) && (
+        <span className="labels">
+          {domain && <small className="domain">{domain}</small>}
+          {projects.map((p) => (
+            <small
+              key={p.project_id}
+              className={'washi ' + projectToneClass(p.project_id)}
+            >
+              {p.name}
+            </small>
+          ))}
+          {tags.map((t) => (
+            <small key={t.tag_id}># {t.path}</small>
+          ))}
+        </span>
+      )}
+    </button>
+  );
+}
 type Props = { state: State; req: Request; refresh: () => void };
 export function Book({ state, req, refresh }: Props) {
   const [tab, tabTo] = useState('inbox'),
@@ -86,6 +126,8 @@ export function Book({ state, req, refresh }: Props) {
     }[tab] ||
     [...projects, ...tags].find((x) => x.id === (pid || tid))?.name ||
     '收藏';
+  // Older sessions may serialize a missing expiry as Go’s zero time.
+  const expiresAt = Date.parse(state.session.expires_at ?? '');
   const count = Object.values(state.counts).reduce((a, b) => a + (b || 0), 0);
   function nav(t: string) {
     tabTo(t);
@@ -415,7 +457,7 @@ export function Book({ state, req, refresh }: Props) {
               <input
                 ref={input}
                 value={q}
-                placeholder="搜索手帐　⌘K"
+                placeholder="搜索手帐"
                 aria-label="搜索手帐"
                 onCompositionStart={() => (ime.current = true)}
                 onCompositionEnd={(e) => {
@@ -428,10 +470,12 @@ export function Book({ state, req, refresh }: Props) {
                   open('');
                 }}
               />
-              {q && (
+              {q ? (
                 <Tool label="清空搜索" onClick={clear}>
                   <X />
                 </Tool>
+              ) : (
+                <kbd aria-hidden="true">⌘K</kbd>
               )}
             </div>
             <Tool label="立即同步" disabled={working} onClick={sync}>
@@ -464,7 +508,9 @@ export function Book({ state, req, refresh }: Props) {
                   </strong>
                   <p>
                     {confirm === 'disconnect'
-                      ? `当前账号有 ${count} 条待处理记录。原稿保留在本机，重新登录此账号后可继续同步。`
+                      ? count > 0
+                        ? `当前账号有 ${count} 条待处理记录。原稿保留在本机，重新登录此账号后可继续同步。`
+                        : '断开后，这台 Mac 需要重新登录才能继续使用 Spark。'
                       : '本机原文和暂存图片会一并删除。'}
                   </p>
                   <button autoFocus onClick={() => ask('')}>
@@ -527,18 +573,14 @@ export function Book({ state, req, refresh }: Props) {
               ) : query ? (
                 <>
                   <h1>搜索结果</h1>
-                  {hits.map((h) => (
-                    <button
-                      className="card"
-                      key={h.id}
-                      onClick={() => open(h.id)}
-                    >
-                      <strong>{h.display_title}</strong>
-                      <p>{h.snippet}</p>
-                    </button>
-                  ))}
-                  {!hits.length && <p>没有找到相关收藏。</p>}
-                  {searchOffline && <small>离线模式 · 仅搜索本机缓存</small>}
+                  <div className="journal-results">
+                    <SearchResults
+                      hits={hits}
+                      query={query}
+                      onOpen={open}
+                      offline={searchOffline}
+                    />
+                  </div>
                 </>
               ) : tab === 'settings' ? (
                 <>
@@ -659,12 +701,12 @@ export function Book({ state, req, refresh }: Props) {
                       <Laptop /> 设备会话
                     </h2>
                     <p>{state.session.account_label}</p>
-                    <small>
-                      有效至{' '}
-                      {new Date(
-                        state.session.expires_at || '',
-                      ).toLocaleDateString('zh-CN')}
-                    </small>
+                    {expiresAt > 0 && (
+                      <small>
+                        有效至 {new Date(expiresAt).toLocaleDateString('zh-CN')}
+                      </small>
+                    )}
+
                     {state.session.expired && (
                       <Login
                         state={state}
@@ -716,41 +758,12 @@ export function Book({ state, req, refresh }: Props) {
                         </h3>
                         <div className="day-entries">
                           {items.map((entry) => (
-                            <button
+                            <EntryCard
                               key={entry.id}
-                              className="card"
-                              onClick={() => open(entry.id)}
-                            >
-                              <strong>{entry.display_title}</strong>
-                              <p>{entry.excerpt}</p>
-                              {entry.cover_attachment_id && (
-                                <ImageView
-                                  req={req}
-                                  id={entry.cover_attachment_id}
-                                  name="收藏缩略图"
-                                />
-                              )}
-                              <span className="labels">
-                                {entry.projects
-                                  ?.filter((p) => active(p.decision))
-                                  .map((p) => (
-                                    <small
-                                      key={p.project_id}
-                                      className={
-                                        'washi ' +
-                                        projectToneClass(p.project_id)
-                                      }
-                                    >
-                                      {p.name}
-                                    </small>
-                                  ))}
-                                {entry.tags
-                                  ?.filter((t) => active(t.decision))
-                                  .map((t) => (
-                                    <small key={t.tag_id}># {t.path}</small>
-                                  ))}
-                              </span>
-                            </button>
+                              entry={entry}
+                              req={req}
+                              onOpen={() => open(entry.id)}
+                            />
                           ))}
                         </div>
                       </section>
