@@ -284,18 +284,37 @@ footer {
 .detail p {
   color: var(--sp-fg-soft);
 }
-.pair small,
-.code {
-  display: block;
-  margin-top: 8px;
+.login-form {
+  margin: 0 auto;
+  width: min(100%, 420px);
+  display: grid;
+  gap: 12px;
+  padding: 18px 22px;
 }
-.code {
-  letter-spacing: 0.08em;
-  font: 600 28px var(--sp-font-mono);
-  padding: 8px 14px;
-  border-radius: 12px;
-  background: var(--sp-accent);
-  color: var(--sp-accent-fg);
+.login-form h1 {
+  margin: 0;
+  font-size: var(--sp-text-title);
+}
+.login-form label {
+  display: grid;
+  gap: 4px;
+  font-weight: 600;
+}
+.login-form input {
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-xs);
+  background: var(--sp-surface-muted);
+}
+.login-form .primary {
+  min-height: 36px;
+}
+.login-hint {
+  margin: 0;
+  color: var(--sp-fg-soft);
+  font-size: var(--sp-text-sm);
 }
 h1,
 h2,
@@ -318,7 +337,7 @@ h2 {
   height: 100vh;
   place-items: center;
 }
-.pair-page .pair,
+.pair-page .login-form,
 .confirmation {
   background: var(--sp-surface);
   border: 1px solid var(--sp-border);

@@ -21,12 +21,6 @@ export const phase: Record<Phase, string> = {
 export type State = {
   session: Session;
   counts: Partial<Record<Phase, number>>;
-  pair: {
-    status: string;
-    short_code: string;
-    expires_at: string;
-    message: string;
-  };
   origin: string;
   palette: string;
   mode: string;

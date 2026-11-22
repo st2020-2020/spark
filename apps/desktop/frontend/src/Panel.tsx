@@ -21,10 +21,12 @@ import {
   type State,
   type Outbox,
 } from './bridge';
-import { Notice, Tool } from './shared';
+import { Login, Notice, Tool } from './shared';
 import { Search } from './Search';
 
 export function Panel({ req, state }: { req: Request; state: State }) {
+  const [loginOpen, setLoginOpen] = useState(false);
+  const signingIn = loginOpen && !!state.session.expired;
   const [text, write] = useState(''),
     [intent, purpose] = useState(''),
     [showIntent, expand] = useState(false),
@@ -235,6 +237,10 @@ export function Panel({ req, state }: { req: Request; state: State }) {
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing || e.keyCode === 229 || ime.current)
           return;
+        if (signingIn) {
+          if (e.key === 'Escape') setLoginOpen(false);
+          return;
+        }
         if (e.metaKey && e.key.toLowerCase() === 'k') {
           e.preventDefault();
           search ? leaveSearch() : find(true);
@@ -270,7 +276,20 @@ export function Panel({ req, state }: { req: Request; state: State }) {
         }
       }}
     >
-      {search ? (
+      {signingIn ? (
+        <>
+          <Login
+            state={state}
+            onSuccess={() => {
+              setLoginOpen(false);
+              requestAnimationFrame(() => editor.current?.focus());
+            }}
+          />
+          <button className="sub" onClick={() => setLoginOpen(false)}>
+            返回随手记
+          </button>
+        </>
+      ) : search ? (
         <Search req={req} back={leaveSearch} />
       ) : (
         <div
@@ -470,9 +489,12 @@ export function Panel({ req, state }: { req: Request; state: State }) {
               本机已收下 · 查看刚才的记录 <ArrowUpRight />
             </button>
           )}
-          {((state.counts.local_saved || 0) + (state.counts.syncing || 0) > 0 || state.counts.needs_review) ? (
+          {(state.counts.local_saved || 0) + (state.counts.syncing || 0) > 0 ||
+          state.counts.needs_review ? (
             <button className="sub" onClick={() => req('window/main', 'POST')}>
-              {state.counts.needs_review ? `${state.counts.needs_review} 条需要核对` : `本机待同步 ${(state.counts.local_saved || 0) + (state.counts.syncing || 0)} 条`}
+              {state.counts.needs_review
+                ? `${state.counts.needs_review} 条需要核对`
+                : `本机待同步 ${(state.counts.local_saved || 0) + (state.counts.syncing || 0)} 条`}
               <span>打开手帐 ⌘O</span>
             </button>
           ) : null}
@@ -485,12 +507,7 @@ export function Panel({ req, state }: { req: Request; state: State }) {
           {state.session.expired && (
             <div className="sub">
               同步已暂停{' '}
-              <button onClick={() => req('pair/start', 'POST')}>
-                重新配对
-              </button>
-              {state.pair.status === 'pending' && (
-                <b>{state.pair.short_code}</b>
-              )}
+              <button onClick={() => setLoginOpen(true)}>重新登录</button>
             </div>
           )}
           {drag && (

@@ -113,7 +113,7 @@ func newIdempotencyKey(prefix string) (string, error) {
 // Returns an OutboxItem in state "local_saved" immediately once persisted on disk.
 func (s *Store) EnqueueCapture(in EnqueueInput, now time.Time) (OutboxItem, error) {
 	if !filepath.IsLocal(in.AccountID) || filepath.Base(in.AccountID) != in.AccountID || in.AccountID == "." {
-		return OutboxItem{}, errors.New("未连接 Spark 账号，请先在浏览器完成配对。")
+		return OutboxItem{}, errors.New("请先登录 Spark 账号。")
 	}
 
 	rawURL := strings.TrimSpace(in.OriginalURL)

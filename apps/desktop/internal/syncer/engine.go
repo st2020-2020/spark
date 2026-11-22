@@ -100,19 +100,23 @@ func (e *Engine) Run(ctx context.Context) {
 	if sess, err := e.creds.Load(); err == nil && sess.AccountID != "" {
 		_ = e.store.ResetInterruptedSyncing(sess.AccountID, e.now())
 	}
-	e.SyncOnce(ctx)
-
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
-
+	var lastToken string
 	for {
+		// A renewed token must resume only its own account, after any previous
+		// in-flight request has finished pausing the old device's queue.
+		if s, err := e.creds.Load(); err == nil && s.Token != lastToken && s.Public(e.now()).Connected {
+			if err = e.store.ResumeAuthPaused(s.AccountID, e.now()); err == nil {
+				lastToken = s.Token
+			}
+		}
+		e.SyncOnce(ctx)
 		select {
 		case <-ctx.Done():
 			return
 		case <-e.wakeCh:
-			e.SyncOnce(ctx)
 		case <-ticker.C:
-			e.SyncOnce(ctx)
 		}
 	}
 }
@@ -129,7 +133,7 @@ func (e *Engine) SyncOnce(ctx context.Context) {
 	}
 	now := e.now()
 	if !sess.ExpiresAt.IsZero() && !sess.ExpiresAt.After(now) {
-		_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已到期，请重新配对后再同步。", now)
+		_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已到期，请重新登录后再同步。", now)
 		e.notifyChange()
 		return
 	}
@@ -167,12 +171,12 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 	}
 	now := e.now()
 	if !sess.ExpiresAt.IsZero() && !sess.ExpiresAt.After(now) {
-		return &api.APIError{Status: http.StatusUnauthorized, Code: "desktop_session_expired", Message: "桌面会话已到期，请重新配对。"}
+		return &api.APIError{Status: http.StatusUnauthorized, Code: "desktop_session_expired", Message: "桌面会话已到期，请重新登录。"}
 	}
 
 	if page, err := e.client.ListCollections(ctx, sess.Token, "active", "", "", "", 50); err != nil {
 		if isUnauthorized(err) {
-			_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新配对。", now)
+			_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 			e.notifyChange()
 		}
 		return err
@@ -290,7 +294,7 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 			return false
 		}
 		if isUnauthorized(err) {
-			_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新配对。", e.now())
+			_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", e.now())
 			return true
 		}
 		if ae, ok := api.AsAPIError(err); ok {
@@ -322,7 +326,7 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 	}
 
 	if isUnauthorized(err) {
-		_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，已暂停上传，请重新配对。", e.now())
+		_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，已暂停上传，请重新登录。", e.now())
 		return true
 	}
 
@@ -398,7 +402,7 @@ func (e *Engine) ensureAttachmentReady(
 		up, err := e.client.GetUpload(ctx, sess.Token, att.UploadID)
 		if err != nil {
 			if isUnauthorized(err) {
-				_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新配对。", now)
+				_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 				return "", true, 0, nil
 			}
 			if isTransientError(err) {
@@ -460,7 +464,7 @@ func (e *Engine) ensureAttachmentReady(
 			})
 			if err != nil {
 				if isUnauthorized(err) {
-					_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新配对。", now)
+					_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 					return "", true, 0, nil
 				}
 				if ae, ok := api.AsAPIError(err); ok {
@@ -532,7 +536,7 @@ func (e *Engine) ensureAttachmentReady(
 		up, err := e.client.CompleteUpload(ctx, sess.Token, att.UploadID)
 		if err != nil {
 			if isUnauthorized(err) {
-				_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新配对。", now)
+				_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 				return "", true, 0, nil
 			}
 			if ae, ok := api.AsAPIError(err); ok && ae.Status == http.StatusConflict && ae.Code == "upload_not_pending" {

@@ -196,9 +196,12 @@ func parseAPIError(status int, headers http.Header, raw []byte) *APIError {
 
 // --- Desktop Pairing & Session ---
 
-func (c *Client) ExchangeDesktopToken(ctx context.Context, verifier string) (DesktopTokenResult, error) {
+func (c *Client) Login(ctx context.Context, input LoginRequest) (DesktopTokenResult, error) {
 	var out DesktopTokenResult
-	_, _, err := c.doJSON(ctx, http.MethodPost, "/desktop/token", "", "", DesktopTokenExchange{Verifier: verifier}, &out)
+	status, _, err := c.doJSON(ctx, http.MethodPost, "/desktop/login", "", "", input, &out)
+	if status >= 200 && status < 300 && (status != 200 || err != nil || out.Token == "") {
+		return DesktopTokenResult{}, &APIError{Status: 502, Code: "invalid_login_response"}
+	}
 	return out, err
 }
 

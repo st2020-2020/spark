@@ -23,7 +23,7 @@ import {
   type State,
   type Summary,
 } from './bridge';
-import { ImageView, Jar, Notice, Pair, Preview, Tool } from './shared';
+import { ImageView, Jar, Notice, Login, Preview, Tool } from './shared';
 import { useSearch } from './Search';
 type Props = { state: State; req: Request; refresh: () => void };
 export function Book({ state, req, refresh }: Props) {
@@ -263,7 +263,7 @@ export function Book({ state, req, refresh }: Props) {
         </Tool>
         <button className="chip" onClick={() => nav('settings')}>
           {state.session.expired
-            ? '重新配对'
+            ? '重新登录'
             : offline
               ? '离线模式'
               : count
@@ -363,7 +363,7 @@ export function Book({ state, req, refresh }: Props) {
                 </strong>
                 <p>
                   {confirm === 'disconnect'
-                    ? `当前账号有 ${count} 条待处理记录。原稿保留在本机，重新配对此账号后可继续同步。`
+                    ? `当前账号有 ${count} 条待处理记录。原稿保留在本机，重新登录此账号后可继续同步。`
                     : '本机原文和暂存图片会一并删除。'}
                 </p>
                 <button autoFocus onClick={() => ask('')}>
@@ -433,7 +433,13 @@ export function Book({ state, req, refresh }: Props) {
                     ).toLocaleDateString('zh-CN')}
                   </small>
                   {state.session.expired && (
-                    <Pair state={state} refresh={refresh} />
+                    <Login
+                      state={state}
+                      onSuccess={() => {
+                        refresh();
+                        void req('window/panel', 'POST');
+                      }}
+                    />
                   )}
                   <button onClick={() => ask('disconnect')}>断开此设备</button>
                 </section>

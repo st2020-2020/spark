@@ -1,10 +1,12 @@
 import {
   useEffect,
   useState,
+  useRef,
+  type FormEvent,
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { BookOpen, Link2, LoaderCircle, RotateCw } from 'lucide-react';
+import { BookOpen, RotateCw } from 'lucide-react';
 import {
   bridge,
   message,
@@ -61,61 +63,105 @@ export function Tool({
     </button>
   );
 }
-export function Pair({
+export function Login({
   state,
-  refresh,
+  onSuccess,
+  panel = false,
 }: {
   state: State;
-  refresh: () => void;
+  onSuccess: () => void;
+  panel?: boolean;
 }) {
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
-  const pending = state.pair.status === 'pending';
-  async function start() {
+  const form = useRef<HTMLFormElement>(null);
+  const password = useRef<HTMLInputElement>(null);
+  const pending = useRef(false);
+
+  useEffect(() => {
+    if (!panel || !form.current) return;
+    const element = form.current;
+    const observer = new ResizeObserver(() => {
+      const height = Math.ceil(element.getBoundingClientRect().height) + 2;
+      void bridge()('window/resize?height=' + height, 'POST').catch(() => {});
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [panel]);
+
+  async function submit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (pending.current || !password.current) return;
+    pending.current = true;
     setBusy(true);
     setError('');
+    const email = (
+      e.currentTarget.elements.namedItem('email') as HTMLInputElement
+    ).value.trim();
+    const request = bridge(state.session.account_id)('session/login', 'POST', {
+      email,
+      password: password.current.value,
+    });
+    password.current.value = '';
     try {
-      await bridge()('pair/start', 'POST');
-      refresh();
+      await request;
+      onSuccess();
     } catch (e) {
       setError(message(e));
+      requestAnimationFrame(() => password.current?.focus());
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   }
+
   return (
-    <section className="pair">
+    <form
+      className="login-form"
+      ref={form}
+      onSubmit={submit}
+      autoComplete="off"
+      aria-label="Spark 账号登录"
+    >
       <div className="brand">
-        <Jar /> Spark
+        <Jar />
+        <h1>{state.session.expired ? '重新登录 Spark' : '登录 Spark'}</h1>
       </div>
-      <h1>连接你的 Spark 空间</h1>
-      <p>在系统浏览器中确认账号，这台 Mac 就能收下笔记，再同步到你的手帐。</p>
-      {pending ? (
-        <>
-          <output className="code">{state.pair.short_code}</output>
-          <p>
-            请核对浏览器中的比对码，区分大小写。有效至{' '}
-            {new Date(state.pair.expires_at).toLocaleTimeString('zh-CN', {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-            。
-          </p>
-        </>
-      ) : null}
-      <button className="primary" disabled={busy} onClick={start}>
-        {busy ? <LoaderCircle /> : <Link2 />}
-        {pending ? '重新打开配对页' : '在浏览器中连接'}
+      {state.session.expired && (
+        <p className="login-hint">
+          会话已到期。本机记录已保留，登录原账号后继续同步。
+        </p>
+      )}
+      <label>
+        邮箱
+        <input
+          type="email"
+          name="email"
+          required
+          autoFocus
+          defaultValue={state.session.account_label || ''}
+          autoCapitalize="none"
+          spellCheck={false}
+          autoComplete="off"
+          disabled={busy}
+        />
+      </label>
+      <label>
+        密码
+        <input
+          ref={password}
+          type="password"
+          name="password"
+          required
+          autoComplete="off"
+          disabled={busy}
+        />
+      </label>
+      <Notice text={error} />
+      <button className="primary" type="submit" disabled={busy}>
+        {busy ? '正在登录…' : '登录'}
       </button>
-      <small>{state.origin}</small>
-      <Notice
-        text={
-          error ||
-          state.pair.message ||
-          (state.pair.status === 'expired' ? '比对码已过期，请重新连接。' : '')
-        }
-      />
-    </section>
+    </form>
   );
 }
 export function Notice({ text }: { text?: string }) {
@@ -220,7 +266,9 @@ export function Preview({ req, id }: { req: Request; id: string }) {
       {col?.organization?.summary && (
         <p>整理摘要 · {col.organization.summary}</p>
       )}
-      {col?.image_notes?.map((n, i) => <p key={i}>{n.text}</p>)}
+      {col?.image_notes?.map((n, i) => (
+        <p key={i}>{n.text}</p>
+      ))}
       {item && <Notice text={item.last_error_message} />}
       {col && (
         <button

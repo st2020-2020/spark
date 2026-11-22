@@ -2,12 +2,11 @@ package api
 
 import "time"
 
-// DesktopTokenExchange matches POST /api/v1/desktop/token request body.
-type DesktopTokenExchange struct {
-	Verifier string `json:"verifier"`
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
-// DesktopTokenResult matches POST /api/v1/desktop/token 200 response.
 type DesktopTokenResult struct {
 	Token        string    `json:"token"`
 	AccountID    string    `json:"account_id"`

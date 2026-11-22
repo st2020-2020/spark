@@ -1,13 +1,15 @@
 package gui
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"spark/apps/desktop/internal/api"
@@ -21,7 +23,6 @@ import (
 // account displayed when the gesture started so a stale window cannot write to a new account.
 type Host struct {
 	Rebind       func(string, string) error
-	Context      context.Context
 	Store        *store.Store
 	Sessions     *auth.Sessions
 	API          *api.Client
@@ -31,15 +32,7 @@ type Host struct {
 	Action       func(string, string) error
 	OpenURL      func(string) error
 	Change       func()
-	pairMu       sync.Mutex
-	pairing      pairStatus
-	pairCancel   context.CancelFunc
-}
-type pairStatus struct {
-	Status  string    `json:"status"`
-	Code    string    `json:"short_code,omitempty"`
-	Expires time.Time `json:"expires_at,omitempty"`
-	Message string    `json:"message,omitempty"`
+	sessionMu    sync.Mutex
 }
 type response map[string]any
 type handler func(http.ResponseWriter, *http.Request) (any, error)
@@ -101,12 +94,9 @@ func (h *Host) Handler() http.Handler {
 		if err != nil {
 			return nil, err
 		}
-		h.pairMu.Lock()
-		pair := h.pairing
-		h.pairMu.Unlock()
-		return response{"session": sess.Public(time.Now()), "counts": counts, "pair": pair, "origin": h.API.BaseURL(), "palette": h.Store.GetPref("palette", "mint"), "mode": h.Store.GetPref("mode", "system"), "capture_key": h.Store.GetPref("capture_key", "Option+Space"), "screenshot_key": h.Store.GetPref("screenshot_key", "Option+Shift+4")}, nil
+		return response{"session": sess.Public(time.Now()), "counts": counts, "origin": h.API.BaseURL(), "palette": h.Store.GetPref("palette", "mint"), "mode": h.Store.GetPref("mode", "system"), "capture_key": h.Store.GetPref("capture_key", "Option+Space"), "screenshot_key": h.Store.GetPref("screenshot_key", "Option+Shift+4")}, nil
 	})
-	route("POST /local/pair/start", h.startPair)
+	route("POST /local/session/login", h.login)
 	accountRoute := func(pattern string, fn func(auth.StoredSession, *http.Request) (any, error)) {
 		route(pattern, func(_ http.ResponseWriter, r *http.Request) (any, error) {
 			s, err := h.Sessions.Load()
@@ -117,21 +107,17 @@ func (h *Host) Handler() http.Handler {
 		})
 	}
 	accountRoute("POST /local/session/disconnect", func(s auth.StoredSession, r *http.Request) (any, error) {
-		h.pairMu.Lock()
-		defer h.pairMu.Unlock()
+		h.sessionMu.Lock()
+		defer h.sessionMu.Unlock()
 		current, err := h.Sessions.Load()
 		if err != nil || current.Token != s.Token {
-			return nil, problem{409, "配对状态已变化"}
+			return nil, problem{409, "登录状态已变化"}
 		}
 		if err := h.API.RevokeDesktopSession(r.Context(), s.Token); err != nil {
 			if ae, ok := api.AsAPIError(err); !ok || ae.Status != 401 {
 				return nil, err
 			}
 		}
-		if h.pairCancel != nil {
-			h.pairCancel()
-		}
-		h.pairing = pairStatus{}
 		err = h.Sessions.Clear()
 		h.Change()
 		return nil, err
@@ -369,78 +355,63 @@ func (h *Host) Capture(in store.EnqueueInput) (store.OutboxItem, error) {
 	}
 	return item, err
 }
-func (h *Host) startPair(_ http.ResponseWriter, r *http.Request) (any, error) {
-	h.pairMu.Lock()
-	defer h.pairMu.Unlock()
-	s, _ := h.Sessions.Load()
-	if s.Public(time.Now()).Connected {
-		return nil, problem{409, "此设备已连接"}
+
+// login accepts credentials only from the bundled UI. Never relay raw upstream errors to it.
+func (h *Host) login(w http.ResponseWriter, r *http.Request) (any, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<10)
+	var input api.LoginRequest
+	if err := decode(r, &input); err != nil {
+		return nil, problem{422, "请输入有效的邮箱和密码。"}
 	}
-	pair, err := auth.NewPairRequest(time.Now())
+	input.Email = strings.TrimSpace(input.Email)
+	if input.Email == "" || input.Password == "" || utf8.RuneCountInString(input.Password) > 128 {
+		return nil, problem{422, "请输入有效的邮箱和密码。"}
+	}
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	current, _ := h.Sessions.Load()
+	if current.Public(time.Now()).Connected || r.Header.Get("X-Spark-Account") != current.AccountID {
+		return nil, problem{409, "账号状态已变化，请重新打开随手记。"}
+	}
+	v, err := h.API.Login(r.Context(), input)
 	if err != nil {
-		return nil, err
+		return nil, loginProblem(err)
 	}
-	u, err := auth.BuildPairURL(h.API.BaseURL(), pair.Challenge)
-	if err != nil {
-		return nil, err
+	if !auth.IsValidSecret(v.Token) || uuid.Validate(v.AccountID) != nil || !v.ExpiresAt.After(time.Now()) {
+		return nil, problem{502, "服务端没有返回有效的桌面会话。"}
 	}
-	if err = h.OpenURL(u); err != nil {
-		return nil, err
+	if err := h.Sessions.Save(auth.StoredSession{Token: v.Token, AccountID: v.AccountID, AccountLabel: v.AccountLabel, ExpiresAt: v.ExpiresAt}); err != nil {
+		_ = h.API.RevokeDesktopSession(r.Context(), v.Token)
+		return nil, problem{500, "无法保存到系统钥匙串，请解锁钥匙串后重试。"}
 	}
-	if h.pairCancel != nil {
-		h.pairCancel()
-	}
-	ctx, cancel := context.WithDeadline(h.Context, pair.ExpiresAt)
-	h.pairCancel = cancel
-	h.pairing = pairStatus{"pending", pair.ShortCode, pair.ExpiresAt, ""}
-	go h.pollPair(ctx, pair)
-	return h.pairing, nil
+	h.Clipboard.Observe(native.ClipboardCount(), time.Now())
+	h.Clipboard.Dismiss()
+	h.Engine.Trigger()
+	h.Change()
+	return nil, nil
 }
-func (h *Host) pollPair(ctx context.Context, p auth.PairRequest) {
-	timer := time.NewTicker(2 * time.Second)
-	defer timer.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			h.pairMu.Lock()
-			if h.pairing.Code == p.ShortCode && h.pairing.Status == "pending" {
-				h.pairing.Status = "expired"
-			}
-			h.pairMu.Unlock()
-			h.Change()
-			return
-		case <-timer.C:
+
+func loginProblem(err error) error {
+	ae, ok := api.AsAPIError(err)
+	if !ok {
+		return problem{503, "无法连接 Spark，请检查网络后重试。"}
+	}
+	switch ae.Status {
+	case 401:
+		if ae.Code == "session_expired" || ae.Code == "desktop_session_expired" {
+			return problem{503, "当前服务端尚未开放桌面登录，请在服务更新后重试。"}
 		}
-		v, err := h.API.ExchangeDesktopToken(ctx, p.Verifier)
-		if err != nil {
-			ae, ok := api.AsAPIError(err)
-			if !ok || ae.Status == 429 || ae.Status >= 500 || ae.Code == "desktop_grant_pending" {
-				continue
-			}
+		return problem{401, "邮箱或密码不正确。"}
+	case 422:
+		return problem{422, "请检查邮箱和密码的格式。"}
+	case 404, 405, 501:
+		return problem{503, "当前服务端尚未开放桌面登录，请在服务更新后重试。"}
+	case 429:
+		if ae.RetryAfter > 0 {
+			return problem{429, fmt.Sprintf("登录请求过于频繁，请在 %d 秒后重试。", int(ae.RetryAfter.Seconds()))}
 		}
-		h.pairMu.Lock()
-		if ctx.Err() != nil || h.pairing.Code != p.ShortCode {
-			h.pairMu.Unlock()
-			return
-		}
-		if err == nil {
-			if !auth.IsValidSecret(v.Token) || uuid.Validate(v.AccountID) != nil || !v.ExpiresAt.After(time.Now()) {
-				err = errors.New("无效的设备会话")
-			} else {
-				err = h.Sessions.Save(auth.StoredSession{Token: v.Token, AccountID: v.AccountID, AccountLabel: v.AccountLabel, ExpiresAt: v.ExpiresAt})
-				if err == nil {
-					err = h.Store.ResumeAuthPaused(v.AccountID, time.Now())
-					h.Engine.Trigger()
-				}
-			}
-		}
-		if err != nil {
-			h.pairing = pairStatus{Status: "invalid", Message: "配对未完成，请重新连接。"}
-		} else {
-			h.pairing = pairStatus{Status: "connected"}
-		}
-		h.pairMu.Unlock()
-		h.Change()
-		return
+		return problem{429, "登录请求过于频繁，请稍后重试。"}
+	default:
+		return problem{502, "Spark 暂时无法完成登录，请稍后重试。"}
 	}
 }

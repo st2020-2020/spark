@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { bridge, message, type State } from './bridge';
-import { Notice, Pair } from './shared';
+import { Notice, Login } from './shared';
 import { Panel } from './Panel';
 import { Book } from './Book';
 import '../../../web/src/styles/tokens.css';
@@ -35,11 +35,6 @@ function App() {
       window.removeEventListener('focus', refresh);
     };
   }, []);
-  useEffect(() => {
-    if (state?.pair.status !== 'pending') return;
-    const t = setInterval(refresh, 2000);
-    return () => clearInterval(t);
-  }, [state?.pair.status]);
   useEffect(() => {
     const scheme = matchMedia('(prefers-color-scheme: dark)');
     function paint() {
@@ -81,7 +76,14 @@ function App() {
           if (!book && e.key === 'Escape') void req('window/hide', 'POST');
         }}
       >
-        <Pair state={state} refresh={refresh} />
+        <Login
+          state={state}
+          panel={!book}
+          onSuccess={() => {
+            refresh();
+            if (book) void req('window/panel', 'POST');
+          }}
+        />
       </section>
     );
   return book ? (

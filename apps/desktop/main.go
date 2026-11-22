@@ -70,7 +70,7 @@ func run() error {
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
 	engine := syncer.New(db, sessions, client)
-	host := &gui.Host{Context: ctx, Store: db, API: client, Engine: engine, Sessions: sessions, Clipboard: native.NewClipboardTracker(), OpenURL: native.OpenSystemBrowser}
+	host := &gui.Host{Store: db, API: client, Engine: engine, Sessions: sessions, Clipboard: native.NewClipboardTracker(), OpenURL: native.OpenSystemBrowser}
 	static, err := fs.Sub(frontend, "frontend/dist")
 	if err != nil {
 		return err
