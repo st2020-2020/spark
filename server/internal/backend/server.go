@@ -114,6 +114,7 @@ func (s *Server) Router() *gin.Engine {
 	auth.POST("/login", s.handle(s.login))
 	auth.POST("/password-reset", s.handle(s.resetPassword))
 	api.POST("/extension/token", s.handle(s.exchangeExtensionGrant))
+	api.POST("/desktop/login", s.handle(s.loginDesktop))
 	api.POST("/desktop/token", s.handle(s.exchangeDesktopGrant))
 	extension := api.Group("/extension")
 	extension.Use(s.authenticateExtension)

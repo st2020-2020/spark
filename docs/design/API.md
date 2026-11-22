@@ -69,9 +69,10 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 
 | 入口 | 鉴权与响应 |
 | --- | --- |
+| `POST /desktop/login` | 使用 `LoginRequest`（`{email,password}`）直接登录，200 返回 `DesktopTokenResult`（`{token,account_id,account_label,expires_at}`）。与 Web 登录共用身份校验和限流，凭据不正确或账号不可用返回 `401 authentication_failed`，触发限流返回 429 和 `Retry-After`。响应不设置 Cookie。 |
 | `POST /desktop/grants` | Web Cookie、同源与 CSRF。在展示账号后提交 `{challenge,expected_account_id}`，成功 204。批准 5 分钟内有效，同一 Web 会话的重复批准不延长有效期。账号变化和已用或失效的批准分别返回 `409 desktop_account_changed` 和 `409 desktop_grant_conflict`。 |
 | `POST /desktop/token` | 请求体为 `{verifier}`，使用一次性证明。200 返回 `{token,account_id,account_label,expires_at}`。待批准返回 `404 desktop_grant_pending`，已用、过期或批准会话撤销返回 `401 desktop_grant_invalid`。 |
-| `GET /desktop/session`、`DELETE /desktop/session` | 桌面 Bearer。查询仅回本人账号 ID、账号标签和到期时间，删除返回 204。令牌绝对有效期 30 天，查询和使用均不续期，过期后重新配对。 |
+| `GET /desktop/session`、`DELETE /desktop/session` | 桌面 Bearer。查询仅回本人账号 ID、账号标签和到期时间，删除返回 204。令牌签发后 30 天绝对到期，查询和使用均不续期，过期后须重新登录或配对。 |
 | `GET /sessions`、`DELETE /sessions/{id}` | Web 继续用原接口查看和撤销单个设备。会话列表通过 `kind` 区别 `web`、`extension` 与 `desktop`。 |
 
 桌面 Bearer 可使用下列方法与原业务路径，保留同一请求结构、响应、归属检查和幂等作用域。
@@ -83,7 +84,7 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 | POST | `/uploads`、`/uploads/{id}/complete` |
 | GET | `/uploads/{id}`、`/attachments/{id}/download`、`/attachments/{id}/thumbnail` |
 
-成功认证的桌面请求按上表通过，Web 请求继续校验 Cookie、来源和 CSRF。混用 Cookie 与 Authorization 返回 `400 mixed_credentials`，无效或已撤销的桌面令牌返回 `401 desktop_session_expired`。桌面令牌访问其他私有业务操作返回 `403 desktop_scope_forbidden`。桌面兑换仅使用一次性证明，附带单独的 Cookie 或 Authorization 返回 `400 unexpected_credentials`。签名对象 URL 承载独立的短时对象授权，桌面向对象地址发送字节时仅附上传响应规定的头。
+成功认证的桌面请求按上表通过，Web 请求继续校验 Cookie、来源和 CSRF。混用 Cookie 与 Authorization 返回 `400 mixed_credentials`，无效或已撤销的桌面令牌返回 `401 desktop_session_expired`。桌面令牌访问其他私有业务操作返回 `403 desktop_scope_forbidden`。桌面直登和配对兑换只从请求体读取凭据，附带单独的 Cookie 或 Authorization 返回 `400 unexpected_credentials`。签名对象 URL 承载独立的短时对象授权，桌面向对象地址发送字节时仅附上传响应规定的头。
 
 ## 幂等与版本
 

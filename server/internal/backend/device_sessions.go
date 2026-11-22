@@ -19,6 +19,7 @@ const (
 	desktopSessionKind   = "desktop"
 	extensionSessionTTL  = 7 * 24 * time.Hour
 	desktopSessionTTL    = 30 * 24 * time.Hour
+	desktopDeviceLabel   = "Spark macOS 桌面端"
 )
 
 var (
@@ -155,13 +156,31 @@ func (s *Server) exchangeExtensionGrant(c *gin.Context) (any, error) {
 	return s.exchangeDeviceGrant(c, extensionSessionKind)
 }
 
-func (s *Server) exchangeDesktopGrant(c *gin.Context) (any, error) {
+func requireDesktopBodyCredentials(c *gin.Context) error {
 	authorization, cookie := hasRequestHeader(c, "Authorization"), hasRequestHeader(c, "Cookie")
 	if authorization && cookie {
-		return nil, mixedCredentials
+		return mixedCredentials
 	}
 	if authorization || cookie {
-		return nil, problem(400, "unexpected_credentials", "兑换只接受一次性证明。")
+		return problem(400, "unexpected_credentials", "请仅通过请求体提交凭据。")
+	}
+	return nil
+}
+
+func (s *Server) loginDesktop(c *gin.Context) (any, error) {
+	if err := requireDesktopBodyCredentials(c); err != nil {
+		return nil, err
+	}
+	session, err := s.loginWithPassword(c, desktopSessionKind)
+	if err != nil {
+		return nil, err
+	}
+	return deviceTokenResponse(session), nil
+}
+
+func (s *Server) exchangeDesktopGrant(c *gin.Context) (any, error) {
+	if err := requireDesktopBodyCredentials(c); err != nil {
+		return nil, err
 	}
 	return s.exchangeDeviceGrant(c, desktopSessionKind)
 }
@@ -189,19 +208,18 @@ func (s *Server) exchangeDeviceGrant(c *gin.Context, kind string) (any, error) {
 	challenge := digest(proof)
 	invalid := problem(401, kind+"_grant_invalid", "配对已失效，请重新发起连接。")
 
-	session := &signedIn{Kind: kind}
+	var session *signedIn
 	err = pgx.BeginFunc(ctx, s.Pool, func(tx pgx.Tx) error {
-		var sessionID string
+		var uid, sessionID string
 		err := tx.QueryRow(ctx, `SELECT user_id,web_session_id FROM device_grants WHERE kind=$1 AND challenge=$2`,
-			kind, challenge).Scan(&session.User.ID, &sessionID)
+			kind, challenge).Scan(&uid, &sessionID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return problem(404, kind+"_grant_pending", "尚未收到网页确认。")
 		}
 		if err != nil {
 			return err
 		}
-		uid := session.User.ID
-		session.User.Email, err = lockDevicePrincipal(ctx, tx, uid, sessionID, "web")
+		email, err := lockDevicePrincipal(ctx, tx, uid, sessionID, "web")
 		if errors.Is(err, pgx.ErrNoRows) {
 			return invalid
 		}
@@ -224,20 +242,34 @@ func (s *Server) exchangeDeviceGrant(c *gin.Context, kind string) (any, error) {
 		case "edge":
 			label = "Spark 浏览器扩展 (Edge)"
 		case "macos":
-			label = "Spark macOS 桌面端"
+			label = desktopDeviceLabel
 		}
-		session.Token = randomToken()
-		session.Expires = time.Now().UTC().Truncate(time.Microsecond).Add(ttl)
-		_, err = tx.Exec(ctx, `INSERT INTO sessions(id,user_id,token_digest,expires_at,device_label,kind)
-			VALUES($1,$2,$3,$4,$5,$6)`, uuid.New(), uid, digest(session.Token), session.Expires, label, kind)
+		session, err = newDeviceSession(ctx, tx, userView{ID: uid, Email: email}, kind, label, ttl)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	return deviceTokenResponse(session), nil
+}
+
+func newDeviceSession(ctx context.Context, tx pgx.Tx, user userView, kind, label string, ttl time.Duration) (*signedIn, error) {
+	session := &signedIn{
+		ID: uuid.NewString(), User: user, Kind: kind, Token: randomToken(),
+		Expires: time.Now().UTC().Truncate(time.Microsecond).Add(ttl),
+	}
+	_, err := tx.Exec(ctx, `INSERT INTO sessions(id,user_id,token_digest,expires_at,device_label,kind)
+		VALUES($1,$2,$3,$4,$5,$6)`, session.ID, user.ID, digest(session.Token), session.Expires, label, kind)
+	if err != nil {
+		return nil, err
+	}
+	return session, nil
+}
+
+func deviceTokenResponse(session *signedIn) gin.H {
 	result := deviceSessionResponse(session)
 	result["token"] = session.Token
-	return result, nil
+	return result
 }
 
 func deviceSessionResponse(session *signedIn) gin.H {

@@ -4739,6 +4739,97 @@
         }
       }
     },
+    "/desktop/login": {
+      "post": {
+        "operationId": "loginDesktop",
+        "summary": "在 macOS 桌面端使用邮箱和密码登录",
+        "description": "沿用 Web 登录的身份校验、失败策略和限流。只返回 30 天桌面会话。请求仅以 JSON 正文传递登录凭据。",
+        "tags": [
+          "desktop"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "登录成功，返回独立的桌面会话。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopTokenResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "mixed_credentials 或 unexpected_credentials：客户端须使用请求体凭据。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "authentication_failed：邮箱或密码不正确。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：请求未通过字段校验。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited：登录尝试过多或校验繁忙。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "建议等待的秒数。"
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        }
+      }
+    },
     "/desktop/grants": {
       "post": {
         "operationId": "approveDesktopGrant",
