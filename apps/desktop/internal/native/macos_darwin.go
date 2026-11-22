@@ -14,16 +14,18 @@ void sparkCopyText(const char*);
 void sparkAttachTrayDrop(void);
 void sparkTrayState(int);
 int sparkCopyImage(void *,size_t);
-int sparkScreenAllowed(void);
+int sparkRequestScreenAccess(void);
 int sparkClipboardCount(void);
 void sparkPositionPanel(void *);
 */
 import "C"
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -162,9 +164,6 @@ func CopyTextToClipboard(text string) {
 // CaptureInteractiveScreenshot invokes macOS native region screencapture (-i -x).
 // Returns (nil, nil) if the user cancels with Escape.
 func CaptureInteractiveScreenshot(ctx context.Context) ([]byte, error) {
-	if C.sparkScreenAllowed() == 0 {
-		return nil, errors.New("需要开启系统“屏幕录制”权限才能使用选区截屏。")
-	}
 	tmpDir, err := os.MkdirTemp("", "spark-shot-*")
 	if err != nil {
 		return nil, err
@@ -173,29 +172,52 @@ func CaptureInteractiveScreenshot(ctx context.Context) ([]byte, error) {
 
 	outPath := filepath.Join(tmpDir, "screenshot.png")
 	cmd := exec.CommandContext(ctx, "/usr/sbin/screencapture", "-i", "-x", "-t", "png", outPath)
-	if err := cmd.Run(); err != nil {
-		// Exit code 1 or missing file indicates user cancelled with Esc.
-		if _, statErr := os.Stat(outPath); os.IsNotExist(statErr) {
-			return nil, nil
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return interactiveScreenshotResult(outPath, runErr, stderr.String(), func() bool {
+		return C.sparkRequestScreenAccess() != 0
+	})
+}
+
+func interactiveScreenshotResult(path string, runErr error, stderr string, requestAccess func() bool) ([]byte, error) {
+	f, err := os.Open(path)
+	if err == nil {
+		defer f.Close()
+		data, err := io.ReadAll(io.LimitReader(f, api.MaxImageBytes+1))
+		if err != nil {
+			return nil, err
 		}
+		if len(data) > 0 || strings.TrimSpace(stderr) == "" {
+			mime, _, err := api.ValidateImageBytes(data, "screenshot.png")
+			if err != nil {
+				return nil, err
+			}
+			if mime != "image/png" {
+				return nil, errors.New("选区截图不是 PNG 图片，请重新截取。")
+			}
+			return data, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	f, err := os.Open(outPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+
+	// Escape can produce either a successful exit or exit status 1 with no
+	// output. A launch error or a signal is not an interactive cancellation.
+	var exitErr *exec.ExitError
+	if runErr != nil && (!errors.As(runErr, &exitErr) || exitErr.ExitCode() < 0) {
+		return nil, fmt.Errorf("无法运行系统截屏工具：%w", runErr)
 	}
-	if err != nil {
-		return nil, err
+	if detail := strings.TrimSpace(stderr); detail != "" {
+		if !requestAccess() {
+			return nil, errors.New("需要开启系统“屏幕录制”权限才能使用选区截屏。")
+		}
+		return nil, fmt.Errorf("系统截屏未完成：%s", detail)
 	}
-	defer f.Close()
-	data, err := io.ReadAll(io.LimitReader(f, api.MaxImageBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if _, _, err := api.ValidateImageBytes(data, "screenshot.png"); err != nil {
-		return nil, err
-	}
-	return data, nil
+	return nil, nil
 }
 
 // OpenSystemBrowser opens a validated URL in the user's default macOS browser.

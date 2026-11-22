@@ -245,7 +245,7 @@ void sparkPositionPanel(void *pointer) {
     }
 }
 
-int sparkScreenAllowed(void) {return CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess();}
+int sparkRequestScreenAccess(void) { return CGRequestScreenCaptureAccess(); }
 int sparkCopyImage(void *ptr, size_t length) {
  @autoreleasepool {
  NSImage *img = [[NSImage alloc] initWithData:[NSData dataWithBytes:ptr length:length]];

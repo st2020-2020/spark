@@ -187,10 +187,19 @@ export function Login({
     </form>
   );
 }
-export function Notice({ text, id }: { text?: string; id?: string }) {
+export function Notice({
+  text,
+  id,
+  children,
+}: {
+  text?: string;
+  id?: string;
+  children?: ReactNode;
+}) {
   return text ? (
     <p id={id} className="notice" role="status">
-      {text}
+      <span>{text}</span>
+      {children}
     </p>
   ) : null;
 }

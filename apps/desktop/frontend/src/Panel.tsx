@@ -82,6 +82,8 @@ export function Capture({
     editor = inline?.editor ?? panelEditor,
     picker = useRef<HTMLInputElement>(null),
     root = useRef<HTMLDivElement>(null),
+    requestedHeight = useRef(0),
+    resizeRequest = useRef(Promise.resolve()),
     reading = useRef(0),
     [importing, setImporting] = useState(false),
     pending = useRef(false),
@@ -177,20 +179,39 @@ export function Capture({
           Math.min(220, editor.current.scrollHeight) + 'px';
     }
   }, [text, search, expanded]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = root.current;
-    if (!floating || !el) return;
-    let height = 0;
-    const o = new ResizeObserver(() => {
-      const n = Math.ceil(el.getBoundingClientRect().height) + 8;
-      if (n !== height) {
-        height = n;
-        void req('window/resize?height=' + n, 'POST').catch(() => {});
-      }
-    });
-    o.observe(el);
-    return () => o.disconnect();
-  }, [req, floating]);
+    const wrapper = el?.parentElement;
+    if (!floating || !el || !wrapper) return;
+    const resize = () => {
+      const border = el.offsetHeight - el.clientHeight;
+      const cap = parseFloat(getComputedStyle(el).maxHeight);
+      const visible = el.getBoundingClientRect().height;
+      const content = Math.max(visible, el.scrollHeight + border);
+      const outerSpacing = wrapper.getBoundingClientRect().height - visible;
+      const height = Math.ceil(
+        Math.min(content, Number.isFinite(cap) ? cap : content) + outerSpacing,
+      );
+      if (!height || height === requestedHeight.current) return;
+      requestedHeight.current = height;
+      // While the panel reopens, a late compact size must not overwrite the error layout.
+      resizeRequest.current = resizeRequest.current.then(async () => {
+        if (height !== requestedHeight.current) return;
+        try {
+          await req('window/resize?height=' + height, 'POST');
+        } catch {
+          if (requestedHeight.current === height) requestedHeight.current = 0;
+        }
+      });
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(el);
+    if (err && el.scrollHeight > el.clientHeight) {
+      el.querySelector('.notice')?.scrollIntoView({ block: 'nearest' });
+    }
+    return () => observer.disconnect();
+  }, [req, floating, err]);
   useEffect(() => {
     if (!floating) return;
     let live = true;
@@ -226,10 +247,14 @@ export function Capture({
       const d = (evt as CustomEvent).detail;
       if (d.account === state.session.account_id) {
         find(false);
+        bad('');
         push([{ filename: d.filename, data_b64: d.data, mime: 'image/png' }]);
       }
     };
-    const error = (evt: Event) => bad((evt as CustomEvent).detail);
+    const error = (evt: Event) => {
+      find(false);
+      bad((evt as CustomEvent<string>).detail);
+    };
     show();
     const timer = setInterval(refresh, 1500);
     window.addEventListener('spark-show', show);
@@ -530,7 +555,12 @@ export function Capture({
               {floating && (
                 <Tool
                   label="选区截屏"
-                  onClick={() => req('window/screenshot', 'POST')}
+                  onClick={() => {
+                    bad('');
+                    void req('window/screenshot', 'POST').catch((e) =>
+                      bad(message(e)),
+                    );
+                  }}
                 >
                   <Camera />
                 </Tool>
@@ -608,12 +638,18 @@ export function Capture({
               </button>
             </div>
           )}
-          <Notice text={err} />
-          {err.includes('屏幕录制') && (
-            <button onClick={() => req('window/settings', 'POST')}>
-              前往系统设置
-            </button>
-          )}
+          <Notice text={err}>
+            {err.includes('屏幕录制') && (
+              <button
+                type="button"
+                onClick={() =>
+                  req('window/settings', 'POST').catch((e) => bad(message(e)))
+                }
+              >
+                前往系统设置
+              </button>
+            )}
+          </Notice>
           {floating && state.session.expired && (
             <div className="sub">
               同步已暂停{' '}

@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { Book } from '../src/Book';
@@ -261,4 +262,28 @@ it('手帐搜索按字面高亮，同时呈现已归类项目与本机待同步�
   fireEvent.click(screen.getByRole('button', { name: '清空搜索' }));
   expect(document.activeElement).toBe(input);
   expect(screen.getByRole('heading', { name: '收件箱' })).toBeTruthy();
+});
+
+it('截屏权限提示随浮窗扩高，提示内可以打开系统设置，重试后移除旧提示', async () => {
+  const req = host();
+  render(<Capture state={state} req={req as Request} />);
+  const camera = screen.getByRole('button', { name: '选区截屏' });
+  fireEvent.click(camera);
+  expect(req).toHaveBeenCalledWith('window/screenshot', 'POST');
+  const panel = camera.closest('.panel')!;
+  // jsdom has no layout. Model the taller content reported by WebKit after the event.
+  Object.defineProperty(panel, 'scrollHeight', { configurable: true, value: 252 });
+  fireEvent(window, new CustomEvent('spark-error', {
+    detail: '需要开启系统“屏幕录制”权限才能使用选区截屏。',
+  }));
+  const notice = await screen.findByRole('status');
+  expect(notice.textContent).toContain('屏幕录制');
+  expect(req).toHaveBeenCalledWith('window/resize?height=252', 'POST');
+  fireEvent.click(within(notice).getByRole('button', { name: '前往系统设置' }));
+  expect(req).toHaveBeenCalledWith('window/settings', 'POST');
+  fireEvent.click(camera);
+  expect(screen.queryByRole('status')).toBeNull();
+  fireEvent(window, new CustomEvent('spark-error', { detail: '系统截屏未完成' }));
+  expect((await screen.findByRole('status')).textContent).toBe('系统截屏未完成');
+  expect(screen.queryByRole('button', { name: '前往系统设置' })).toBeNull();
 });

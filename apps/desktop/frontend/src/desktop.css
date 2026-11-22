@@ -494,6 +494,29 @@ h2 {
   background: var(--sp-warning-bg);
   font-size: var(--sp-text-sm);
 }
+.capture-sheet > .notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 12px 12px;
+  padding: 9px 10px 9px 12px;
+  border-radius: var(--sp-radius-control);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.capture-sheet > .notice button {
+  flex: none;
+  min-height: 28px;
+  padding: 3px 9px;
+  color: inherit;
+  background: color-mix(in srgb, var(--sp-warning) 10%, transparent);
+  font-size: var(--sp-text-xs);
+  font-weight: 600;
+}
+.capture-sheet > .notice button:hover {
+  background: color-mix(in srgb, var(--sp-warning) 18%, transparent);
+}
 .book,
 .workspace {
   height: 100vh;
