@@ -70,6 +70,7 @@ export function CollectionComposer({
   const initialState = useMemo((): {
     draft: CollectionDraft;
     restored: boolean;
+    defaultProjectIds: string[];
     error?: string;
   } => {
     const loaded = loadDraft<CollectionDraft>(userId, draftScope);
@@ -77,17 +78,23 @@ export function CollectionComposer({
       !followUpSource ||
       !loaded.data?.followUpSourceId ||
       loaded.data.followUpSourceId === followUpSource.id;
-    if (loaded.data && matchesSource) {
-      return { draft: loaded.data, restored: true, error: loaded.error };
-    }
     const initialProjects = followUpSource
       ? selectInitialFollowUpProjects(followUpSource.projects)
       : {
           projectIds: defaultProjectId ? [defaultProjectId] : [],
           names: {} as Record<string, string>,
         };
+    if (loaded.data && matchesSource) {
+      return {
+        draft: loaded.data,
+        restored: true,
+        defaultProjectIds: initialProjects.projectIds,
+        error: loaded.error,
+      };
+    }
     return {
       restored: false,
+      defaultProjectIds: initialProjects.projectIds,
       error: loaded.error,
       draft: {
         followUpSourceId: followUpSource?.id,
@@ -118,7 +125,7 @@ export function CollectionComposer({
   const [names, setNames] = useState(initialDraft.associationNames ?? {});
   const [creatingTag, setCreatingTag] = useState(false);
   const [aiExcluded, setAiExcluded] = useState(Boolean(initialDraft.aiExcluded));
-  const baselineProjectIdsRef = useRef<string[]>(initialDraft.projectIds);
+  const baselineProjectIdsRef = useRef(initialState.defaultProjectIds);
   const hadSavedDraftRef = useRef<boolean>(initialState.restored);
   const projectsTouchedRef = useRef<boolean>(false);
 
@@ -489,7 +496,8 @@ export function CollectionComposer({
 
   const effectiveActivated =
     isActivated ||
-    isDirty ||
+    hasContent ||
+    uploader.items.length > 0 ||
     Boolean(uploader.validationError) ||
     showIntentField ||
     showUrlField ||
@@ -529,7 +537,7 @@ export function CollectionComposer({
         </div>
       )}
 
-      <div ref={composerRef} onFocusCapture={activateComposer} onBlurCapture={handleBlurCapture}>
+      <div ref={composerRef} onBlurCapture={handleBlurCapture}>
       <RichTextEditor
         suggestions={editor => <MentionPicker editor={editor} onBusy={setCreatingTag} onChoose={choice => {
           setNames(old => ({ ...old, [choice.id]: choice.name }));
