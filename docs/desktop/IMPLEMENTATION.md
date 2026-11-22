@@ -2,7 +2,7 @@
 
 - **版本**：v0.8（`apps/desktop/` 完整开发交接蓝图）
 - **更新日期**：2026-11-22
-- **对接后端/Web 固定基线**：提交 `f979ac1e3164a5845cf086e975848e10455f2144`（分支 `feat/v0.8.0-desktop-device-session`，基于 `v0.7.3` `e89a56c4`）
+- **对接后端/Web 固定基线**：直登提交 `d2686d8f`，初版设备会话提交 `f979ac1e`（分支 `feat/v0.8.0-desktop-device-session`，基于 `v0.7.3` `e89a56c4`）
 - **配套文档**：视觉规范见 [DESIGN.md](DESIGN.md)，交互契约见 [UX-CONTRACT.md](UX-CONTRACT.md)，总览见 [README.md](README.md)
 
 本文面向从零接手的开发者或 AI Agent，提供可直接落地的目录结构、原生 AppKit/Carbon/Keychain 规格、后端接口与错误码契约、OSS 直传规则、SQLite DDL、离线发件箱状态机、进程内桥接 API 以及完整的测试与实机验收清单。
@@ -21,8 +21,8 @@
 | 构建约束 | macOS arm64 / amd64，需 Xcode Command Line Tools (`clang`) | 若宿主默认 `GOMODCACHE` 只读，测试/构建须指定用户可写 `GOMODCACHE` |
 
 ### 绝对安全与工程红线（实现时不可违反）
-1. **凭据零泄漏**：桌面 Bearer Token 与配对 `verifier` **仅存在于 Go 宿主进程内存与 macOS Keychain**，严禁传给 WebView、严禁写入 SQLite、严禁写入日志、严禁放进 URL、严禁发往 OSS 或任何重定向目标。
-2. **禁止备用登录**：桌面端**严禁实现邮箱密码登录、注册或验证码表单**；唯一授权入口为系统浏览器打开 `/desktop/pair#challenge=...`。
+1. **凭据边界**：本地 WKWebView 将邮箱和密码提交到进程内接口，Go 宿主仅发往固定第一方登录 API。密码不写入钥匙串、SQLite、偏好、日志、遥测或 URL。登录请求不附 Cookie、Bearer 或幂等键，也不跟随重定向。
+2. **设备会话**：系统钥匙串沿用既有服务名、设备令牌和账号上下文。WebView 只接收公开状态。旧版已获发且仍有效的桌面会话可直接使用。
 3. **固定 HTTPS API**：生产构建固定编译时 HTTPS 源（`-ldflags "-X spark/apps/desktop/internal/config.DefaultAPIBaseURL=https://..."`），不向用户暴露自由填写服务器地址输入框；仅在显式测试环境变量下允许 `http://127.0.0.1` / `http://localhost` 用于隔离联调。
 4. **不绑本地 TCP 端口**：WebView 与 Go 宿主通信通过 Wails v3 进程内 `AssetHandler`（`/local/*`）完成，避免本机其他网页或进程访问本地接口。
 5. **不碰旧版与真实数据**：根目录旧 MyGo 代码（`main.go`、`mygo.json`、`internal/`）暂保留；真实 `data/` 目录严禁读取、写入或迁移。
@@ -35,37 +35,27 @@
 | --- | --- |
 | [main.go](../../apps/desktop/main.go) | 配置、单实例、组装 Host、注册原生窗口与菜单、关闭主窗口后的生命周期。后台同步与剪贴板计数监听从 Wails `ApplicationStarted` 启动；退出时取消后台上下文。 |
 | [配置](../../apps/desktop/internal/config/config.go)、[打包](../../apps/desktop/Makefile) | 固定 API 源、临时回环模式、独立数据目录。打包资源位于 `packaging/Info.plist` 和 `packaging/tray.png`，标准包输出到 `build/Spark.app`。 |
-| [配对](../../apps/desktop/internal/auth/pair.go)、[钥匙串](../../apps/desktop/internal/auth/keychain_darwin.go) | 生成 verifier 和域分隔 challenge、八位码、五分钟期限。启动时载入系统钥匙串，会话更新通过 `session.go` 持久化。 |
+| [配对](../../apps/desktop/internal/auth/pair.go)、[钥匙串](../../apps/desktop/internal/auth/keychain_darwin.go) | 旧配对结构用于既有协议兼容。启动时载入系统钥匙串，会话更新通过 `session.go` 持久化。 |
 | [API](../../apps/desktop/internal/api/client.go)、[内容协议](../../apps/desktop/internal/api/document.go) | 独立 Spark 与对象存储 HTTP 客户端、固定路由、创建回执和过期处理、纯文本到文档、图片校验。 |
 | [SQLite](../../apps/desktop/internal/store/db.go)、[发件箱](../../apps/desktop/internal/store/outbox.go)、[读缓存](../../apps/desktop/internal/store/cache.go) | 数据表、图片暂存与 fsync、账号隔离的队列与搜索。 |
 | [同步引擎](../../apps/desktop/internal/syncer/engine.go) | 先完成图片三步上传及校验，再冻结创建请求。收到匹配的回执后缓存并标为已同步。 |
 | [原生桥](../../apps/desktop/internal/native/macos_darwin.go)、[AppKit 实现](../../apps/desktop/internal/native/desktop_darwin.m) | 剪贴板、前台应用、截图、状态栏拖放及提示点。 |
 | [本地接口](../../apps/desktop/internal/gui/server.go)、[前端请求封装](../../apps/desktop/frontend/src/bridge.ts) | Go 进程中使用 Wails AssetHandler 承接请求，UI 只获得公开会话信息。 |
-| [随手记](../../apps/desktop/frontend/src/Panel.tsx)、[快搜](../../apps/desktop/frontend/src/Search.tsx)、[主窗口](../../apps/desktop/frontend/src/Book.tsx) | `main.tsx` 根据窗口入口挂载组件；`shared.tsx` 提供配对、工具按钮和预览；`desktop.css` 引用 Web 令牌。 |
+| [随手记](../../apps/desktop/frontend/src/Panel.tsx)、[快搜](../../apps/desktop/frontend/src/Search.tsx)、[主窗口](../../apps/desktop/frontend/src/Book.tsx) | `main.tsx` 根据窗口入口挂载组件；`shared.tsx` 提供登录表单、工具按钮和预览；`desktop.css` 引用 Web 令牌。 |
 
-## 3. 后端与 Web 对接契约（固定基线 `f979ac1e`）
+## 3. 后端与 Web 对接契约
 
-本节所有路径、字段与错误码均已核对提交 `f979ac1e3164a5845cf086e975848e10455f2144` 的 `contracts/openapi.json`、`server/internal/backend/desktop.go` 与 `apps/web/src/pages/DesktopPairPage.tsx`。
+### 3.1 应用内登录与设备会话
 
-### 3.1 配对算法与设备会话端点
+宿主向 `POST /api/v1/desktop/login` 发送 JSON `{email,password}`。邮箱去除首尾空白，密码保持原样。成功返回 200 和 `{token,account_id,account_label,expires_at}`，无 Set-Cookie。宿主校验会话字段后写入钥匙串，唤醒当前账号队列并通知窗口。并发提交串行处理，过时表单不能覆盖已有活动会话。既有 v19 设备白名单、30 天期限及单台设备撤销语义继续生效。旧客户端仍可使用服务端配对端点。
 
-1. **凭据派生（必须逐字节一致）**：
-   - `verifier`：本机 CSPRNG 生成 `32` 字节随机字节，经无填充 `base64url`（`base64.RawURLEncoding`）编码，得到恰好 `43` 字符（正则 `^[A-Za-z0-9_-]{43}$`）。
-   - `challenge`：`base64url_nopad(SHA-256(UTF-8("spark-desktop-pair-v1:" + verifier)))`，恰好 `43` 字符。
-     > **注意域分隔前缀**：`"spark-desktop-pair-v1:"` 不可省略；浏览器扩展不带前缀，服务端借此防止两类配对凭证串换。
-   - **比对短码**：取 `challenge` 前 8 字符，格式化为 `challenge[:4] + " " + challenge[4:8]`（大小写敏感）。
-   - **系统浏览器 URL**：`<API_ORIGIN>/desktop/pair#challenge=<challenge>`。**仅传 `#challenge=`**，严禁携带 `verifier`、设备名或其他参数；Web 页首帧读取后立即清除 `window.location.hash`，固定展示「Spark macOS 桌面端」。
-
-2. **设备会话接口（均在 `/api/v1` 下）**：
-
-| 方法与路径 | 鉴权 | 请求 / 响应 | 关键错误码与处理 |
-| --- | --- | --- | --- |
-| `POST /desktop/token` | **无鉴权**（严禁附 `Cookie` 或 `Authorization`！） | Req: `{"verifier":"<43字符>"}`<br>200: `{"token":"<43字符>","account_id":"<uuid>","account_label":"<email>","expires_at":"<rfc3339>"}` | `404 desktop_grant_pending`（用户尚未在网页点确认 → 每 2s 轮询至 5 分钟截止）；`401 desktop_grant_invalid`（已消费/已过期/批准会话已撤 → 停止轮询提示重发）；`400 unexpected_credentials` / `mixed_credentials`（客户端误带头，属程序缺陷）；`422 validation_failed` |
-| `GET /desktop/session` | `Authorization: Bearer <token>` | 200: `{"account_id":"<uuid>","account_label":"<email>","expires_at":"<rfc3339>"}` | `401 desktop_session_expired`（到期/被撤销/改密/禁用 → 暂停同步并提示重绑）；`400 mixed_credentials` |
-| `DELETE /desktop/session` | `Authorization: Bearer <token>` | 204 No Content（撤销当前设备会话） | 成功或 401 后均清空本机 Keychain，保留本地各账号隔离队列 |
-
-- **会话期限**：固定 **30 天绝对有效期**，无静默续期；到期后由用户重新完成一次 5 分钟配对。
-- **Web 侧管理**：`GET /api/v1/sessions` 已返回 `kind: "desktop"` 与服务端固定的 `device_label: "Spark macOS 桌面端"`，用户可在 Web 设置页随时单独撤销。
+| 登录响应 | 桌面行为 |
+| --- | --- |
+| 401 authentication_failed | 统一提示邮箱或密码不正确，避免区分账号存在性与禁用状态。 |
+| 422 validation_failed | 提示检查两项输入的格式。 |
+| 429 rate_limited | 提示稍后重试；有 Retry-After 时显示等待秒数。 |
+| 404、405、501 或旧服务的 401 session_expired | 提示当前服务端尚未开放桌面登录。 |
+| 连接失败 | 提示检查网络；保留原账号待同步队列。 |
 
 ### 3.2 首批桌面 Bearer 允许的业务白名单（精确 11 个）
 
@@ -296,8 +286,8 @@ pending_local ──(POST /uploads)──▶ grant_issued ──(OSS PUT)──�
 
 | 方法与路径 | 约定 |
 | --- | --- |
-| `GET state` | 返回 `session`、`pair`、分状态数量 `counts`、`origin`、`palette`、`mode`、两个快捷键值。 |
-| `POST pair/start`、`POST session/disconnect` | 启动系统浏览器配对，返回 `status, short_code, expires_at`。读 `state.pair` 跟踪结果。断开时撤销当前会话并清本机钥匙串。 |
+| `GET state` | 返回 `session`、分状态数量 `counts`、`origin`、`palette`、`mode`、两个快捷键值。 |
+| `POST session/login`、`POST session/disconnect` | 登录输入为邮箱和密码。设备会话保存后返回 204，前端读取新的公开状态。断开时撤销设备会话并清钥匙串。 |
 | `POST capture` | 输入 `raw_text, intent, original_url, suppress_url, manual_title, project_ids, tag_ids, attachments`。图片为 `{filename,data_b64}`。本机事务提交后即返回 `201 {item}`。 |
 | `GET outbox`、`DELETE outbox/{id}` | 待同步或需核对的本机项。删除只允许当前账号明确确认的需核对项。 |
 | `GET projects`、`GET tags` | 读取本机账号目录；刷新入口为 `POST sync/now`。 |
@@ -314,9 +304,9 @@ pending_local ──(POST /uploads)──▶ grant_issued ──(OSS PUT)──�
 ## 8. 推荐分步开发顺序（供新接手 AI 按批次推进）
 
 1. **批次 1（核心无界面闭环 + 全套单元测试）**：
-   实现 `config` → `auth`（配对 + Keychain）→ `api`（严格白名单 + OSS PUT）→ `store`（SQLite DDL + 原子文件写）→ `syncer`（状态机）；使用 `httptest` 合成 Spark API + 合成 OSS 跑通全部单测与故障注入测试。
+   实现 `config` → `auth`（登录 + Keychain）→ `api`（严格白名单 + OSS PUT）→ `store`（SQLite DDL + 原子文件写）→ `syncer`（状态机）；使用 `httptest` 合成 Spark API + 合成 OSS 跑通全部单测与故障注入测试。
 2. **批次 2（进程内 `/local/*` + React 前端双视图）**：
-   搭建 `apps/desktop/frontend/`（复用 `tokens.css` 四套配色与深浅色），完成 `QuickCapturePanel`、`QuickSearchView`、`MainWindow`、`PairView`，通过实际 WKWebView、前端 `typecheck / build` 和宿主测试校验。
+   搭建 `apps/desktop/frontend/`（复用 `tokens.css` 四套配色与深浅色），完成 `QuickCapturePanel`、`QuickSearchView`、`MainWindow`、`Login`，通过实际 WKWebView、前端 `typecheck / build` 和宿主测试校验。
 3. **批次 3（Wails v3 宿主 + macOS 原生精修）**：
    接入 `internal/native/macos_darwin.go` 与 `main.go`（菜单栏、`NSPanel`、全局快捷键、剪贴板监听、原生截屏、菜单栏拖拽、主窗口交通灯与关闭释放 WebView），打包出可运行的 `Spark.app`。
 4. **批次 4（隔离栈联合验收 + macOS 真机验收）**：
@@ -351,7 +341,7 @@ pending_local ──(POST /uploads)──▶ grant_issued ──(OSS PUT)──�
 ### 9.3 macOS 真机复验场景
 
 本轮实测结果、驱动方式和仍需物理设备验证的项目见 [候选运行与验证记录](README.md)。
-1. **配对与钥匙串实机联调**：连接隔离 OrbStack `v0.8` 栈，点击配对拉起系统默认浏览器 `/desktop/pair#challenge=...`，核对 4+4 短码完成授权，重启 `Spark.app` 验证从 macOS Keychain 自动恢复会话；在 Web 设置页撤销该设备后，验证桌面端立刻进入 `401` 暂停态且未发原稿完好。
+1. **登录与钥匙串实机联调**：连接隔离 OrbStack v19 栈，在本地表单使用合成邮箱和密码登录，重启 `Spark.app` 验证从 macOS Keychain 自动恢复会话；在 Web 设置页撤销该设备后，验证桌面端立刻进入 `401` 暂停态且未发原稿完好。
 2. **全屏与多 Space 焦点验收**：在全屏浏览器 / 全屏 IDE 中按 `⌥Space` 呼出悬浮面板（确认**不切换 Space**）→ 输入文字 + `⌘↵` → 确认面板消失且**键盘焦点精准回到原应用光标处**；在独立收件箱网页验证仅出现 1 条收藏。
 3. **离线重启闭环实机验收**：断开本机网络 → `⌥Space` 粘贴文字与截图 → `⌘↵` 确认提示「本机已收下」→ 完全退出并重启 `Spark.app` → 恢复网络 → 验证图片经受控 OSS 三步上传并同步成功，云端仅 1 条且暂存文件已清理。
 4. **四大收集交互真机手测**：
