@@ -1168,6 +1168,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/desktop/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 确认macOS 桌面端配对 */
+        post: operations["approveDesktopGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/desktop/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 一次性兑换macOS 桌面端凭据 */
+        post: operations["exchangeDesktopGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/desktop/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取当前桌面绑定信息 */
+        get: operations["getDesktopSession"];
+        put?: never;
+        post?: never;
+        /** 撤销当前桌面绑定 */
+        delete: operations["revokeDesktopSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1274,6 +1326,11 @@ export interface components {
             /** Format: date-time */
             expires_at: string;
             current: boolean;
+            /**
+             * @description 会话所属客户端。
+             * @enum {string}
+             */
+            kind?: "web" | "extension" | "desktop";
         };
         VerificationRequest: {
             /** Format: email */
@@ -1984,6 +2041,35 @@ export interface components {
         };
         ProjectBackfillRequest: {
             base_decision_version: number;
+        };
+        DesktopGrantCreate: {
+            /** @description base64url 无填充编码的 SHA-256 摘要，输入为 UTF-8 字符串 spark-desktop-pair-v1: 后接 verifier。 */
+            challenge: string;
+            /**
+             * Format: uuid
+             * @description 批准时 Web 页面向用户展示的当前账号 ID。仅作前置条件。
+             */
+            expected_account_id: string;
+        };
+        DesktopTokenExchange: {
+            /** @description 扩展生成的 32 字节随机数，经无填充 base64url 编码。仅在请求正文发送。 */
+            verifier: string;
+        };
+        DesktopTokenResult: {
+            /** @description 仅兑换成功响应返回的桌面 Bearer 凭据，绝对有效期 30 天。 */
+            token: string;
+            /** Format: uuid */
+            account_id: string;
+            account_label: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        DesktopSession: {
+            /** Format: uuid */
+            account_id: string;
+            account_label: string;
+            /** Format: date-time */
+            expires_at: string;
         };
     };
     responses: never;
@@ -2933,7 +3019,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "X-CSRF-Token": string;
+                /** @description Web Cookie 会话必填。通过验证的 macOS 桌面 Bearer 会话无需提供。 */
+                "X-CSRF-Token"?: string;
                 "Idempotency-Key": string;
             };
             path?: never;
@@ -3010,8 +3097,9 @@ export interface operations {
     completeUpload: {
         parameters: {
             query?: never;
-            header: {
-                "X-CSRF-Token": string;
+            header?: {
+                /** @description Web Cookie 会话必填。通过验证的 macOS 桌面 Bearer 会话无需提供。 */
+                "X-CSRF-Token"?: string;
             };
             path: {
                 id: string;
@@ -3246,7 +3334,8 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "X-CSRF-Token": string;
+                /** @description Web Cookie 会话必填。通过验证的 macOS 桌面 Bearer 会话无需提供。 */
+                "X-CSRF-Token"?: string;
                 "Idempotency-Key": string;
             };
             path?: never;
@@ -4793,6 +4882,209 @@ export interface operations {
             };
             /** @description validation_failed：字段、字符数或网址不符合约定。 */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    approveDesktopGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesktopGrantCreate"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description desktop_account_changed 或 desktop_grant_conflict：重新连接桌面并确认账号。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description validation_failed：配对字段无效。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    exchangeDesktopGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesktopTokenExchange"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopTokenResult"];
+                };
+            };
+            /** @description desktop_grant_invalid：配对已过期、已消费或被撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description desktop_grant_pending：尚未收到 Web 确认。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description validation_failed：兑换证明格式无效。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getDesktopSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopSession"];
+                };
+            };
+            /** @description mixed_credentials：不能同时使用 Cookie 与 Authorization。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description desktop_session_expired：桌面未连接、已到期或已撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeDesktopSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description mixed_credentials：不能同时使用 Cookie 与 Authorization。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description desktop_session_expired：桌面未连接、已到期或已撤销。 */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

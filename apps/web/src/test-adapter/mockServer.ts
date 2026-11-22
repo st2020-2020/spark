@@ -7,6 +7,8 @@ import type {
   Collection,
   CollectionCreate,
   CollectionSummary,
+  DesktopGrantCreate,
+  DesktopTokenResult,
   Extraction,
   ExtensionGrantCreate,
   ExtensionTokenResult,
@@ -138,6 +140,7 @@ export interface TestAdapter extends SparkApi {
   emitMockOrganizationError(closed?: boolean): void;
   getOrganizationSubscriberCount(): number;
   redeemExtensionGrantForTest(challenge: string): Promise<ExtensionTokenResult>;
+  redeemDesktopGrantForTest(challenge: string): Promise<DesktopTokenResult>;
 }
 
 const DEFAULT_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
@@ -200,6 +203,10 @@ export function createTestAdapter(): TestAdapter {
   const extensionGrants = new Map<
     string,
     { user_id: string; browser: 'chrome' | 'edge'; expiresAtMs: number; consumed: boolean }
+  >();
+  const desktopGrants = new Map<
+    string,
+    { user_id: string; expiresAtMs: number; consumed: boolean }
   >();
   const orgSubscribers = new Set<{ userId: string; handlers: OrganizationEventsHandlers }>();
   const pendingOrgTimers = new Map<string, number>();
@@ -286,6 +293,7 @@ export function createTestAdapter(): TestAdapter {
     idempotencyStore = new Map();
     imageRecoveryByBase.clear();
     extensionGrants.clear();
+    desktopGrants.clear();
     projectUndoStore = new Map();
     mockOrganizationMode = 'succeed';
     mockAiTrialEligible = true;
@@ -581,6 +589,7 @@ export function createTestAdapter(): TestAdapter {
       id: generateUuid(),
       user_id: user.id,
       device_label: 'Web 测试适配器浏览器会话',
+      kind: 'web',
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 7 * 86400_000).toISOString(),
       current: true,
@@ -985,6 +994,7 @@ export function createTestAdapter(): TestAdapter {
         id: sessionId,
         user_id: user.id,
         device_label: grant.browser === 'edge' ? 'Spark 浏览器扩展 (Edge)' : 'Spark 浏览器扩展 (Chrome)',
+        kind: 'extension',
         created_at: now.toISOString(),
         expires_at: expiresAt,
         current: false,
@@ -993,6 +1003,41 @@ export function createTestAdapter(): TestAdapter {
       });
       return {
         token: `ext_test_${generateUuid().replace(/-/g, '')}`,
+        account_id: user.id,
+        account_label: user.email,
+        expires_at: expiresAt,
+      };
+    },
+
+    async redeemDesktopGrantForTest(challenge: string) {
+      const grant = desktopGrants.get(challenge);
+      if (!grant) {
+        throw new ApiError({ status: 404, code: 'desktop_grant_pending', message: '尚未在网页端确认连接' });
+      }
+      if (grant.consumed || Date.now() > grant.expiresAtMs) {
+        throw new ApiError({ status: 401, code: 'desktop_grant_invalid', message: '桌面配对请求已失效或过期' });
+      }
+      const user = users.find((u) => u.id === grant.user_id && u.status === 'active');
+      if (!user) {
+        throw new ApiError({ status: 401, code: 'desktop_grant_invalid', message: '账号不可用' });
+      }
+      grant.consumed = true;
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const sessionId = generateUuid();
+      sessions.unshift({
+        id: sessionId,
+        user_id: user.id,
+        device_label: 'Spark macOS 桌面端',
+        kind: 'desktop',
+        created_at: now.toISOString(),
+        expires_at: expiresAt,
+        current: false,
+        csrf_token: generateUuid(),
+        revoked: false,
+      });
+      return {
+        token: `desk_test_${generateUuid().replace(/-/g, '').padEnd(43, '0').slice(0, 43)}`,
         account_id: user.id,
         account_label: user.email,
         expires_at: expiresAt,
@@ -1148,6 +1193,9 @@ export function createTestAdapter(): TestAdapter {
         if (s.user_id === user.id) s.revoked = true;
       }
       for (const g of extensionGrants.values()) {
+        if (g.user_id === user.id) g.consumed = true;
+      }
+      for (const g of desktopGrants.values()) {
         if (g.user_id === user.id) g.consumed = true;
       }
       currentSessionId = null;
@@ -1353,6 +1401,13 @@ export function createTestAdapter(): TestAdapter {
           message: '当前登录账号已变更，请在扩展中重新发起配对',
         });
       }
+      if (desktopGrants.has(challenge)) {
+        throw new ApiError({
+          status: 409,
+          code: 'extension_grant_conflict',
+          message: '该配对请求已失效或已被使用，请重新发起连接',
+        });
+      }
       const existing = extensionGrants.get(challenge);
       if (existing) {
         if (existing.user_id !== user.id || existing.consumed || Date.now() > existing.expiresAtMs) {
@@ -1367,6 +1422,44 @@ export function createTestAdapter(): TestAdapter {
       extensionGrants.set(challenge, {
         user_id: user.id,
         browser: body.browser,
+        expiresAtMs: Date.now() + 5 * 60_000,
+        consumed: false,
+      });
+    },
+
+    async approveDesktopGrant(body: DesktopGrantCreate) {
+      const user = requireUser(true);
+      const challenge = body.challenge.trim();
+      if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) {
+        throw new ApiError({ status: 422, code: 'validation_failed', message: '配对参数无效' });
+      }
+      if (body.expected_account_id !== user.id) {
+        throw new ApiError({
+          status: 409,
+          code: 'desktop_account_changed',
+          message: '当前登录账号已变更，请在 macOS 桌面端重新发起配对',
+        });
+      }
+      if (extensionGrants.has(challenge)) {
+        throw new ApiError({
+          status: 409,
+          code: 'desktop_grant_conflict',
+          message: '该桌面配对请求已失效或已被使用，请重新发起连接',
+        });
+      }
+      const existing = desktopGrants.get(challenge);
+      if (existing) {
+        if (existing.user_id !== user.id || existing.consumed || Date.now() > existing.expiresAtMs) {
+          throw new ApiError({
+            status: 409,
+            code: 'desktop_grant_conflict',
+            message: '该桌面配对请求已失效、过期或已被使用，请重新发起连接',
+          });
+        }
+        return;
+      }
+      desktopGrants.set(challenge, {
+        user_id: user.id,
         expiresAtMs: Date.now() + 5 * 60_000,
         consumed: false,
       });
