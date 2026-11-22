@@ -63,6 +63,8 @@ PATCH 字段省略表示保留，空字符串清除可清除的文字字段。or
 
 POST /collections 返回 201 时，原始数据与初始任务已落库。organization 字段可能仍处于 queued 或 skipped。保存接口的成功不依赖模型成功。
 
+`POST /collections` 可选 `source_collection_id`。首次写入时来源必须是本账号尚未软删的收藏，缺失、他人或已删除来源均返回 404。续写是独立的收藏，项目按客户端提交的 `project_ids` 保存。来源不能通过编辑更改。新写入与来源校验同事务，已成功的请求可以用原键继续回放，同键变更来源返回 409。
+
 项目和标签 PATCH 接受 operations 数组，同一 ID 在一次请求中只能出现一次。include 表示用户确认，exclude 表示显式排除并阻止自动重新添加，reset 清除人工覆盖并恢复自动判断资格。每个集合操作原子执行，验证全部目标属于当前用户后提交。成功返回完整 Collection。
 
 整理模式通过项目 PATCH 的 `Idempotency-Key` 取得可选 `undo_receipt`。确认页面上显示的建议时携带相应运行及项目版本。撤销调用 `POST /collections/{id}/projects/undo`，提交回执中的操作键与决定版本。服务端核对账号、收藏、项目和当前状态，在一个事务中恢复此前关联及引文。有变更的 PATCH 和撤销保留原成功响应。无变更的 PATCH 重放时返回当前可访问的收藏，不再写入或生成回执。同键异体、过期回执或并发修改返回 409。
@@ -74,6 +76,12 @@ PUT /read 显式设置已读或未读。GET 读取没有已读副作用，前端
 收藏软删除后详情仍可由本人通过 ID 读取，并显示 deleted_at。只有恢复、永久删除、历史和本人附件读取适用于回收站内容。编辑、手动归类和重新整理返回 409 collection_in_trash。
 
 POST /organization 以最新内容版本重新整理，已有同输入活动运行时复用该运行。AI 关闭时返回 403；额度不足时返回 429。自动任务可进入 blocked 状态，保存仍成功。
+
+### 续写线索
+
+收藏详情和列表提供可选的 `thread_id`、`source_collection_id` 和 `follow_up_count`。计数为同线索中除当前收藏外的活跃成员数量。普通收藏或直接来源已永久清理时，省略 `source_collection_id`。清理也从续写创建的缓存回放中移除该来源引用。
+
+`GET /collections/{id}/thread` 从本账号任一活跃成员进入，返回 `thread_id`、`items` 和可选的 `next_cursor`。按创建时间及收藏 ID 升序，默认 30 条，最多 100 条。分页游标绑定账号、入口收藏和查询参数。活跃成员含 `display_title`。软删成员仅含 `id`、`created_at` 和 `status: deleted`，永久清理登记后从时间线省略。剩余成员仍可进入同一线索。
 
 ## 导出本人数据
 

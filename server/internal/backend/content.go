@@ -140,6 +140,16 @@ func titleFor(plain, manual, rawURL string) string {
 	}
 	return "收藏"
 }
+func collectionDisplayTitle(plain, manual, rawURL, generated, coverFilename string) string {
+	if manual == "" && generated != "" {
+		return generated
+	}
+	title := titleFor(plain, manual, rawURL)
+	if coverFilename != "" && (title == "" || manual == "" && strings.TrimSpace(plain) == "" && rawURL == "") {
+		return coverFilename
+	}
+	return title
+}
 func value[T any](p *T) T {
 	if p == nil {
 		var zero T

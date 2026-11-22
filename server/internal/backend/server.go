@@ -147,6 +147,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.POST("/collections", s.handle(s.createCollection))
 	secured.GET("/collections", s.handle(s.listCollections))
 	secured.GET("/collections/:id", s.handle(s.getCollection))
+	secured.GET("/collections/:id/thread", s.handle(s.getCollectionThread))
 	secured.PATCH("/collections/:id", s.handle(s.updateCollection))
 	secured.PATCH("/collections/:id/tags", s.handle(s.tagDecisions))
 	secured.PATCH("/collections/:id/projects", s.handle(s.projectDecisions))

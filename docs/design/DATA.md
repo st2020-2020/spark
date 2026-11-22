@@ -34,7 +34,8 @@
 | 表 | 字段 | 约束与索引 |
 | --- | --- | --- |
 | projects | id, user_id, name varchar(100), description varchar(2000), focus_points jsonb, state enum(active,paused,completed), version bigint, created_at, updated_at | 用户内名称可重复；关注点最多 20 项，每项 100 字；user_id/state/updated_at 索引 |
-| collections | id, user_id, document jsonb, plain_text text, intent text, original_url?, manual_title?, content_version bigint, resource_version bigint, decision_version bigint, read_at?, last_opened_at?, ai_excluded bool, ai_policy_version bigint, deleted_at?, purge_after?, purge_requested_at?, created_at, updated_at | user_id/created_at/id 降序索引；用户活动收藏及回收站部分索引 |
+| collections | id, user_id, thread_id, source_collection_id?, document jsonb, plain_text text, intent text, original_url?, manual_title?, content_version bigint, resource_version bigint, decision_version bigint, read_at?, last_opened_at?, ai_excluded bool, ai_policy_version bigint, deleted_at?, purge_after?, purge_requested_at?, created_at, updated_at | user_id/created_at/id 降序索引；用户活动收藏及回收站部分索引 |
+| collection_thread_counts | user_id, thread_id, member_count, active_count | 账号和线索为主键，收藏插入、软删、恢复和物理删除同事务维护，最后一个成员清理后移除 |
 | collection_revisions | id, user_id, collection_id, content_version, document, intent, original_url?, manual_title?, attachment_ids jsonb, created_at | UNIQUE(collection_id,content_version)；快照属于对应用户 |
 | uploads | id, user_id, staging_key, final_key?, provider_version?, filename, declared_size bigint, actual_size?, mime_type, sha256 bytea?, status enum(pending,verifying,ready,attached,rejected,expired), error_code?, expires_at, staging_cleaned_at?, created_at, updated_at | staging_key、final_key 分别唯一；ready、attached 须有最终键、与声明一致的大小及 32 字节 SHA-256；用户/状态/到期索引 |
 | attachments | id, user_id, collection_id, upload_id, object_key, provider_version?, filename, mime_type, size_bytes bigint, sha256, position int, removed_at?, created_at | upload_id 唯一且同用户；有效附件在收藏内 position 取 0 至 8 且唯一，同一语句可交换位置；object_key 唯一 |
@@ -51,6 +52,10 @@
 收藏创建时指定的标签为人工决定。标签和项目写入共用账号写锁及收藏决定版本，整组变更在同一事务提交。仅在用户确认文字与标签处理说明（`spark-ai-tags-v1`）后，整理任务才从提交材料中匹配本账号已有的标签名，使用同一次整理调用和原有计费预留。应用时再次核验名称与归属，已有人工决定优先。重整只替换自动标签，收藏内容版本变化时清除旧版本的自动标签，人工决定保留。
 
 迁移 010 新增标签和外观偏好。既有账号默认 `mint` 配色和 `system` 明暗，同时保留 AI、回访与已有收藏数据。
+
+迁移 016 为已有收藏分配独立的线索 UUID。续写与来源在同一账号写锁下登记，继承来源的 `thread_id`，并通过 `(user_id, source_collection_id)` 外键记录直接来源。新建后客户端不可变更关系。时间线走 `(user_id, thread_id, created_at, id)` 部分索引，排除已登记永久删除的成员，以创建时间和 ID 分页。每条收藏的计数按账号和线索主键读取，成本不随线索长度增加。
+
+软删除保留线索成员占位并减少活跃计数，恢复补回计数。物理清理通过外键解除子条目的直接来源，并清理对应来源的创建缓存字段。线索标识独立于来源或首条收藏，源条目、任一中间条目清理后，其余成员仍保留原标识。
 
 ## 回访与时间
 

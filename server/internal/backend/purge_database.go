@@ -81,6 +81,8 @@ func purgeDatabase(ctx context.Context, tx pgx.Tx, row store.DeletionLedger) err
 			OR (lower(operation) LIKE '% /api/v1/collections/' || $2::uuid::text || '/%'
 			    AND lower(operation) <> 'post /api/v1/collections/' || $2::uuid::text || '/purge')
 		)`},
+		{"cached follow-up sources", `UPDATE idempotency_keys SET response_json=response_json-'source_collection_id'
+			WHERE user_id=$1 AND operation='POST /api/v1/collections' AND response_json->>'source_collection_id'=$2::uuid::text`},
 		{"collection", "DELETE FROM collections WHERE user_id=$1 AND id=$2"},
 	} {
 		if _, err := tx.Exec(ctx, stmt.sql, row.UserID, row.CollectionID); err != nil {
