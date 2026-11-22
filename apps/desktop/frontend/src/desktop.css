@@ -56,12 +56,12 @@ textarea {
   border: 0;
   background: transparent;
 }
-textarea {
+.capture-editor {
   resize: none;
   display: block;
   width: 100%;
-  min-height: 80px;
-  padding: 16px 18px 8px;
+  min-height: 72px;
+  padding: 16px 18px 10px;
   font-size: var(--sp-text-body);
   line-height: 1.65;
 }
@@ -107,11 +107,14 @@ kbd {
   background: var(--sp-surface);
   border-radius: var(--sp-radius-panel);
   overflow: auto;
-  max-height: 540px;
+  max-height: 560px;
   border: 1px solid var(--sp-border);
 }
 .tape {
-  height: 4px;
+  width: 36px;
+  height: 5px;
+  margin: 9px 0 0 20px;
+  border-radius: 2px;
   background: var(--sp-tape-2);
 }
 .toolbar,

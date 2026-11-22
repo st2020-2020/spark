@@ -33,6 +33,9 @@ type Config struct {
 func Load() (Config, error) {
 	rawURL := DefaultAPIBaseURL
 	allowLoopback := os.Getenv("SPARK_DESKTOP_ALLOW_LOOPBACK_HTTP") == "1"
+	if allowLoopback && os.Getenv(APIBaseURLEnv) == "" {
+		return Config{}, errors.New("请指定隔离测试的回环 API 地址")
+	}
 	if u := os.Getenv(APIBaseURLEnv); u != "" {
 		if !allowLoopback || !strings.HasPrefix(u, "http://") || os.Getenv(DataDirEnv) == "" {
 			return Config{}, errors.New("测试服务需要显式的回环 HTTP 地址及独立数据目录")

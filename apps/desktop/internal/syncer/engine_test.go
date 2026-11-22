@@ -435,3 +435,23 @@ func Test409DuplicateResourcePreservesLocalDraftForReview(t *testing.T) {
 		t.Fatalf("expected needs_review with duplicate_resource, got %+v", got)
 	}
 }
+
+func TestDeletedReceiptKeepsLocalOriginal(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := time.Now()
+	item, err := st.EnqueueCapture(store.EnqueueInput{AccountID: "owner", RawText: "  original text  "}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine := New(st, auth.NewMemoryStore(), nil)
+	deleted := now.UTC().Format(time.RFC3339)
+	engine.acceptReceipt("owner", item, api.Collection{ID: item.ID, DeletedAt: &deleted})
+	got, found, err := st.GetOutboxItem("owner", item.ID)
+	if err != nil || !found || got.State != store.OutboxNeedsReview || got.RawText != "  original text  " {
+		t.Fatal("deleted receipt discarded or altered the local draft")
+	}
+}

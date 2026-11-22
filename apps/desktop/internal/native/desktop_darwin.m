@@ -7,6 +7,7 @@
 
 extern void sparkGoTrayDropText(char *text);
 extern void sparkGoTrayDropFiles(char *joinedPaths);
+extern void sparkGoTrayDropImage(void *, size_t);
 extern void sparkGoTrayHoverExpand(void);
 
 static NSRunningApplication *gPrevFrontApp;
@@ -120,6 +121,15 @@ void sparkCopyText(const char *text) {
 @property (nonatomic, strong) NSTimer *hoverTimer;
 @end
 
+static __weak SparkTrayDropView *trayOverlay;
+static int trayIndicator;
+void sparkTrayState(int state) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        trayIndicator = state;
+        trayOverlay.needsDisplay = YES;
+    });
+}
+
 @implementation SparkTrayDropView
 - (instancetype)initWithFrame:(NSRect)frameRect {
 	self = [super initWithFrame:frameRect];
@@ -134,6 +144,13 @@ void sparkCopyText(const char *text) {
 		]];
 	}
 	return self;
+}
+
+- (void)drawRect:(NSRect)rect {
+    if (!trayIndicator) return;
+    NSColor *color = trayIndicator == 2 ? NSColor.systemOrangeColor : NSColor.systemBlueColor;
+    [color setFill];
+    [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(NSMaxX(self.bounds)-7, 2, 5, 5)] fill];
 }
 
 - (NSView *)hitTest:(NSPoint)point {
@@ -166,11 +183,23 @@ void sparkCopyText(const char *text) {
 			if (u.path.length > 0) [paths addObject:u.path];
 		}
 		if (paths.count > 0) {
-			NSString *joined = [paths componentsJoinedByString:@"\n"];
+			NSData *json = [NSJSONSerialization dataWithJSONObject:paths options:0 error:nil];
+            NSString *joined = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
 			sparkGoTrayDropFiles((char *)[joined UTF8String]);
 			return YES;
 		}
 	}
+    NSData *png = [pb dataForType:NSPasteboardTypePNG];
+    if (!png) {
+        NSData *tiff = [pb dataForType:NSPasteboardTypeTIFF];
+        if (tiff.length && tiff.length <= 5*1024*1024) {
+            png = [[NSBitmapImageRep imageRepWithData:tiff] representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        }
+    }
+    if (png.length && png.length <= 5*1024*1024) {
+        sparkGoTrayDropImage((void *)png.bytes,png.length);
+        return YES;
+    }
 	NSString *text = [pb stringForType:NSPasteboardTypeURL];
 	if (text == nil) text = [pb stringForType:NSPasteboardTypeString];
 	if (text != nil && text.length > 0) {
@@ -181,26 +210,25 @@ void sparkCopyText(const char *text) {
 }
 @end
 
+static NSStatusBarButton *statusButtonInView(NSView *view) {
+    if ([view isKindOfClass:NSStatusBarButton.class]) return (NSStatusBarButton *)view;
+    for (NSView *child in view.subviews) {
+        NSStatusBarButton *button = statusButtonInView(child);
+        if (button) return button;
+    }
+    return nil;
+}
+
 void sparkAttachTrayDrop(void) {
-	dispatch_async(dispatch_get_main_queue(), ^{
-		for (NSWindow *win in [NSApp windows]) {
-			if ([NSStringFromClass([win class]) containsString:@"NSStatusBarWindow"]) {
-				NSView *content = win.contentView;
-				if (content == nil) continue;
-				BOOL exists = NO;
-				for (NSView *sub in content.subviews) {
-					if ([sub isKindOfClass:[SparkTrayDropView class]]) {
-						exists = YES;
-						break;
-					}
-				}
-				if (!exists) {
-					SparkTrayDropView *dropView = [[SparkTrayDropView alloc] initWithFrame:content.bounds];
-					[content addSubview:dropView];
-				}
-			}
-		}
-	});
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (NSWindow *window in NSApp.windows) {
+            NSStatusBarButton *button = statusButtonInView(window.contentView);
+            if (!button || trayOverlay) continue;
+            SparkTrayDropView *view = [[SparkTrayDropView alloc] initWithFrame:button.bounds];
+            [button addSubview:view];
+            trayOverlay = view;
+        }
+    });
 }
 
 int sparkClipboardCount(void) { return (int)[NSPasteboard generalPasteboard].changeCount; }
@@ -212,7 +240,7 @@ void sparkPositionPanel(void *pointer) {
     for (NSScreen *screen in NSScreen.screens) {
         if (!NSPointInRect(mouse, screen.frame)) continue;
         NSRect area = screen.visibleFrame;
-        [window setFrameTopLeftPoint:NSMakePoint(NSMidX(area)-window.frame.size.width/2,NSMinY(area)+area.size.height*.72)];
+        [window setFrameTopLeftPoint:NSMakePoint(NSMidX(area)-window.frame.size.width/2,NSMinY(area)+area.size.height*.78)];
         break;
     }
 }

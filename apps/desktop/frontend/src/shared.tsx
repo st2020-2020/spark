@@ -42,6 +42,7 @@ export function Jar() {
 export function Tool({
   label,
   children,
+  onClick,
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & {
   label: string;
@@ -54,6 +55,7 @@ export function Tool({
       title={label}
       aria-label={label}
       {...props}
+      onClick={onClick}
     >
       {children}
     </button>

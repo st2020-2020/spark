@@ -1,11 +1,14 @@
 .PHONY: frontend build test app-bundle
+export MACOSX_DEPLOYMENT_TARGET := 13.0
+export CGO_CFLAGS += -mmacosx-version-min=13.0
+export CGO_CXXFLAGS += -mmacosx-version-min=13.0
 OUT := build/Spark.app
 frontend:
 	cd frontend && npm ci --no-audit --no-fund && npm run build
 
 build: frontend
 	mkdir -p build
-	CGO_ENABLED=1 go build -tags production -o build/Spark .
+	CGO_ENABLED=1 go build -ldflags="-extldflags=-mmacosx-version-min=13.0" -tags production -o build/Spark .
 
 test: frontend
 	go test -race ./...

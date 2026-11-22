@@ -12,6 +12,7 @@ void sparkSetDockVisible(int);
 int sparkReadClipboard(int*,int*,char**,void**,size_t*);
 void sparkCopyText(const char*);
 void sparkAttachTrayDrop(void);
+void sparkTrayState(int);
 int sparkCopyImage(void *,size_t);
 int sparkScreenAllowed(void);
 int sparkClipboardCount(void);
@@ -21,7 +22,9 @@ import "C"
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +39,7 @@ var (
 	callbackMu        sync.RWMutex
 	onTrayDropTextCB  func(text string)
 	onTrayDropFilesCB func(paths []string)
+	onTrayDropImageCB func([]byte)
 	onTrayHoverExpand func()
 )
 
@@ -58,18 +62,29 @@ func sparkGoTrayDropFiles(cJoined *C.char) {
 	if cJoined == nil {
 		return
 	}
-	joined := C.GoString(cJoined)
 	var paths []string
-	for _, p := range strings.Split(joined, "\n") {
-		if trimmed := strings.TrimSpace(p); trimmed != "" {
-			paths = append(paths, trimmed)
-		}
+	if json.Unmarshal([]byte(C.GoString(cJoined)), &paths) != nil {
+		return
 	}
 	callbackMu.RLock()
 	fn := onTrayDropFilesCB
 	callbackMu.RUnlock()
 	if fn != nil && len(paths) > 0 {
 		go fn(paths)
+	}
+}
+
+//export sparkGoTrayDropImage
+func sparkGoTrayDropImage(data unsafe.Pointer, size C.size_t) {
+	if data == nil || size == 0 || size > api.MaxImageBytes {
+		return
+	}
+	callbackMu.RLock()
+	fn := onTrayDropImageCB
+	callbackMu.RUnlock()
+	if fn != nil {
+		b := C.GoBytes(data, C.int(size))
+		go fn(b)
 	}
 }
 
@@ -83,13 +98,24 @@ func sparkGoTrayHoverExpand() {
 	}
 }
 
-func RegisterTrayDropHandlers(onText func(string), onFiles func([]string), onHover func()) {
+func RegisterTrayDropHandlers(onText func(string), onFiles func([]string), onImage func([]byte), onHover func()) {
 	callbackMu.Lock()
 	onTrayDropTextCB = onText
 	onTrayDropFilesCB = onFiles
+	onTrayDropImageCB = onImage
 	onTrayHoverExpand = onHover
 	callbackMu.Unlock()
 	C.sparkAttachTrayDrop()
+}
+
+func SetTrayIndicator(pending, attention bool) {
+	state := 0
+	if attention {
+		state = 2
+	} else if pending {
+		state = 1
+	}
+	C.sparkTrayState(C.int(state))
 }
 
 func RememberFrontApp()   { C.sparkRememberFrontApp() }
@@ -154,10 +180,15 @@ func CaptureInteractiveScreenshot(ctx context.Context) ([]byte, error) {
 		}
 		return nil, err
 	}
-	data, err := os.ReadFile(outPath)
-	if errors.Is(err, os.ErrNotExist) || len(data) == 0 {
+	f, err := os.Open(outPath)
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, api.MaxImageBytes+1))
 	if err != nil {
 		return nil, err
 	}

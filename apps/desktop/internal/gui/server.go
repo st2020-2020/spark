@@ -20,19 +20,20 @@ import (
 // Host owns the in-process UI bridge. Every account-bound request carries the
 // account displayed when the gesture started so a stale window cannot write to a new account.
 type Host struct {
-	Rebind     func(string, string) error
-	Context    context.Context
-	Store      *store.Store
-	Sessions   *auth.Sessions
-	API        *api.Client
-	Engine     *syncer.Engine
-	Clipboard  *native.ClipboardTracker
-	Action     func(string, string) error
-	OpenURL    func(string) error
-	Change     func()
-	pairMu     sync.Mutex
-	pairing    pairStatus
-	pairCancel context.CancelFunc
+	Rebind       func(string, string) error
+	Context      context.Context
+	Store        *store.Store
+	Sessions     *auth.Sessions
+	API          *api.Client
+	Engine       *syncer.Engine
+	Clipboard    *native.ClipboardTracker
+	PanelVisible func() bool
+	Action       func(string, string) error
+	OpenURL      func(string) error
+	Change       func()
+	pairMu       sync.Mutex
+	pairing      pairStatus
+	pairCancel   context.CancelFunc
 }
 type pairStatus struct {
 	Status  string    `json:"status"`
@@ -326,9 +327,12 @@ func (h *Host) Handler() http.Handler {
 		h.Change()
 		return nil, err
 	})
-	route("GET /local/clipboard", func(_ http.ResponseWriter, r *http.Request) (any, error) {
-		v, _, ok := h.Clipboard.FreshSample(time.Now())
-		if !ok || v.ChangeCount != native.ClipboardCount() {
+	accountRoute("GET /local/clipboard", func(_ auth.StoredSession, r *http.Request) (any, error) {
+		if !h.PanelVisible() {
+			return response{"available": false}, nil
+		}
+		v, ok := h.Clipboard.FreshSample(time.Now(), native.ReadClipboardSample)
+		if !ok {
 			return response{"available": false}, nil
 		}
 		return response{"available": true, "text": v.Text, "image": v.ImagePNG}, nil

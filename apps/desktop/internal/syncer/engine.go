@@ -177,14 +177,46 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 		}
 		return err
 	} else {
-		_ = e.store.UpsertCachedCollections(sess.AccountID, page.Items)
+		if err := e.store.UpsertCachedCollections(sess.AccountID, page.Items); err != nil {
+			return err
+		}
 	}
 
-	if projPage, err := e.client.ListProjects(ctx, sess.Token, "active", "", "", 100); err == nil {
-		_ = e.store.ReplaceCachedProjects(sess.AccountID, projPage.Items)
+	projects := []api.Project{}
+	for cursor := ""; ; {
+		page, err := e.client.ListProjects(ctx, sess.Token, "active", "", cursor, 100)
+		if err != nil {
+			return err
+		}
+		projects = append(projects, page.Items...)
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor {
+			return errors.New("项目分页游标未前进")
+		}
+		cursor = page.NextCursor
 	}
-	if tagPage, err := e.client.ListTags(ctx, sess.Token, "", "", 100); err == nil {
-		_ = e.store.ReplaceCachedTags(sess.AccountID, tagPage.Items)
+	if err := e.store.ReplaceCachedProjects(sess.AccountID, projects); err != nil {
+		return err
+	}
+	tags := []api.Tag{}
+	for cursor := ""; ; {
+		page, err := e.client.ListTags(ctx, sess.Token, "", cursor, 100)
+		if err != nil {
+			return err
+		}
+		tags = append(tags, page.Items...)
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor {
+			return errors.New("标签分页游标未前进")
+		}
+		cursor = page.NextCursor
+	}
+	if err := e.store.ReplaceCachedTags(sess.AccountID, tags); err != nil {
+		return err
 	}
 	e.notifyChange()
 	return nil
@@ -254,8 +286,7 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 	if item.EverSent && !item.FirstSentAt.IsZero() && e.now().Sub(item.FirstSentAt) >= IdempotencyWindow {
 		col, err := e.client.GetCollection(ctx, sess.Token, item.ID)
 		if err == nil {
-			_ = e.store.UpsertCachedCollectionDetail(sess.AccountID, col)
-			_ = e.store.MarkOutboxSynced(sess.AccountID, item.ID, e.now())
+			e.acceptReceipt(sess.AccountID, item, col)
 			return false
 		}
 		if isUnauthorized(err) {
@@ -286,8 +317,7 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 
 	col, _, err := e.client.CreateCollectionRaw(ctx, sess.Token, item.IdempotencyKey, []byte(item.FrozenRequestJSON))
 	if err == nil {
-		_ = e.store.UpsertCachedCollectionDetail(sess.AccountID, col)
-		_ = e.store.MarkOutboxSynced(sess.AccountID, item.ID, e.now())
+		e.acceptReceipt(sess.AccountID, item, col)
 		return false
 	}
 
@@ -333,12 +363,31 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 	return false
 }
 
+// Keep the original and its staged files until the matching live receipt has been cached.
+func (e *Engine) acceptReceipt(account string, item store.OutboxItem, col api.Collection) {
+	now := e.now()
+	if col.ID != item.ID || col.DeletedAt != nil {
+		_ = e.store.MarkOutboxNeedsReview(account, item.ID, "receipt_mismatch", "云端记录已删除或回执编号不符，原稿留在本机供核对。", now)
+		return
+	}
+	if err := e.store.UpsertCachedCollectionDetail(account, col); err == nil {
+		if err = e.store.MarkOutboxSynced(account, item.ID, now); err == nil {
+			return
+		}
+	}
+	_ = e.store.MarkOutboxRetry(account, item.ID, "local_db_error", "云端已收下，正在重新保存本机回执。", now.Add(backoffDuration(item.AttemptCount)), now)
+}
+
 func (e *Engine) ensureAttachmentReady(
 	ctx context.Context,
 	sess auth.StoredSession,
 	att store.OutboxAttachment,
 ) (uploadID string, stopQueue bool, waitRetry time.Duration, terminalErr error) {
 	if att.Stage == store.StageReady && att.UploadID != "" {
+		if !att.UploadExpiresAt.IsZero() && !att.UploadExpiresAt.After(e.now()) {
+			_, err := e.store.RotateExpiredAttachmentRegistration(sess.AccountID, att.ID)
+			return "", false, time.Second, err
+		}
 		return att.UploadID, false, 0, nil
 	}
 

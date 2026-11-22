@@ -65,6 +65,35 @@ func BuildDocument(plain string) SparkDocument {
 	}
 }
 
+// PlainText keeps inline runs together and separates nested block nodes.
+func (doc *SparkDocument) PlainText() string {
+	if doc == nil {
+		return ""
+	}
+	var lines []string
+	for _, block := range doc.Content.Content {
+		lines = append(lines, nodeText(block.Type, block.Content))
+	}
+	return strings.Join(lines, "\n")
+}
+func nodeText(kind string, content []InlineNode) string {
+	var text strings.Builder
+	for i, node := range content {
+		if i > 0 && (kind == "bulletList" || kind == "orderedList" || kind == "listItem" || kind == "blockquote") {
+			text.WriteByte('\n')
+		}
+		switch node.Type {
+		case "text":
+			text.WriteString(node.Text)
+		case "hardBreak":
+			text.WriteByte('\n')
+		default:
+			text.WriteString(nodeText(node.Type, node.Content))
+		}
+	}
+	return text.String()
+}
+
 // ExtractFirstURL extracts the first valid HTTP(S) URL without embedded credentials.
 func ExtractFirstURL(text string) string {
 	match := urlPattern.FindString(text)
@@ -90,7 +119,7 @@ func ExtractFirstURL(text string) string {
 // ValidateCaptureInput validates text + intent length and non-empty invariant.
 func ValidateCaptureInput(text, intent, originalURL string, imageCount int) error {
 	cleanText := strings.TrimSpace(text)
-	cleanIntent := strings.TrimSpace(intent)
+
 	cleanURL := strings.TrimSpace(originalURL)
 
 	if cleanText == "" && cleanURL == "" && imageCount == 0 {
@@ -99,7 +128,7 @@ func ValidateCaptureInput(text, intent, originalURL string, imageCount int) erro
 	if imageCount > MaxImagesPerCol {
 		return errors.New("单条收藏最多附带 9 张图片。")
 	}
-	if utf8.RuneCountInString(cleanText)+utf8.RuneCountInString(cleanIntent) > MaxContentRunes {
+	if utf8.RuneCountInString(text)+utf8.RuneCountInString(intent) > MaxContentRunes {
 		return errors.New("正文与用途说明合计不能超过 50,000 字。")
 	}
 	if cleanURL != "" {

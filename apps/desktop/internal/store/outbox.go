@@ -202,7 +202,7 @@ func (s *Store) EnqueueCapture(in EnqueueInput, now time.Time) (OutboxItem, erro
 			project_ids_json, tag_ids_json, idempotency_key, frozen_request_json,
 			state, ever_sent, created_at, updated_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, 0, ?, ?)`,
-		collectionID, in.AccountID, strings.TrimSpace(in.RawText), strings.TrimSpace(in.Intent),
+		collectionID, in.AccountID, in.RawText, in.Intent,
 		rawURL, strings.TrimSpace(in.ManualTitle),
 		string(projJSON), string(tagJSON), idemKey,
 		string(OutboxLocalSaved), ts, ts,

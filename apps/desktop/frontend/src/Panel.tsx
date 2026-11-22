@@ -298,7 +298,8 @@ export function Panel({ req, state }: { req: Request; state: State }) {
           <textarea
             ref={editor}
             aria-label="记录灵感"
-            placeholder="刚刚想到什么？"
+            className="capture-editor resize-none"
+            placeholder="记下想法、粘贴链接或截图…"
             rows={3}
             value={text}
             disabled={busy}
@@ -469,6 +470,12 @@ export function Panel({ req, state }: { req: Request; state: State }) {
               本机已收下 · 查看刚才的记录 <ArrowUpRight />
             </button>
           )}
+          {((state.counts.local_saved || 0) + (state.counts.syncing || 0) > 0 || state.counts.needs_review) ? (
+            <button className="sub" onClick={() => req('window/main', 'POST')}>
+              {state.counts.needs_review ? `${state.counts.needs_review} 条需要核对` : `本机待同步 ${(state.counts.local_saved || 0) + (state.counts.syncing || 0)} 条`}
+              <span>打开手帐 ⌘O</span>
+            </button>
+          ) : null}
           <Notice text={err} />
           {err.includes('屏幕录制') && (
             <button onClick={() => req('window/settings', 'POST')}>

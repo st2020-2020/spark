@@ -35,7 +35,8 @@ func (s *Store) UpsertCachedCollections(accountID string, items []api.Collection
 			created_at=excluded.created_at,
 			updated_at=excluded.updated_at,
 			searchable_text=excluded.searchable_text,
-			summary_json=excluded.summary_json`)
+			summary_json=excluded.summary_json, detail_json=''
+        WHERE cached_collections.detail_json='' OR cached_collections.updated_at!=excluded.updated_at`)
 	if err != nil {
 		return err
 	}
@@ -66,6 +67,9 @@ func (s *Store) UpsertCachedCollectionDetail(accountID string, c api.Collection)
 	if accountID == "" || c.ID == "" {
 		return nil
 	}
+	if c.Document != nil {
+		c.PlainText = c.Document.PlainText()
+	}
 	summary := api.CollectionSummary{
 		ID:              c.ID,
 		DisplayTitle:    c.DisplayTitle,
@@ -81,6 +85,9 @@ func (s *Store) UpsertCachedCollectionDetail(accountID string, c api.Collection)
 		AttachmentCount: len(c.Attachments),
 		Projects:        c.Projects,
 		Tags:            c.Tags,
+	}
+	if len(c.Attachments) > 0 {
+		summary.CoverAttachmentID = c.Attachments[0].ID
 	}
 	if c.Organization != nil {
 		summary.OrganizationStatus = c.Organization.Status
@@ -164,7 +171,7 @@ func (s *Store) ListCachedCollections(accountID string, projectID string, limit 
 func (s *Store) GetCachedCollectionDetail(accountID, id string) (api.Collection, bool, error) {
 	var raw string
 	err := s.db.QueryRow(`SELECT detail_json FROM cached_collections WHERE account_id=? AND id=?`, accountID, id).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) || raw == "" {
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && raw == "") {
 		return api.Collection{}, false, nil
 	}
 	if err != nil {
@@ -197,91 +204,63 @@ func (s *Store) SearchLocal(accountID, query string, limit int) ([]LocalSearchHi
 	if limit <= 0 {
 		limit = 20
 	}
-	tokens := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
-
-	hits := make([]LocalSearchHit, 0, limit)
-	seen := make(map[string]struct{})
-
-	// 1. Search local unsynced/review outbox items first so fresh captures show up immediately.
-	outboxItems, err := s.ListOutbox(accountID, 100)
-	if err == nil {
-		for _, item := range outboxItems {
-			if item.State == OutboxSynced {
-				continue
-			}
-			hay := strings.ToLower(strings.Join([]string{item.ManualTitle, item.RawText, item.Intent, item.OriginalURL}, " "))
-			if !matchesAllTokens(hay, tokens) {
-				continue
-			}
-			title := item.ManualTitle
-			if title == "" {
-				title = firstLine(item.RawText, 48)
-			}
-			if title == "" && item.OriginalURL != "" {
-				title = item.OriginalURL
-			}
-			if title == "" && len(item.Attachments) > 0 {
-				title = item.Attachments[0].Filename
-			}
-			pType := "text"
-			if len(item.Attachments) > 0 {
-				pType = "image"
-			} else if item.OriginalURL != "" {
-				pType = "url"
-			}
-			hits = append(hits, LocalSearchHit{
-				ID:           item.ID,
-				Source:       "outbox",
-				SyncState:    string(item.State),
-				DisplayTitle: title,
-				Snippet:      firstLine(item.RawText, 120),
-				OriginalURL:  item.OriginalURL,
-				PrimaryType:  pType,
-				CreatedAt:    item.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-			})
-			seen[item.ID] = struct{}{}
-			if len(hits) >= limit {
-				return hits, nil
-			}
-		}
-	}
-
-	// 2. Search cached remote collections.
-	rows, err := s.db.Query(`
-		SELECT id, display_title, plain_text, original_url, primary_type, created_at, searchable_text
-		FROM cached_collections WHERE account_id=? ORDER BY created_at DESC LIMIT 500`, accountID)
+	// Search before limiting: an older capture must still be findable after hundreds of newer captures.
+	terms, err := json.Marshal(strings.Fields(strings.ToLower(query)))
 	if err != nil {
-		return hits, err
+		return nil, err
+	}
+	rows, err := s.db.Query(`
+        WITH entries AS (
+            SELECT id, 'outbox' AS source, state, manual_title AS title, raw_text AS plain,
+                original_url, created_at, 0 AS rank,
+                (SELECT filename FROM outbox_attachments a WHERE a.outbox_id=o.id ORDER BY ord LIMIT 1) AS filename,
+                lower(manual_title||' '||raw_text||' '||intent||' '||original_url||' '||
+                    COALESCE((SELECT group_concat(name,' ') FROM cached_projects p
+                        WHERE p.account_id=o.account_id AND p.id IN (SELECT value FROM json_each(o.project_ids_json))), '')||' '||
+                    COALESCE((SELECT group_concat(name,' ') FROM cached_tags t
+                        WHERE t.account_id=o.account_id AND t.id IN (SELECT value FROM json_each(o.tag_ids_json))), '')) AS hay,
+                '' AS kind
+            FROM outbox_items o WHERE account_id=? AND state!='synced'
+            UNION ALL
+            SELECT c.id, 'cache', 'synced', display_title, plain_text, original_url, created_at, 1,
+                NULL, searchable_text, primary_type FROM cached_collections c
+            WHERE account_id=? AND NOT EXISTS (SELECT 1 FROM outbox_items o WHERE o.id=c.id AND o.account_id=c.account_id AND o.state!='synced')
+        )
+        SELECT id,source,state,title,plain,original_url,created_at,COALESCE(filename,''),kind FROM entries
+        WHERE NOT EXISTS (SELECT 1 FROM json_each(?) WHERE instr(hay,value)=0)
+        ORDER BY rank,created_at DESC,id LIMIT ?`, accountID, accountID, string(terms), limit)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
-
+	hits := make([]LocalSearchHit, 0)
 	for rows.Next() {
-		var id, title, plain, origURL, pType, createdAt, searchable string
-		if err := rows.Scan(&id, &title, &plain, &origURL, &pType, &createdAt, &searchable); err != nil {
-			return hits, err
+		var hit LocalSearchHit
+		var plain, filename string
+		if err := rows.Scan(&hit.ID, &hit.Source, &hit.SyncState, &hit.DisplayTitle, &plain, &hit.OriginalURL, &hit.CreatedAt, &filename, &hit.PrimaryType); err != nil {
+			return nil, err
 		}
-		if _, ok := seen[id]; ok {
-			continue
+		hit.Snippet = firstLine(plain, 120)
+		if hit.DisplayTitle == "" {
+			hit.DisplayTitle = firstLine(plain, 48)
 		}
-		if !matchesAllTokens(searchable, tokens) {
-			continue
+		if hit.DisplayTitle == "" {
+			hit.DisplayTitle = hit.OriginalURL
 		}
-		if title == "" {
-			title = firstLine(plain, 48)
+		if hit.DisplayTitle == "" {
+			hit.DisplayTitle = filename
 		}
-		hits = append(hits, LocalSearchHit{
-			ID:           id,
-			Source:       "cache",
-			SyncState:    "synced",
-			DisplayTitle: title,
-			Snippet:      firstLine(plain, 120),
-			OriginalURL:  origURL,
-			PrimaryType:  pType,
-			CreatedAt:    createdAt,
-		})
-		if len(hits) >= limit {
-			break
+		if hit.PrimaryType == "" {
+			switch {
+			case filename != "":
+				hit.PrimaryType = "image"
+			case hit.OriginalURL != "":
+				hit.PrimaryType = "url"
+			default:
+				hit.PrimaryType = "text"
+			}
 		}
+		hits = append(hits, hit)
 	}
 	return hits, rows.Err()
 }
@@ -420,15 +399,6 @@ func hasActiveProject(list []api.ProjectAssociation, projectID string) bool {
 		}
 	}
 	return false
-}
-
-func matchesAllTokens(haystack string, tokens []string) bool {
-	for _, tok := range tokens {
-		if !strings.Contains(haystack, tok) {
-			return false
-		}
-	}
-	return true
 }
 
 func firstLine(s string, maxRunes int) string {

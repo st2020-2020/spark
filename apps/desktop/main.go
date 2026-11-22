@@ -81,15 +81,23 @@ func run() error {
 	var app *application.App
 	var panel, book *application.WebviewWindow
 	var openBook func(string)
-	app = application.New(application.Options{Name: "Spark", Description: "灵光手帐", LogLevel: slog.LevelWarn,
+	app = application.New(application.Options{Name: "Spark", Description: "灵光手帐", LogLevel: slog.LevelWarn, OnShutdown: cancel,
 		Assets:         application.AssetOptions{Handler: mux, DisableLogging: true},
 		Mac:            application.MacOptions{ActivationPolicy: application.ActivationPolicyAccessory},
 		SingleInstance: &application.SingleInstanceOptions{UniqueID: service, OnSecondInstanceLaunch: func(application.SecondInstanceData) { application.InvokeAsync(func() { openBook("") }) }},
 	})
+	refreshTray := func() {
+		session, _ := sessions.Load()
+		counts, err := db.Counts(session.AccountID)
+		if err == nil {
+			native.SetTrayIndicator(counts[store.OutboxLocalSaved]+counts[store.OutboxSyncing] > 0, session.Public(time.Now()).Expired || counts[store.OutboxNeedsReview]+counts[store.OutboxAuthPaused] > 0)
+		}
+	}
 	host.Change = func() {
 		if ctx.Err() != nil {
 			return
 		}
+		refreshTray()
 		application.InvokeAsync(func() {
 			if panel != nil {
 				signal(panel, "spark-state", nil)
@@ -104,6 +112,7 @@ func run() error {
 	first, _ := sessions.Load()
 	panel = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "随手记", Title: "Spark · 随手记", URL: "/?mode=panel", Width: 460, Height: 260, Hidden: first.AccountID != "", Frameless: true, DisableResize: true, BackgroundType: application.BackgroundTypeTranslucent,
 		Mac: application.MacWindow{WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, Backdrop: application.MacBackdropTranslucent, WindowLevel: application.MacWindowLevelFloating, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenAuxiliary}})
+	host.PanelVisible = func() bool { return application.InvokeSyncWithResult(panel.IsVisible) }
 	hide := func() { panel.Hide(); native.RestoreFrontApp() }
 	show := func() {
 		if !panel.IsVisible() {
@@ -167,7 +176,18 @@ func run() error {
 			}
 		})
 	}
-	tray.OnClick(toggle)
+	tray.OnClick(func() {
+		application.InvokeAsync(func() {
+			if panel.IsVisible() {
+				hide()
+				return
+			}
+			show()
+			if err := tray.PositionWindow(panel, 6); err != nil {
+				native.PositionPanel(panel.NativeWindow())
+			}
+		})
+	})
 	menu := app.NewMenu()
 	menu.Add("随手记").OnClick(func(*application.Context) { application.InvokeAsync(show) })
 	menu.Add("打开灵光手帐").OnClick(func(*application.Context) { application.InvokeAsync(func() { openBook("") }) })
@@ -248,17 +268,20 @@ func run() error {
 			if e != nil {
 				return e
 			}
-			application.InvokeAsync(func() { panel.SetSize(460, min(540, max(n, 140))) })
+			application.InvokeAsync(func() { panel.SetSize(460, min(560, max(n, 156))) })
 		}
 		return nil
 	}
-	drop := func(text string, paths []string) {
+	drop := func(text string, paths []string, png []byte) {
 		owner, err := sessions.Load()
 		if err != nil {
 			application.InvokeAsync(show)
 			return
 		}
 		in := store.EnqueueInput{AccountID: owner.AccountID, RawText: text}
+		if len(png) > 0 {
+			in.Attachments = []store.PendingAttachmentInput{{Filename: "拖入图片.png", Data: png}}
+		}
 		if len(paths) > api.MaxImagesPerCol {
 			err = errors.New("单条收藏最多附带 9 张图片。")
 		}
@@ -286,7 +309,28 @@ func run() error {
 		time.AfterFunc(450*time.Millisecond, func() { tray.SetLabel("") })
 	}
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
-		native.RegisterTrayDropHandlers(func(t string) { drop(t, nil) }, func(p []string) { drop("", p) }, func() { application.InvokeAsync(show) })
+		workers.Add(2)
+		go func() { defer workers.Done(); refreshTray(); engine.Run(ctx) }()
+		go func() {
+			defer workers.Done()
+			count := native.ClipboardCount()
+			host.Clipboard.Observe(count, time.Now())
+			t := time.NewTicker(time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					next := native.ClipboardCount()
+					if next != count {
+						count = next
+						host.Clipboard.Observe(next, time.Now())
+					}
+				}
+			}
+		}()
+		native.RegisterTrayDropHandlers(func(t string) { drop(t, nil, nil) }, func(p []string) { drop("", p, nil) }, func(data []byte) { drop("", nil, data) }, func() { application.InvokeAsync(show) })
 		for _, binding := range []struct {
 			key string
 			fn  func()
@@ -297,27 +341,6 @@ func run() error {
 			}
 		}
 	})
-	workers.Add(2)
-	go func() { defer workers.Done(); engine.Run(ctx) }()
-	go func() {
-		defer workers.Done()
-		count := native.ClipboardCount()
-		host.Clipboard.Observe(native.RawClipboardSample{ChangeCount: count}, time.Now())
-		t := time.NewTicker(time.Second)
-		defer t.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				next := native.ClipboardCount()
-				if next != count {
-					count = next
-					host.Clipboard.Observe(native.ReadClipboardSample(), time.Now())
-				}
-			}
-		}
-	}()
 	return app.Run()
 }
 func signal(w *application.WebviewWindow, name string, data any) {

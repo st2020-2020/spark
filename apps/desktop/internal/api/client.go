@@ -369,7 +369,7 @@ func (c *Client) UploadObjectToOSS(ctx context.Context, grant UploadGrant, data 
 
 	req, err := http.NewRequestWithContext(ctx, method, grant.URL, bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("create OSS request: %w", err)
+		return errors.New("图片上传地址格式无效")
 	}
 	// Explicit ContentLength prevents chunked Transfer-Encoding on OSS PUT.
 	req.ContentLength = int64(len(data))
@@ -388,7 +388,7 @@ func (c *Client) UploadObjectToOSS(ctx context.Context, grant UploadGrant, data 
 
 	resp, err := c.ossHTTP.Do(req)
 	if err != nil {
-		return err
+		return errors.New("无法连接图片存储")
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
@@ -452,12 +452,20 @@ func (c *Client) GetAttachmentThumbnail(ctx context.Context, token string, attac
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		return nil, "", &APIError{Status: resp.StatusCode, Code: "unexpected_redirect", Message: "缩略图请求拒绝重定向。"}
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxThumbBytes))
+	if resp.StatusCode == http.StatusUnauthorized && c.OnUnauthorized != nil {
+		if err := c.OnUnauthorized(token); err != nil {
+			return nil, "", err
+		}
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxThumbBytes+1))
 	if err != nil {
 		return nil, "", err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, "", parseAPIError(resp.StatusCode, resp.Header, raw)
+	}
+	if len(raw) > maxThumbBytes {
+		return nil, "", errors.New("缩略图超过大小限制")
 	}
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {

@@ -39,9 +39,10 @@ type BlockNode struct {
 }
 
 type InlineNode struct {
-	Type  string     `json:"type"`
-	Text  string     `json:"text,omitempty"`
-	Marks []TextMark `json:"marks,omitempty"`
+	Content []InlineNode `json:"content,omitempty"`
+	Type    string       `json:"type"`
+	Text    string       `json:"text,omitempty"`
+	Marks   []TextMark   `json:"marks,omitempty"`
 }
 
 type TextMark struct {

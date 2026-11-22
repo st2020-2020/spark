@@ -3,6 +3,8 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"spark/apps/desktop/internal/api"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -81,5 +83,29 @@ func TestAtomicOutboxPersistenceAndAccountIsolation(t *testing.T) {
 	}
 	if _, err := os.Stat(stagedFullPath); !os.IsNotExist(err) {
 		t.Fatalf("expected staged attachment cleaned up after sync, stat err=%v", err)
+	}
+}
+
+func TestCachedBodyIsSearchableBeyondRecentSummaries(t *testing.T) {
+	st, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	doc := api.BuildDocument("first paragraph\nneedle near the end")
+	note := api.Collection{ID: "older", UpdatedAt: "2026-11-01", Document: &doc}
+	if err := st.UpsertCachedCollectionDetail("a", note); err != nil {
+		t.Fatal(err)
+	}
+	summaries := []api.CollectionSummary{{ID: note.ID, UpdatedAt: note.UpdatedAt, PlainText: "first paragraph"}}
+	for i := range 501 {
+		summaries = append(summaries, api.CollectionSummary{ID: strconv.Itoa(i), CreatedAt: "2026-11-02"})
+	}
+	if err := st.UpsertCachedCollections("a", summaries); err != nil {
+		t.Fatal(err)
+	}
+	hits, err := st.SearchLocal("a", "needle end", 5)
+	if err != nil || len(hits) != 1 || hits[0].ID != note.ID {
+		t.Fatalf("older full text missing: %v %v", hits, err)
 	}
 }
