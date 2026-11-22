@@ -15,7 +15,7 @@ import (
 var thumbnailSlot = make(chan struct{}, 1)
 
 func (s *Server) attachmentThumbnail(c *gin.Context) (any, error) {
-	if s.crossOriginRead(c) {
+	if current(c).Kind != desktopSessionKind && s.crossOriginRead(c) {
 		return nil, problem(403, "forbidden", "缩略图仅支持同源请求。")
 	}
 	if s.Assets == nil {

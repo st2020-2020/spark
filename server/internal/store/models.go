@@ -182,6 +182,16 @@ type DeletionLedger struct {
 	ObjectCursor int32
 }
 
+type DeviceGrant struct {
+	Challenge    []byte
+	UserID       pgtype.UUID
+	WebSessionID pgtype.UUID
+	Device       string
+	ExpiresAt    pgtype.Timestamptz
+	ConsumedAt   pgtype.Timestamptz
+	Kind         string
+}
+
 type EmailChallenge struct {
 	ID              pgtype.UUID
 	EmailNormalized string
@@ -191,15 +201,6 @@ type EmailChallenge struct {
 	Attempts        int32
 	ConsumedAt      pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
-}
-
-type ExtensionGrant struct {
-	Challenge    []byte
-	UserID       pgtype.UUID
-	WebSessionID pgtype.UUID
-	Browser      string
-	ExpiresAt    pgtype.Timestamptz
-	ConsumedAt   pgtype.Timestamptz
 }
 
 type Extraction struct {

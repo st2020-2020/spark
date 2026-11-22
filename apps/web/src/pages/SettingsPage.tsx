@@ -20,7 +20,7 @@ import {
   type PaletteId,
   type ThemePref,
 } from '../lib/appearance';
-import { isExtensionDeviceLabel } from '../lib/extensionPair';
+import { resolveSessionKind } from '../lib/devicePair';
 import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/format';
 
 export function SettingsPage() {
@@ -241,14 +241,14 @@ export function SettingsPage() {
         <section className="sp-card" aria-label="活跃设备会话">
           <h2 className="sp-card-title">活跃设备会话</h2>
           <p className="sp-help">
-            撤销浏览器扩展会话会立即使其凭据失效；重设密码会同时撤销所有网页与扩展设备。
+            撤销浏览器扩展或 macOS 桌面端会话会立即使其凭据失效；重设密码会同时撤销所有网页、扩展与桌面设备。
           </p>
           {isSessionsUnavailable ? (
             <p className="sp-help">多设备会话管理暂未开放，将在后续里程碑接入。</p>
           ) : (
             <div>
               {(sessionsQuery.data?.items ?? []).map((sess) => {
-                const isExtension = isExtensionDeviceLabel(sess.device_label);
+                const kind = resolveSessionKind(sess);
                 return (
                   <div key={sess.id} className="sp-session-row">
                     <div className="sp-setting-row-main">
@@ -256,7 +256,8 @@ export function SettingsPage() {
                         <span className="sp-strong" title={sess.device_label}>
                           {formatDeviceLabel(sess.device_label)}
                         </span>
-                        {isExtension && <span className="sp-pill">浏览器扩展</span>}
+                        {kind === 'extension' && <span className="sp-pill">浏览器扩展</span>}
+                        {kind === 'desktop' && <span className="sp-pill">macOS 桌面端</span>}
                         {sess.current && <span className="sp-pill sp-pill--green">当前设备</span>}
                       </div>
                       <div className="sp-help sp-tabular">

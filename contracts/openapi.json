@@ -1029,6 +1029,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1282,6 +1285,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1470,6 +1476,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1517,10 +1526,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Web Cookie 会话必填。通过验证的 macOS 桌面 Bearer 会话无需提供。"
           },
           {
             "name": "Idempotency-Key",
@@ -1555,6 +1565,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1602,6 +1615,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1639,10 +1655,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Web Cookie 会话必填。通过验证的 macOS 桌面 Bearer 会话无需提供。"
           }
         ]
       }
@@ -1657,6 +1674,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1723,6 +1743,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1931,6 +1954,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -1959,10 +1985,11 @@
           {
             "name": "X-CSRF-Token",
             "in": "header",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Web Cookie 会话必填。通过验证的 macOS 桌面 Bearer 会话无需提供。"
           },
           {
             "name": "Idempotency-Key",
@@ -1995,6 +2022,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -2132,6 +2162,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -3423,6 +3456,9 @@
         "security": [
           {
             "sessionCookie": []
+          },
+          {
+            "desktopBearer": []
           }
         ],
         "responses": {
@@ -4702,6 +4738,351 @@
           }
         }
       }
+    },
+    "/desktop/login": {
+      "post": {
+        "operationId": "loginDesktop",
+        "summary": "在 macOS 桌面端使用邮箱和密码登录",
+        "description": "沿用 Web 登录的身份校验、失败策略和限流。只返回 30 天桌面会话。请求仅以 JSON 正文传递登录凭据。",
+        "tags": [
+          "desktop"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "登录成功，返回独立的桌面会话。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopTokenResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "mixed_credentials 或 unexpected_credentials：客户端须使用请求体凭据。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "authentication_failed：邮箱或密码不正确。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：请求未通过字段校验。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "rate_limited：登录尝试过多或校验繁忙。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "建议等待的秒数。"
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/desktop/grants": {
+      "post": {
+        "operationId": "approveDesktopGrant",
+        "summary": "确认macOS 桌面端配对",
+        "tags": [
+          "desktop"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "409": {
+            "description": "desktop_account_changed 或 desktop_grant_conflict：重新连接桌面并确认账号。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：配对字段无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesktopGrantCreate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/desktop/token": {
+      "post": {
+        "operationId": "exchangeDesktopGrant",
+        "summary": "一次性兑换macOS 桌面端凭据",
+        "tags": [
+          "desktop"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopTokenResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "desktop_grant_invalid：配对已过期、已消费或被撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "desktop_grant_pending：尚未收到 Web 确认。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：兑换证明格式无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "mixed_credentials 或 unexpected_credentials：兑换仅使用请求体的一次性证明。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesktopTokenExchange"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/desktop/session": {
+      "get": {
+        "operationId": "getDesktopSession",
+        "summary": "读取当前桌面绑定信息",
+        "tags": [
+          "desktop"
+        ],
+        "security": [
+          {
+            "desktopBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DesktopSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "desktop_session_expired：桌面未连接、已到期或已撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "mixed_credentials：不能同时使用 Cookie 与 Authorization。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeDesktopSession",
+        "summary": "撤销当前桌面绑定",
+        "tags": [
+          "desktop"
+        ],
+        "security": [
+          {
+            "desktopBearer": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "401": {
+            "description": "desktop_session_expired：桌面未连接、已到期或已撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "mixed_credentials：不能同时使用 Cookie 与 Authorization。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4715,6 +5096,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "仅限浏览器扩展接口的独立凭据。"
+      },
+      "desktopBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "macOS 桌面端独立会话，固定 30 天，限定在明确支持此授权的接口。与 Cookie 混用时拒绝。"
       }
     },
     "schemas": {
@@ -5126,6 +5512,15 @@
           },
           "current": {
             "type": "boolean"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "web",
+              "extension",
+              "desktop"
+            ],
+            "description": "会话所属客户端。"
           }
         },
         "required": [
@@ -7761,6 +8156,96 @@
         },
         "required": [
           "base_decision_version"
+        ]
+      },
+      "DesktopGrantCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "minLength": 43,
+            "maxLength": 43,
+            "description": "base64url 无填充编码的 SHA-256 摘要，输入为 UTF-8 字符串 spark-desktop-pair-v1: 后接 verifier。"
+          },
+          "expected_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "批准时 Web 页面向用户展示的当前账号 ID。仅作前置条件。"
+          }
+        },
+        "required": [
+          "challenge",
+          "expected_account_id"
+        ]
+      },
+      "DesktopTokenExchange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "verifier": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "minLength": 43,
+            "maxLength": 43,
+            "description": "扩展生成的 32 字节随机数，经无填充 base64url 编码。仅在请求正文发送。"
+          }
+        },
+        "required": [
+          "verifier"
+        ]
+      },
+      "DesktopTokenResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "minLength": 43,
+            "maxLength": 43,
+            "description": "仅兑换成功响应返回的桌面 Bearer 凭据，绝对有效期 30 天。"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_label": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "account_id",
+          "account_label",
+          "expires_at"
+        ]
+      },
+      "DesktopSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_label": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "account_id",
+          "account_label",
+          "expires_at"
         ]
       }
     }

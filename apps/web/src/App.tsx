@@ -13,8 +13,9 @@ import { ToastProvider } from './context/ToastContext';
 import { AdminPage } from './pages/AdminPage';
 import { CollectionDetailPage } from './pages/CollectionDetailPage';
 import { CollectionsPage } from './pages/CollectionsPage';
+import { DesktopPairPage } from './pages/DesktopPairPage';
 import { ExtensionPairPage } from './pages/ExtensionPairPage';
-import { resolveSafeRedirectPath } from './lib/extensionPair';
+import { resolveSafeRedirectPath } from './lib/devicePair';
 import { InboxPage } from './pages/InboxPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
@@ -109,6 +110,7 @@ export function AppRoutes() {
         }
       />
       <Route path="/extension/pair" element={<ExtensionPairPage />} />
+      <Route path="/desktop/pair" element={<DesktopPairPage />} />
 
       <Route element={<AuthenticatedShell />}>
         <Route path="/inbox" element={<InboxPage />} />

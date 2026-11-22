@@ -49,6 +49,9 @@ func (s *Server) idempotentWithReplay(c *gin.Context, request any, status int, w
 	if _, err = store.New(tx).LockUserChanges(ctx, idPG(uid)); err != nil {
 		return nil, err
 	}
+	if err = lockDesktopWriteSession(c, tx); err != nil {
+		return nil, err
+	}
 	hash := digest(string(jsonBytes(request)))
 	if canonical, ok := c.Get("request_digest"); ok {
 		hash = canonical.([]byte)

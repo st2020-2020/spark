@@ -69,6 +69,12 @@ const DEFAULT_CODE_MESSAGES: Record<string, string> = {
   extension_grant_pending: '扩展授权尚未确认，请先在网页端确认授权后再完成连接。',
   extension_grant_invalid: '扩展配对已过期、已消费或被撤销，请重新发起连接。',
   extension_session_expired: '扩展授权已到期或被撤销，请重新连接 Spark。',
+  desktop_account_changed: '当前登录账号已变更，请在 macOS 桌面端重新发起配对。',
+  desktop_grant_conflict: '该桌面配对请求已失效、过期或已被使用，请在 macOS 桌面端重新发起连接。',
+  desktop_grant_pending: '桌面授权尚未确认，请先在系统浏览器确认授权后再完成连接。',
+  desktop_grant_invalid: '桌面配对已过期、已消费或被撤销，请重新发起连接。',
+  desktop_session_expired: 'macOS 桌面端授权已到期或被撤销，请重新连接 Spark。',
+  desktop_scope_forbidden: '当前操作超出 macOS 桌面端授权范围。',
   service_unavailable: '服务暂时不可用，已保留你的输入，请稍后重试。',
   network_error: '无法连接到后端服务，请确认网络或本地服务状态后重试。',
 };

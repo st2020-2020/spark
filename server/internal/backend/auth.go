@@ -221,6 +221,15 @@ func (s *Server) register(c *gin.Context) (any, error) {
 	return s.sessionResult(sess), nil
 }
 func (s *Server) login(c *gin.Context) (any, error) {
+	sess, err := s.loginWithPassword(c, "web")
+	if err != nil {
+		return nil, err
+	}
+	s.cookie(c, sess.Token, sess.Expires)
+	return s.sessionResult(sess), nil
+}
+
+func (s *Server) loginWithPassword(c *gin.Context, kind string) (*signedIn, error) {
 	req, err := bind[contract.LoginRequest](s, c)
 	if err != nil {
 		return nil, err
@@ -266,15 +275,19 @@ func (s *Server) login(c *gin.Context) (any, error) {
 		return nil, problem(401, "authentication_failed", "邮箱或密码不正确。")
 	}
 	u := userView{ID: user.ID.String(), Email: email, Role: user.Role, Status: user.Status, AIEnabled: user.AiEnabled, AIConsentVersion: user.AiConsentVersion.String, AIPolicyVersion: user.AiPolicyVersion, Palette: user.Palette, Theme: user.Theme}
-	sess, err := s.newSession(ctx, tx, c, u)
+	var sess *signedIn
+	if kind == desktopSessionKind {
+		sess, err = newDeviceSession(ctx, tx, u, kind, desktopDeviceLabel, desktopSessionTTL)
+	} else {
+		sess, err = s.newSession(ctx, tx, c, u)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(ctx); err != nil {
 		return nil, err
 	}
-	s.cookie(c, sess.Token, sess.Expires)
-	return s.sessionResult(sess), nil
+	return sess, nil
 }
 func (s *Server) resetPassword(c *gin.Context) (any, error) {
 	req, err := bind[contract.PasswordReset](s, c)
