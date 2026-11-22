@@ -110,8 +110,8 @@ func run() error {
 	client.OnUnauthorized = func(token string) error { err := sessions.Expire(token); host.Change(); return err }
 	engine.SetOnChange(host.Change)
 	first, _ := sessions.Load()
-	panel = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "随手记", Title: "Spark · 随手记", URL: "/?mode=panel", Width: 460, Height: 260, Hidden: first.AccountID != "", Frameless: true, DisableResize: true, BackgroundType: application.BackgroundTypeTranslucent,
-		Mac: application.MacWindow{WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, Backdrop: application.MacBackdropTranslucent, WindowLevel: application.MacWindowLevelFloating, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenAuxiliary}})
+	panel = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "随手记", Title: "Spark · 随手记", URL: "/?mode=panel", Width: 460, Height: 260, Hidden: first.AccountID != "", Frameless: true, DisableResize: true, BackgroundType: application.BackgroundTypeTransparent,
+		Mac: application.MacWindow{WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, Backdrop: application.MacBackdropTransparent, WindowLevel: application.MacWindowLevelFloating, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenAuxiliary}})
 	host.PanelVisible = func() bool { return application.InvokeSyncWithResult(panel.IsVisible) }
 	hide := func() { panel.Hide(); native.RestoreFrontApp() }
 	show := func() {
@@ -136,7 +136,8 @@ func run() error {
 		native.SetDockVisible(true)
 		if book == nil {
 			path := "/?mode=main&id=" + url.QueryEscape(id)
-			book = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "灵光手帐", Title: "Spark · 灵光手帐", URL: path, Width: 1080, Height: 740, MinWidth: 720, MinHeight: 500, Mac: application.MacWindow{TitleBar: application.MacTitleBarHiddenInset, InvisibleTitleBarHeight: 52, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenPrimary}})
+			// CSS marks the two title-bar drag regions and excludes their controls.
+			book = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "灵光手帐", Title: "Spark · 灵光手帐", URL: path, Width: 1080, Height: 740, MinWidth: 720, MinHeight: 500, Mac: application.MacWindow{TitleBar: application.MacTitleBarHiddenInset, CollectionBehavior: application.MacWindowCollectionBehaviorMoveToActiveSpace | application.MacWindowCollectionBehaviorFullScreenPrimary}})
 			current := book
 			closingFullscreen := false
 			current.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
@@ -171,6 +172,8 @@ func run() error {
 		application.InvokeAsync(func() {
 			if panel.IsVisible() {
 				hide()
+			} else if book != nil && book.IsFocused() {
+				signal(book, "spark-compose", nil)
 			} else {
 				show()
 			}
@@ -268,7 +271,7 @@ func run() error {
 			if e != nil {
 				return e
 			}
-			application.InvokeAsync(func() { panel.SetSize(460, min(560, max(n, 156))) })
+			application.InvokeAsync(func() { panel.SetSize(460, min(560, max(n, 80))) })
 		}
 		return nil
 	}

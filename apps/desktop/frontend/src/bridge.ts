@@ -48,8 +48,11 @@ export type Hit = {
   original_url?: string;
   created_at: string;
   sync_state: Phase;
+  primary_type?: string;
+  projects?: Summary['projects'];
 };
 export type Summary = {
+  primary_type?: string;
   id: string;
   display_title: string;
   excerpt?: string;
@@ -132,13 +135,20 @@ export function detectURL(text: string) {
   }
   return '';
 }
-export function dateLabel(iso: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'long',
-    day: 'numeric',
-    weekday: 'short',
-  }).format(new Date(iso));
+const macKeys: Record<string, string> = {
+  Control: '⌃',
+  Option: '⌥',
+  Command: '⌘',
+  Shift: '⇧',
+  Space: '␣',
+};
+export function formatShortcut(keys: string) {
+  return keys
+    .split('+')
+    .map((key) => macKeys[key] ?? key)
+    .join('');
 }
+
 export function active(d: string) {
   return ['manual', 'confirmed', 'auto'].includes(d);
 }

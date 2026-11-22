@@ -2,12 +2,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { bridge, message, type State } from './bridge';
 import { Notice, Login } from './shared';
-import { Panel } from './Panel';
+import { Capture } from './Panel';
 import { Book } from './Book';
 import '../../../web/src/styles/tokens.css';
 import './desktop.css';
 
 const book = new URLSearchParams(location.search).get('mode') === 'main';
+document.documentElement.dataset.window = book ? 'main' : 'panel';
 function App() {
   const [state, set] = useState<State>(),
     [error, bad] = useState(''),
@@ -76,14 +77,7 @@ function App() {
           if (!book && e.key === 'Escape') void req('window/hide', 'POST');
         }}
       >
-        <Login
-          state={state}
-          panel={!book}
-          onSuccess={() => {
-            refresh();
-            if (book) void req('window/panel', 'POST');
-          }}
-        />
+        <Login state={state} panel={!book} onSuccess={refresh} />
       </section>
     );
   return book ? (
@@ -94,7 +88,7 @@ function App() {
       refresh={refresh}
     />
   ) : (
-    <Panel key={state.session.account_id} state={state} req={req} />
+    <Capture key={state.session.account_id} state={state} req={req} />
   );
 }
 createRoot(document.getElementById('root')!).render(<App />);

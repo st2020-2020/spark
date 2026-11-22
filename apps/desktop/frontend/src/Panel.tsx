@@ -1,4 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from 'react';
 import {
   ArrowUpRight,
   AtSign,
@@ -22,9 +28,28 @@ import {
   type Outbox,
 } from './bridge';
 import { Login, Notice, Tool } from './shared';
+import { projectToneClass } from '../../../web/src/lib/projectTone';
 import { Search } from './Search';
 
-export function Panel({ req, state }: { req: Request; state: State }) {
+type InlineCapture = {
+  editor: RefObject<HTMLTextAreaElement | null>;
+  projects: Choice[];
+  tags: Choice[];
+  search: () => void;
+  openRecord: (id: string) => void;
+};
+
+export function Capture({
+  req,
+  state,
+  inline,
+}: {
+  req: Request;
+  state: State;
+  inline?: InlineCapture;
+}) {
+  const floating = !inline;
+  const [editing, setEditing] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const signingIn = loginOpen && !!state.session.expired;
   const [text, write] = useState(''),
@@ -53,14 +78,31 @@ export function Panel({ req, state }: { req: Request; state: State }) {
       term: string;
     } | null>(null),
     [active, select] = useState(0);
-  const editor = useRef<HTMLTextAreaElement>(null),
+  const panelEditor = useRef<HTMLTextAreaElement>(null),
+    editor = inline?.editor ?? panelEditor,
     picker = useRef<HTMLInputElement>(null),
     root = useRef<HTMLDivElement>(null),
+    reading = useRef(0),
+    [importing, setImporting] = useState(false),
     pending = useRef(false),
     ime = useRef(false);
   const url = detectURL(text);
   const linked = url !== removed ? url : '';
-  const choices = (mention?.kind === '@' ? projects : tags)
+  const availableProjects = inline?.projects ?? projects;
+  const availableTags = inline?.tags ?? tags;
+  const expanded =
+    floating ||
+    editing ||
+    !!(
+      text ||
+      intent ||
+      images.length ||
+      projectIDs.length ||
+      tagIDs.length ||
+      showIntent
+    );
+  const openSearch = () => (inline ? inline.search() : find(true));
+  const choices = (mention?.kind === '@' ? availableProjects : availableTags)
     .filter((c) =>
       c.name.toLowerCase().includes(mention?.term.toLowerCase() || ''),
     )
@@ -93,12 +135,18 @@ export function Panel({ req, state }: { req: Request; state: State }) {
     });
   }
   async function add(files: File[]) {
+    if (pending.current || !files.length) return;
+    reading.current++;
+    setImporting(true);
     try {
       if (images.length + files.length > 9)
         throw new Error('单条收藏最多附带 9 张图片。');
       push(await Promise.all(files.map(fileImage)));
     } catch (e) {
       bad(message(e));
+    } finally {
+      reading.current--;
+      setImporting(reading.current > 0);
     }
   }
   const append = (value: string) => {
@@ -118,18 +166,19 @@ export function Panel({ req, state }: { req: Request; state: State }) {
     dismiss();
   }
   useLayoutEffect(() => {
-    if (editor.current) {
+    if (editor.current && editor.current.offsetWidth) {
       editor.current.style.height = 'auto';
-      editor.current.style.height =
-        Math.min(220, editor.current.scrollHeight) + 'px';
+      if (expanded && text)
+        editor.current.style.height =
+          Math.min(220, editor.current.scrollHeight) + 'px';
     }
-  }, [text, search]);
+  }, [text, search, expanded]);
   useEffect(() => {
     const el = root.current;
-    if (!el) return;
+    if (!floating || !el) return;
     let height = 0;
     const o = new ResizeObserver(() => {
-      const n = Math.ceil(el.getBoundingClientRect().height);
+      const n = Math.ceil(el.getBoundingClientRect().height) + 8;
       if (n !== height) {
         height = n;
         void req('window/resize?height=' + n, 'POST').catch(() => {});
@@ -137,8 +186,9 @@ export function Panel({ req, state }: { req: Request; state: State }) {
     });
     o.observe(el);
     return () => o.disconnect();
-  }, [req]);
+  }, [req, floating]);
   useEffect(() => {
+    if (!floating) return;
     let live = true;
     async function load() {
       try {
@@ -190,9 +240,10 @@ export function Panel({ req, state }: { req: Request; state: State }) {
       window.removeEventListener('spark-error', error);
       window.removeEventListener('spark-state', load);
     };
-  }, [req, state.session.account_id]);
+  }, [req, state.session.account_id, floating, editor]);
   async function save() {
-    if (pending.current || (!text.trim() && !images.length)) return;
+    if (pending.current || reading.current || (!text.trim() && !images.length))
+      return;
     pending.current = true;
     saving(true);
     bad('');
@@ -218,7 +269,8 @@ export function Panel({ req, state }: { req: Request; state: State }) {
       expand(false);
       suggest(null);
       saved({ id: result.item.id, at: Date.now() });
-      await req('window/hide', 'POST');
+      if (floating) await req('window/hide', 'POST');
+      else setEditing(false);
     } catch (e) {
       bad(message(e));
     } finally {
@@ -226,6 +278,14 @@ export function Panel({ req, state }: { req: Request; state: State }) {
       saving(false);
     }
   }
+  useEffect(() => {
+    if (!last) return;
+    const timeout = setTimeout(
+      () => saved(undefined),
+      Math.max(0, last.at + 3000 - Date.now()),
+    );
+    return () => clearTimeout(timeout);
+  }, [last]);
   function leaveSearch() {
     find(false);
     requestAnimationFrame(() => editor.current?.focus());
@@ -233,7 +293,13 @@ export function Panel({ req, state }: { req: Request; state: State }) {
   return (
     <div
       ref={root}
-      className="paper panel"
+      className={floating ? 'panel' : 'inline-capture'}
+      data-expanded={expanded}
+      onFocus={() => setEditing(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node))
+          setEditing(false);
+      }}
       onKeyDown={(e) => {
         if (e.nativeEvent.isComposing || e.keyCode === 229 || ime.current)
           return;
@@ -243,11 +309,14 @@ export function Panel({ req, state }: { req: Request; state: State }) {
         }
         if (e.metaKey && e.key.toLowerCase() === 'k') {
           e.preventDefault();
-          search ? leaveSearch() : find(true);
-        } else if (e.metaKey && e.key.toLowerCase() === 'o') {
+          search ? leaveSearch() : openSearch();
+        } else if (floating && e.metaKey && e.key.toLowerCase() === 'o') {
           e.preventDefault();
           void req('window/main', 'POST');
         } else if (
+          !search &&
+          !e.metaKey &&
+          !e.ctrlKey &&
           mention &&
           choices.length &&
           ['ArrowUp', 'ArrowDown', 'Enter'].includes(e.key)
@@ -261,7 +330,7 @@ export function Panel({ req, state }: { req: Request; state: State }) {
             );
         } else if (e.key === 'Escape') {
           if (mention) suggest(null);
-          else if (!search) void req('window/hide', 'POST');
+          else if (floating && !search) void req('window/hide', 'POST');
         } else if (!search && (e.metaKey || e.ctrlKey) && e.key === 'Enter') {
           e.preventDefault();
           void save();
@@ -292,7 +361,9 @@ export function Panel({ req, state }: { req: Request; state: State }) {
       ) : search ? (
         <Search req={req} back={leaveSearch} />
       ) : (
-        <div
+        <fieldset
+          className="capture-sheet"
+          disabled={busy}
           onDragOver={(e) => {
             e.preventDefault();
             dragging(true);
@@ -304,6 +375,8 @@ export function Panel({ req, state }: { req: Request; state: State }) {
           onDrop={(e) => {
             e.preventDefault();
             dragging(false);
+            if (pending.current) return;
+            setEditing(true);
             if (e.dataTransfer.files.length)
               void add([...e.dataTransfer.files]);
             else
@@ -313,13 +386,13 @@ export function Panel({ req, state }: { req: Request; state: State }) {
               );
           }}
         >
-          <div className="tape" />
+          <div className="tape" aria-hidden="true" />
           <textarea
             ref={editor}
             aria-label="记录灵感"
             className="capture-editor resize-none"
             placeholder="记下想法、粘贴链接或截图…"
-            rows={3}
+            rows={expanded ? 3 : 1}
             value={text}
             disabled={busy}
             onCompositionStart={() => {
@@ -332,7 +405,7 @@ export function Panel({ req, state }: { req: Request; state: State }) {
             }}
             onChange={(e) => {
               if (e.target.value === '/' && !text && !ime.current) {
-                find(true);
+                openSearch();
                 return;
               }
               changed(e.target.value, e.target.selectionStart);
@@ -369,6 +442,12 @@ export function Panel({ req, state }: { req: Request; state: State }) {
                   aria-selected={i === active}
                   onClick={() => choose(c)}
                 >
+                  {mention.kind === '@' && (
+                    <i
+                      aria-hidden="true"
+                      className={'tone ' + projectToneClass(c.id)}
+                    />
+                  )}
                   {mention.kind} {c.name}
                 </button>
               ))}
@@ -382,7 +461,7 @@ export function Panel({ req, state }: { req: Request; state: State }) {
                 onClick={() => removeURL(linked)}
               >
                 <Link2 />
-                {new URL(linked).hostname}
+                <span className="chip-label">{new URL(linked).hostname}</span>
                 <X />
               </button>
             )}
@@ -391,14 +470,20 @@ export function Panel({ req, state }: { req: Request; state: State }) {
               ...tagIDs.map((id) => ({ id, p: false })),
             ].map(({ id, p }) => (
               <button
-                className={'chip ' + (p ? 'washi' : '')}
+                className={'chip ' + (p ? 'washi ' + projectToneClass(id) : '')}
                 key={id}
                 onClick={() =>
                   (p ? pickP : pickT)((ids) => ids.filter((x) => x !== id))
                 }
               >
-                {p ? '@' : '#'}{' '}
-                {(p ? projects : tags).find((t) => t.id === id)?.name}
+                <span className="chip-label">
+                  {p ? '@' : '#'}{' '}
+                  {
+                    (p ? availableProjects : availableTags).find(
+                      (t) => t.id === id,
+                    )?.name
+                  }
+                </span>
                 <X />
               </button>
             ))}
@@ -430,67 +515,80 @@ export function Panel({ req, state }: { req: Request; state: State }) {
               placeholder="补一句用途，方便归类…"
             />
           )}
-          <div className="toolbar">
-            <Tool
-              label="选区截屏"
-              onClick={() => req('window/screenshot', 'POST')}
-            >
-              <Camera />
-            </Tool>
-            <Tool label="添加图片" onClick={() => picker.current?.click()}>
-              <FileImage />
-            </Tool>
-            <input
-              ref={picker}
-              hidden
-              type="file"
-              multiple
-              accept="image/png,image/jpeg,image/webp,image/gif"
-              onChange={(e) => {
-                void add([...(e.target.files || [])]);
-                e.target.value = '';
-              }}
-            />
-            <Tool
-              label="选择项目"
-              onClick={() => {
-                const v = text + (text ? ' @' : '@');
-                changed(v, v.length);
-                editor.current?.focus();
-              }}
-            >
-              <AtSign />
-            </Tool>
-            <button onClick={() => expand(!showIntent)}>
-              <Plus />
-              用途
-            </button>
-            <i />
-            <Tool label="快搜 ⌘K" onClick={() => find(true)}>
-              <Lens />
-            </Tool>
-            <button
-              className="primary save"
-              disabled={busy || (!text.trim() && !images.length)}
-              onClick={save}
-            >
-              {busy ? '保存中' : '收下'} <kbd>⌘↵</kbd>
-            </button>
-          </div>
+          {expanded && (
+            <div className="toolbar">
+              {floating && (
+                <Tool
+                  label="选区截屏"
+                  onClick={() => req('window/screenshot', 'POST')}
+                >
+                  <Camera />
+                </Tool>
+              )}
+              <Tool label="添加图片" onClick={() => picker.current?.click()}>
+                <FileImage />
+              </Tool>
+              <input
+                ref={picker}
+                hidden
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onChange={(e) => {
+                  void add([...(e.target.files || [])]);
+                  e.target.value = '';
+                }}
+              />
+              <Tool
+                label="选择项目"
+                onClick={() => {
+                  const v = text + (text ? ' @' : '@');
+                  changed(v, v.length);
+                  editor.current?.focus();
+                }}
+              >
+                <AtSign />
+              </Tool>
+              <button
+                aria-expanded={showIntent}
+                onClick={() => expand(!showIntent)}
+              >
+                <Plus />
+                用途
+              </button>
+              <i />
+              <button aria-label="快搜 ⌘K" onClick={openSearch}>
+                <Lens />
+                <kbd>⌘K</kbd>
+              </button>
+              <button
+                className="primary save"
+                disabled={busy || importing || (!text.trim() && !images.length)}
+                onClick={save}
+              >
+                {busy ? '保存中' : '收下'} <kbd>⌘↵</kbd>
+              </button>
+            </div>
+          )}
           {text.length + intent.length > 40000 && (
             <small>{Array.from(text + intent).length} / 50,000</small>
           )}
           {last && Date.now() - last.at < 3000 && (
             <button
               className="sub"
-              onClick={() => req('window/main?id=' + last.id, 'POST')}
+              onClick={() =>
+                inline
+                  ? inline.openRecord(last.id)
+                  : req('window/main?id=' + last.id, 'POST')
+              }
             >
               <NotebookPen />
               本机已收下 · 查看刚才的记录 <ArrowUpRight />
             </button>
           )}
-          {(state.counts.local_saved || 0) + (state.counts.syncing || 0) > 0 ||
-          state.counts.needs_review ? (
+          {floating &&
+          ((state.counts.local_saved || 0) + (state.counts.syncing || 0) > 0 ||
+            state.counts.needs_review) ? (
             <button className="sub" onClick={() => req('window/main', 'POST')}>
               {state.counts.needs_review
                 ? `${state.counts.needs_review} 条需要核对`
@@ -504,7 +602,7 @@ export function Panel({ req, state }: { req: Request; state: State }) {
               前往系统设置
             </button>
           )}
-          {state.session.expired && (
+          {floating && state.session.expired && (
             <div className="sub">
               同步已暂停{' '}
               <button onClick={() => setLoginOpen(true)}>重新登录</button>
@@ -513,7 +611,7 @@ export function Panel({ req, state }: { req: Request; state: State }) {
           {drag && (
             <div className="drop">松手加入这条随手记（最多 9 张图）</div>
           )}
-        </div>
+        </fieldset>
       )}
     </div>
   );

@@ -1,6 +1,7 @@
 import {
   useEffect,
   useState,
+  useId,
   useRef,
   type FormEvent,
   type ButtonHTMLAttributes,
@@ -75,6 +76,8 @@ export function Login({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const form = useRef<HTMLFormElement>(null);
+  const errorID = useId();
+  const [invalid, setInvalid] = useState('');
   const password = useRef<HTMLInputElement>(null);
   const pending = useRef(false);
 
@@ -82,7 +85,7 @@ export function Login({
     if (!panel || !form.current) return;
     const element = form.current;
     const observer = new ResizeObserver(() => {
-      const height = Math.ceil(element.getBoundingClientRect().height) + 2;
+      const height = Math.ceil(element.getBoundingClientRect().height) + 10;
       void bridge()('window/resize?height=' + height, 'POST').catch(() => {});
     });
     observer.observe(element);
@@ -92,12 +95,27 @@ export function Login({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (pending.current || !password.current) return;
+    const emailField = e.currentTarget.elements.namedItem(
+      'email',
+    ) as HTMLInputElement;
+    const invalidField = !emailField.validity.valid
+      ? emailField
+      : !password.current.value
+        ? password.current
+        : null;
+    if (invalidField) {
+      setInvalid(invalidField.name);
+      setError(
+        invalidField === emailField ? '请输入有效的邮箱地址。' : '请输入密码。',
+      );
+      invalidField.focus();
+      return;
+    }
+    setInvalid('');
     pending.current = true;
     setBusy(true);
     setError('');
-    const email = (
-      e.currentTarget.elements.namedItem('email') as HTMLInputElement
-    ).value.trim();
+    const email = emailField.value.trim();
     const request = bridge(state.session.account_id)('session/login', 'POST', {
       email,
       password: password.current.value,
@@ -119,6 +137,7 @@ export function Login({
     <form
       className="login-form"
       ref={form}
+      noValidate
       onSubmit={submit}
       autoComplete="off"
       aria-label="Spark 账号登录"
@@ -137,6 +156,8 @@ export function Login({
         <input
           type="email"
           name="email"
+          aria-invalid={invalid === 'email'}
+          aria-describedby={invalid === 'email' ? errorID : undefined}
           required
           autoFocus
           defaultValue={state.session.account_label || ''}
@@ -152,21 +173,23 @@ export function Login({
           ref={password}
           type="password"
           name="password"
+          aria-invalid={invalid === 'password'}
+          aria-describedby={invalid === 'password' ? errorID : undefined}
           required
           autoComplete="off"
           disabled={busy}
         />
       </label>
-      <Notice text={error} />
+      <Notice text={error} id={errorID} />
       <button className="primary" type="submit" disabled={busy}>
         {busy ? '正在登录…' : '登录'}
       </button>
     </form>
   );
 }
-export function Notice({ text }: { text?: string }) {
+export function Notice({ text, id }: { text?: string; id?: string }) {
   return text ? (
-    <p className="notice" role="status">
+    <p id={id} className="notice" role="status">
       {text}
     </p>
   ) : null;
@@ -266,9 +289,7 @@ export function Preview({ req, id }: { req: Request; id: string }) {
       {col?.organization?.summary && (
         <p>整理摘要 · {col.organization.summary}</p>
       )}
-      {col?.image_notes?.map((n, i) => (
-        <p key={i}>{n.text}</p>
-      ))}
+      {col?.image_notes?.map((n, i) => <p key={i}>{n.text}</p>)}
       {item && <Notice text={item.last_error_message} />}
       {col && (
         <button

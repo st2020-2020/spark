@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import {
   Archive,
   ArrowLeft,
@@ -10,11 +10,15 @@ import {
   RefreshCw,
   Search,
   Settings2,
+  Check,
+  Laptop,
+  Moon,
+  Sun,
   X,
 } from 'lucide-react';
 import {
   active,
-  dateLabel,
+  formatShortcut,
   message,
   phase,
   type Choice,
@@ -24,6 +28,11 @@ import {
   type Summary,
 } from './bridge';
 import { ImageView, Jar, Notice, Login, Preview, Tool } from './shared';
+import { JarScene } from '../../../web/src/components/Illustrations';
+import { greeting, todayLine, groupByDay } from '../../../web/src/lib/journal';
+import { PALETTES } from '../../../web/src/lib/appearance';
+import { projectToneClass } from '../../../web/src/lib/projectTone';
+import { Capture } from './Panel';
 import { useSearch } from './Search';
 type Props = { state: State; req: Request; refresh: () => void };
 export function Book({ state, req, refresh }: Props) {
@@ -46,6 +55,22 @@ export function Book({ state, req, refresh }: Props) {
     [rev, update] = useState(0),
     [confirm, ask] = useState(''),
     [working, work] = useState(false);
+  const editor = useRef<HTMLTextAreaElement>(null);
+  const [focusRequest, requestFocus] = useState(0);
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    const timer = setInterval(tick, 60000);
+    window.addEventListener('focus', tick);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', tick);
+    };
+  }, []);
+  const dayGroups = useMemo(
+    () => groupByDay(entries, (entry) => entry.created_at, now),
+    [entries, now],
+  );
   const input = useRef<HTMLInputElement>(null),
     ime = useRef(false),
     serial = useRef(0),
@@ -69,6 +94,20 @@ export function Book({ state, req, refresh }: Props) {
     commit('');
     bad('');
   }
+  function compose() {
+    nav('inbox');
+    requestFocus((v) => v + 1);
+  }
+  useEffect(() => {
+    if (!focusRequest) return;
+    editor.current?.focus({ preventScroll: true });
+    editor.current?.scrollIntoView({
+      block: 'nearest',
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : 'smooth',
+    });
+  }, [focusRequest]);
   useEffect(() => {
     const change = () => update((r) => r + 1),
       select = (e: Event) => open((e as CustomEvent).detail);
@@ -77,17 +116,22 @@ export function Book({ state, req, refresh }: Props) {
       if (e.key === '\\') {
         e.preventDefault();
         collapse((v) => !v);
-      } else if (e.key === 'k') {
+      } else if (e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        compose();
+      } else if (e.key.toLowerCase() === 'k') {
         e.preventDefault();
         input.current?.focus();
       }
     };
     window.addEventListener('spark-state', change);
     window.addEventListener('spark-detail', select);
+    window.addEventListener('spark-compose', compose);
     window.addEventListener('keydown', key);
     return () => {
       window.removeEventListener('spark-state', change);
       window.removeEventListener('spark-detail', select);
+      window.removeEventListener('spark-compose', compose);
       window.removeEventListener('keydown', key);
     };
   }, []);
@@ -224,66 +268,49 @@ export function Book({ state, req, refresh }: Props) {
       (!pid || o.project_ids.includes(pid)) &&
       (!tid || o.tag_ids.includes(tid)),
   );
+  const [appearanceBusy, setAppearanceBusy] = useState(false);
+  async function changeAppearance(palette: string, mode: string) {
+    setAppearanceBusy(true);
+    try {
+      await req('prefs', 'PUT', { palette, mode });
+      refresh();
+    } catch (e) {
+      bad(message(e));
+    } finally {
+      setAppearanceBusy(false);
+    }
+  }
+  const waiting = (state.counts.local_saved || 0) + (state.counts.syncing || 0);
+  const status = state.session.expired
+    ? '会话已到期'
+    : state.counts.needs_review
+      ? `${state.counts.needs_review} 条需核对`
+      : offline
+        ? '离线模式'
+        : waiting
+          ? `${waiting} 条待同步`
+          : '';
   return (
     <div className="book">
-      <header className="titlebar">
-        <Tool
-          label={fold ? '展开侧栏' : '折叠侧栏'}
-          onClick={() => collapse(!fold)}
-        >
-          <PanelLeft />
-        </Tool>
-        <span>{title}</span>
-        <div className="searchbox">
-          <Search />
-          <input
-            ref={input}
-            value={q}
-            placeholder="搜索手帐　⌘K"
-            aria-label="搜索手帐"
-            onCompositionStart={() => (ime.current = true)}
-            onCompositionEnd={(e) => {
-              ime.current = false;
-              commit(e.currentTarget.value);
-            }}
-            onChange={(e) => {
-              type(e.target.value);
-              if (!ime.current) commit(e.target.value);
-              open('');
-            }}
-          />
-          {q && (
-            <Tool label="清空搜索" onClick={clear}>
-              <X />
-            </Tool>
-          )}
-        </div>
-        <Tool label="立即同步" disabled={working} onClick={sync}>
-          <RefreshCw />
-        </Tool>
-        <button className="chip" onClick={() => nav('settings')}>
-          {state.session.expired
-            ? '重新登录'
-            : offline
-              ? '离线模式'
-              : count
-                ? count + ' 条待处理'
-                : '本机状态'}
-        </button>
-      </header>
       <div className="workspace">
         {!fold && (
           <aside style={{ width }}>
+            <div className="sidebar-top">
+              <Tool label="折叠侧栏" onClick={() => collapse(true)}>
+                <PanelLeft />
+              </Tool>
+            </div>
             <div className="brand">
               <Jar />
               Spark
             </div>
             <button
               className="primary compose"
-              onClick={() => req('window/panel', 'POST')}
+              title={`在收件箱写随手记 ⌘N · 随手记快捷键 ${formatShortcut(state.capture_key)}`}
+              onClick={compose}
             >
               <NotebookPen />
-              随手记 <kbd>{state.capture_key.replace('Option+', '⌥')}</kbd>
+              随手记 <kbd>{formatShortcut(state.capture_key)}</kbd>
             </button>
             <nav>
               {[
@@ -305,14 +332,14 @@ export function Book({ state, req, refresh }: Props) {
                 );
               })}
               {projects.length > 0 && <h3>项目</h3>}
-              {projects.map((p, i) => (
+              {projects.map((p) => (
                 <button
                   className={pid === p.id ? 'chosen' : ''}
                   key={p.id}
                   onClick={() => nav('p:' + p.id)}
                 >
-                  <i className={'tone tone-' + (i % 6)} />
-                  {p.name}
+                  <i className={'tone ' + projectToneClass(p.id)} />
+                  <span className="nav-name">{p.name}</span>
                   <small>{p.collection_count}</small>
                 </button>
               ))}
@@ -323,19 +350,47 @@ export function Book({ state, req, refresh }: Props) {
                   key={t.id}
                   onClick={() => nav('t:' + t.id)}
                 >
-                  # {t.name}
+                  <span className="nav-name"># {t.name}</span>
                   <small>{t.collection_count}</small>
                 </button>
               ))}
             </nav>
-            <button className="account" onClick={() => nav('settings')}>
+            <button
+              className="account"
+              title={state.session.account_label + ' · 设备与外观'}
+              onClick={() => nav('settings')}
+            >
+              <span className="avatar" aria-hidden="true">
+                {state.session.account_label?.slice(0, 1).toUpperCase()}
+              </span>
+              <span className="account-text">
+                <strong>{state.session.account_label}</strong>
+                <small>设备与外观</small>
+              </span>
               <Settings2 />
-              {state.session.account_label}
             </button>
             <div
               role="separator"
               aria-label="调整侧栏宽度"
               aria-orientation="vertical"
+              tabIndex={0}
+              aria-valuemin={200}
+              aria-valuemax={300}
+              aria-valuenow={width}
+              onKeyDown={(e) => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                  e.preventDefault();
+                  size(
+                    Math.max(
+                      200,
+                      Math.min(
+                        300,
+                        width + (e.key === 'ArrowRight' ? 10 : -10),
+                      ),
+                    ),
+                  );
+                }
+              }}
               className="grip"
               onPointerDown={(e) =>
                 e.currentTarget.setPointerCapture(e.pointerId)
@@ -347,280 +402,385 @@ export function Book({ state, req, refresh }: Props) {
             />
           </aside>
         )}
-        <main className="journal">
-          <div className="column">
-            <Notice text={err || error} />
-            {confirm && (
-              <div
-                role="alertdialog"
-                aria-label="确认操作"
-                className="confirmation"
-              >
-                <strong>
-                  {confirm === 'disconnect'
-                    ? '断开此设备？'
-                    : '删除这份本机原稿？'}
-                </strong>
-                <p>
-                  {confirm === 'disconnect'
-                    ? `当前账号有 ${count} 条待处理记录。原稿保留在本机，重新登录此账号后可继续同步。`
-                    : '本机原文和暂存图片会一并删除。'}
-                </p>
-                <button autoFocus onClick={() => ask('')}>
-                  取消
-                </button>
-                <button
-                  disabled={working}
-                  className="danger"
-                  onClick={confirmed}
-                >
-                  确认{confirm === 'disconnect' ? '断开' : '删除'}
-                </button>
-              </div>
+        <div className="journal-pane" data-folded={fold}>
+          <header className="titlebar">
+            {fold && (
+              <Tool label="展开侧栏" onClick={() => collapse(false)}>
+                <PanelLeft />
+              </Tool>
             )}
-            {detail ? (
-              <>
-                <button onClick={() => open('')}>
-                  <ArrowLeft />
-                  返回{title}
-                </button>
-                <Preview req={req} id={detail} />
-                {outbox.find((o) => o.id === detail)?.state ===
-                  'needs_review' && (
-                  <div className="review">
-                    <small>原编号 {detail}</small>
-                    <button
-                      onClick={() =>
-                        req('clipboard/copy', 'POST', {
-                          text: outbox.find((o) => o.id === detail)?.raw_text,
-                        })
-                      }
-                    >
-                      复制原稿
-                    </button>
-                    <button className="danger" onClick={() => ask(detail)}>
-                      删除本地稿
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : query ? (
-              <>
-                <h1>搜索结果</h1>
-                {hits.map((h) => (
-                  <button
-                    className="card"
-                    key={h.id}
-                    onClick={() => open(h.id)}
-                  >
-                    <strong>{h.display_title}</strong>
-                    <p>{h.snippet}</p>
+            <span>{title}</span>
+            <div className="searchbox">
+              <Search />
+              <input
+                ref={input}
+                value={q}
+                placeholder="搜索手帐　⌘K"
+                aria-label="搜索手帐"
+                onCompositionStart={() => (ime.current = true)}
+                onCompositionEnd={(e) => {
+                  ime.current = false;
+                  commit(e.currentTarget.value);
+                }}
+                onChange={(e) => {
+                  type(e.target.value);
+                  if (!ime.current) commit(e.target.value);
+                  open('');
+                }}
+              />
+              {q && (
+                <Tool label="清空搜索" onClick={clear}>
+                  <X />
+                </Tool>
+              )}
+            </div>
+            <Tool label="立即同步" disabled={working} onClick={sync}>
+              <RefreshCw />
+            </Tool>
+            {status && (
+              <button
+                className="sync-status"
+                onClick={() =>
+                  nav(state.session.expired ? 'settings' : 'outbox')
+                }
+              >
+                {status}
+              </button>
+            )}
+          </header>
+          <main className="journal">
+            <div className="column">
+              <Notice text={err || error} />
+              {confirm && (
+                <div
+                  role="alertdialog"
+                  aria-label="确认操作"
+                  className="confirmation"
+                >
+                  <strong>
+                    {confirm === 'disconnect'
+                      ? '断开此设备？'
+                      : '删除这份本机原稿？'}
+                  </strong>
+                  <p>
+                    {confirm === 'disconnect'
+                      ? `当前账号有 ${count} 条待处理记录。原稿保留在本机，重新登录此账号后可继续同步。`
+                      : '本机原文和暂存图片会一并删除。'}
+                  </p>
+                  <button autoFocus onClick={() => ask('')}>
+                    取消
                   </button>
-                ))}
-                {!hits.length && <p>没有找到相关收藏。</p>}
-                {searchOffline && <small>离线模式 · 仅搜索本机缓存</small>}
-              </>
-            ) : tab === 'settings' ? (
-              <>
-                <h1>{title}</h1>
-                <section className="card settings">
-                  <h2>连接的空间</h2>
-                  <p>{state.session.account_label}</p>
-                  <small>
-                    有效至{' '}
-                    {new Date(
-                      state.session.expires_at || '',
-                    ).toLocaleDateString('zh-CN')}
-                  </small>
-                  {state.session.expired && (
-                    <Login
-                      state={state}
-                      onSuccess={() => {
-                        refresh();
-                        void req('window/panel', 'POST');
-                      }}
-                    />
-                  )}
-                  <button onClick={() => ask('disconnect')}>断开此设备</button>
-                </section>
-                <section className="card settings">
-                  <h2>外观</h2>
-                  <label>
-                    手帐配色
-                    <select
-                      value={state.palette}
-                      onChange={(e) =>
-                        req('prefs', 'PUT', {
-                          palette: e.target.value,
-                          mode: state.mode,
-                        })
-                          .then(refresh)
-                          .catch((e) => bad(message(e)))
-                      }
-                    >
-                      {[
-                        ['mint', '薄荷晨雾'],
-                        ['sea', '晴海'],
-                        ['matcha', '抹茶'],
-                        ['sakura', '樱花'],
-                      ].map(([v, k]) => (
-                        <option key={v} value={v}>
-                          {k}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    明暗模式
-                    <select
-                      value={state.mode}
-                      onChange={(e) =>
-                        req('prefs', 'PUT', {
-                          palette: state.palette,
-                          mode: e.target.value,
-                        })
-                          .then(refresh)
-                          .catch((e) => bad(message(e)))
-                      }
-                    >
-                      {[
-                        ['system', '跟随系统'],
-                        ['light', '浅色'],
-                        ['dark', '深色'],
-                      ].map(([v, k]) => (
-                        <option key={v} value={v}>
-                          {k}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </section>
-                <section className="card settings">
-                  <h2>全局快捷键</h2>
-                  {(
-                    [
-                      [
-                        'capture',
-                        '随手记',
-                        state.capture_key,
-                        [
-                          'Option+Space',
-                          'Control+Option+Space',
-                          'Command+Shift+Space',
-                        ],
-                      ],
-                      [
-                        'screenshot',
-                        '选区截屏',
-                        state.screenshot_key,
-                        [
-                          'Option+Shift+4',
-                          'Control+Option+4',
-                          'Command+Shift+5',
-                        ],
-                      ],
-                    ] as const
-                  ).map(([key, label, val, options]) => (
-                    <label key={key}>
-                      {label}
-                      <select
-                        value={val}
-                        onChange={(e) =>
-                          req('shortcut', 'PUT', { key, value: e.target.value })
-                            .then(refresh)
-                            .catch((e) => bad(message(e)))
+                  <button
+                    disabled={working}
+                    className="danger"
+                    onClick={confirmed}
+                  >
+                    确认{confirm === 'disconnect' ? '断开' : '删除'}
+                  </button>
+                </div>
+              )}
+              <section hidden={tab !== 'inbox' || !!detail || !!query}>
+                <div className="journal-heading">
+                  <p>
+                    {greeting(now)}，{todayLine(now)}
+                  </p>
+                  <h1>收件箱</h1>
+                </div>
+                <Capture
+                  state={state}
+                  req={req}
+                  inline={{
+                    editor,
+                    projects,
+                    tags,
+                    search: () => input.current?.focus(),
+                    openRecord: open,
+                  }}
+                />
+              </section>
+              {detail ? (
+                <>
+                  <button onClick={() => open('')}>
+                    <ArrowLeft />
+                    返回{title}
+                  </button>
+                  <Preview req={req} id={detail} />
+                  {outbox.find((o) => o.id === detail)?.state ===
+                    'needs_review' && (
+                    <div className="review">
+                      <small>原编号 {detail}</small>
+                      <button
+                        onClick={() =>
+                          req('clipboard/copy', 'POST', {
+                            text: outbox.find((o) => o.id === detail)?.raw_text,
+                          })
                         }
                       >
-                        {options.map((k) => (
-                          <option key={k}>{k}</option>
-                        ))}
-                      </select>
-                    </label>
-                  ))}
-                </section>
-              </>
-            ) : (
-              <>
-                <h1>{title}</h1>
-                {visiblePending.length > 0 && (
-                  <section className="pending-list">
-                    {visiblePending.map((o) => (
-                      <button key={o.id} onClick={() => open(o.id)}>
-                        <span>
-                          <strong>
-                            {o.raw_text ||
-                              o.attachments?.[0]?.filename ||
-                              '随手记'}
-                          </strong>
-                          <small>{phase[o.state]}</small>
-                        </span>
-                        <ChevronRight />
+                        复制原稿
                       </button>
-                    ))}
-                  </section>
-                )}
-                {tab !== 'outbox' &&
-                  entries.map((entry, i) => (
-                    <section key={entry.id}>
-                      {(!i ||
-                        dateLabel(entry.created_at) !==
-                          dateLabel(entries[i - 1].created_at)) && (
-                        <h3 className="stamp">{dateLabel(entry.created_at)}</h3>
-                      )}
-                      <button className="card" onClick={() => open(entry.id)}>
-                        <strong>{entry.display_title}</strong>
-                        <p>{entry.excerpt}</p>
-                        {entry.cover_attachment_id && (
-                          <ImageView
-                            req={req}
-                            id={entry.cover_attachment_id}
-                            name="收藏缩略图"
-                          />
-                        )}
-                        <span className="labels">
-                          {entry.projects
-                            ?.filter((p) => active(p.decision))
-                            .map((p) => (
-                              <small key={p.project_id} className="washi">
-                                {p.name}
-                              </small>
-                            ))}
-                          {entry.tags
-                            ?.filter((t) => active(t.decision))
-                            .map((t) => (
-                              <small key={t.tag_id}># {t.path}</small>
-                            ))}
-                        </span>
+                      <button className="danger" onClick={() => ask(detail)}>
+                        删除本地稿
                       </button>
-                    </section>
-                  ))}
-                {tab !== 'outbox' && cursor && (
-                  <button disabled={busy} onClick={more}>
-                    加载更多
-                  </button>
-                )}
-                {!visiblePending.length &&
-                  (tab === 'outbox' || !entries.length) && (
-                    <div className="empty">
-                      <Jar />
-                      <h2>
-                        {busy
-                          ? '正在读取…'
-                          : tab === 'outbox'
-                            ? '没有待同步的记录'
-                            : '这里还没有收藏'}
-                      </h2>
-                      {!busy && tab !== 'outbox' && (
-                        <button onClick={() => req('window/panel', 'POST')}>
-                          记下第一条灵感
-                        </button>
-                      )}
                     </div>
                   )}
-              </>
-            )}
-          </div>
-        </main>
+                </>
+              ) : query ? (
+                <>
+                  <h1>搜索结果</h1>
+                  {hits.map((h) => (
+                    <button
+                      className="card"
+                      key={h.id}
+                      onClick={() => open(h.id)}
+                    >
+                      <strong>{h.display_title}</strong>
+                      <p>{h.snippet}</p>
+                    </button>
+                  ))}
+                  {!hits.length && <p>没有找到相关收藏。</p>}
+                  {searchOffline && <small>离线模式 · 仅搜索本机缓存</small>}
+                </>
+              ) : tab === 'settings' ? (
+                <>
+                  <h1>{title}</h1>
+                  <section className="card settings">
+                    <h2>外观</h2>
+                    <fieldset
+                      className="appearance-options"
+                      disabled={appearanceBusy}
+                    >
+                      <legend>手帐配色</legend>
+                      <div className="palettes">
+                        {PALETTES.map((p) => (
+                          <label key={p.id} className="palette-option">
+                            <input
+                              type="radio"
+                              name="palette"
+                              checked={state.palette === p.id}
+                              onChange={() =>
+                                changeAppearance(p.id, state.mode)
+                              }
+                            />
+                            <span className="swatches" aria-hidden="true">
+                              {p.swatches.map((color) => (
+                                <i
+                                  key={color}
+                                  style={{ backgroundColor: color }}
+                                />
+                              ))}
+                            </span>
+                            <span>{p.label}</span>
+                            {state.palette === p.id && (
+                              <Check aria-hidden="true" />
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset
+                      className="appearance-options"
+                      disabled={appearanceBusy}
+                    >
+                      <legend>明暗模式</legend>
+                      <div className="segments">
+                        {(
+                          [
+                            ['system', '跟随系统', Laptop],
+                            ['light', '浅色', Sun],
+                            ['dark', '深色', Moon],
+                          ] as const
+                        ).map(([mode, label, Icon]) => (
+                          <label key={mode}>
+                            <input
+                              type="radio"
+                              name="mode"
+                              checked={state.mode === mode}
+                              onChange={() =>
+                                changeAppearance(state.palette, mode)
+                              }
+                            />
+                            <Icon />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                  </section>
+                  <section className="card settings">
+                    <h2>全局快捷键</h2>
+                    {(
+                      [
+                        [
+                          'capture',
+                          '随手记',
+                          state.capture_key,
+                          [
+                            'Option+Space',
+                            'Control+Option+Space',
+                            'Command+Shift+Space',
+                          ],
+                        ],
+                        [
+                          'screenshot',
+                          '选区截屏',
+                          state.screenshot_key,
+                          [
+                            'Option+Shift+4',
+                            'Control+Option+4',
+                            'Command+Shift+5',
+                          ],
+                        ],
+                      ] as const
+                    ).map(([key, label, val, options]) => (
+                      <label key={key}>
+                        {label}
+                        <select
+                          value={val}
+                          onChange={(e) =>
+                            req('shortcut', 'PUT', {
+                              key,
+                              value: e.target.value,
+                            })
+                              .then(refresh)
+                              .catch((e) => bad(message(e)))
+                          }
+                        >
+                          {options.map((k) => (
+                            <option key={k} value={k}>
+                              {formatShortcut(k)}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </section>
+                  <section className="card settings">
+                    <h2>
+                      <Laptop /> 设备会话
+                    </h2>
+                    <p>{state.session.account_label}</p>
+                    <small>
+                      有效至{' '}
+                      {new Date(
+                        state.session.expires_at || '',
+                      ).toLocaleDateString('zh-CN')}
+                    </small>
+                    {state.session.expired && (
+                      <Login
+                        state={state}
+                        onSuccess={() => {
+                          refresh();
+                          compose();
+                        }}
+                      />
+                    )}
+                    <button
+                      className="disconnect"
+                      onClick={() => ask('disconnect')}
+                    >
+                      断开此设备
+                    </button>
+                  </section>
+                </>
+              ) : (
+                <>
+                  {tab !== 'inbox' && <h1>{title}</h1>}
+                  {visiblePending.length > 0 && (
+                    <section className="pending-list">
+                      {visiblePending.map((o) => (
+                        <button key={o.id} onClick={() => open(o.id)}>
+                          <span>
+                            <strong>
+                              {o.raw_text ||
+                                o.attachments?.[0]?.filename ||
+                                '随手记'}
+                            </strong>
+                            <small>{phase[o.state]}</small>
+                          </span>
+                          <ChevronRight />
+                        </button>
+                      ))}
+                    </section>
+                  )}
+                  {tab !== 'outbox' &&
+                    dayGroups.map(({ stamp, items }) => (
+                      <section className="journal-day" key={stamp.key}>
+                        <h3
+                          className="stamp"
+                          data-today={stamp.relative === '今天'}
+                          aria-label={stamp.label}
+                        >
+                          <span>{stamp.relative || stamp.month}</span>
+                          <b>{stamp.day}</b>
+                          <small>{stamp.weekday}</small>
+                        </h3>
+                        <div className="day-entries">
+                          {items.map((entry) => (
+                            <button
+                              key={entry.id}
+                              className="card"
+                              onClick={() => open(entry.id)}
+                            >
+                              <strong>{entry.display_title}</strong>
+                              <p>{entry.excerpt}</p>
+                              {entry.cover_attachment_id && (
+                                <ImageView
+                                  req={req}
+                                  id={entry.cover_attachment_id}
+                                  name="收藏缩略图"
+                                />
+                              )}
+                              <span className="labels">
+                                {entry.projects
+                                  ?.filter((p) => active(p.decision))
+                                  .map((p) => (
+                                    <small
+                                      key={p.project_id}
+                                      className={
+                                        'washi ' +
+                                        projectToneClass(p.project_id)
+                                      }
+                                    >
+                                      {p.name}
+                                    </small>
+                                  ))}
+                                {entry.tags
+                                  ?.filter((t) => active(t.decision))
+                                  .map((t) => (
+                                    <small key={t.tag_id}># {t.path}</small>
+                                  ))}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                  {tab !== 'outbox' && cursor && (
+                    <button disabled={busy} onClick={more}>
+                      加载更多
+                    </button>
+                  )}
+                  {!visiblePending.length &&
+                    (tab === 'outbox' || !entries.length) && (
+                      <div className="empty">
+                        <JarScene className="empty-art" />
+                        <h2>
+                          {busy
+                            ? '正在读取…'
+                            : tab === 'outbox'
+                              ? '没有待同步的记录'
+                              : '这里还没有收藏'}
+                        </h2>
+                        {!busy && tab !== 'outbox' && (
+                          <button onClick={compose}>记下第一条灵感</button>
+                        )}
+                      </div>
+                    )}
+                </>
+              )}
+            </div>
+          </main>
+        </div>
       </div>
     </div>
   );

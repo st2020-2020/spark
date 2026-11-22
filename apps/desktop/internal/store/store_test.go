@@ -93,11 +93,11 @@ func TestCachedBodyIsSearchableBeyondRecentSummaries(t *testing.T) {
 	}
 	defer st.Close()
 	doc := api.BuildDocument("first paragraph\nneedle near the end")
-	note := api.Collection{ID: "older", UpdatedAt: "2026-11-01", Document: &doc}
+	note := api.Collection{ID: "older", UpdatedAt: "2026-11-01", Document: &doc, Projects: []api.ProjectAssociation{{ProjectID: "sketch", ProjectName: "速写", Decision: "manual"}}}
 	if err := st.UpsertCachedCollectionDetail("a", note); err != nil {
 		t.Fatal(err)
 	}
-	summaries := []api.CollectionSummary{{ID: note.ID, UpdatedAt: note.UpdatedAt, PlainText: "first paragraph"}}
+	summaries := []api.CollectionSummary{{ID: note.ID, UpdatedAt: note.UpdatedAt, PlainText: "first paragraph", Projects: note.Projects}}
 	for i := range 501 {
 		summaries = append(summaries, api.CollectionSummary{ID: strconv.Itoa(i), CreatedAt: "2026-11-02"})
 	}
@@ -107,5 +107,8 @@ func TestCachedBodyIsSearchableBeyondRecentSummaries(t *testing.T) {
 	hits, err := st.SearchLocal("a", "needle end", 5)
 	if err != nil || len(hits) != 1 || hits[0].ID != note.ID {
 		t.Fatalf("older full text missing: %v %v", hits, err)
+	}
+	if len(hits[0].Projects) != 1 || hits[0].Projects[0].ProjectID != "sketch" || hits[0].Projects[0].ProjectName != "速写" {
+		t.Fatalf("missing cached project on hit: %+v", hits[0])
 	}
 }

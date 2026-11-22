@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"spark/apps/desktop/internal/api"
@@ -186,14 +187,15 @@ func (s *Store) GetCachedCollectionDetail(accountID, id string) (api.Collection,
 
 // LocalSearchHit represents an instant local search match from cached collections or local outbox.
 type LocalSearchHit struct {
-	ID           string `json:"id"`
-	Source       string `json:"source"` // "cache" | "outbox"
-	SyncState    string `json:"sync_state"`
-	DisplayTitle string `json:"display_title"`
-	Snippet      string `json:"snippet"`
-	OriginalURL  string `json:"original_url,omitempty"`
-	PrimaryType  string `json:"primary_type"`
-	CreatedAt    string `json:"created_at"`
+	Projects     []api.ProjectAssociation `json:"projects,omitempty"`
+	ID           string                   `json:"id"`
+	Source       string                   `json:"source"` // "cache" | "outbox"
+	SyncState    string                   `json:"sync_state"`
+	DisplayTitle string                   `json:"display_title"`
+	Snippet      string                   `json:"snippet"`
+	OriginalURL  string                   `json:"original_url,omitempty"`
+	PrimaryType  string                   `json:"primary_type"`
+	CreatedAt    string                   `json:"created_at"`
 }
 
 // SearchLocal performs instant offline substring search across account-scoped outbox + cached collections.
@@ -219,14 +221,14 @@ func (s *Store) SearchLocal(accountID, query string, limit int) ([]LocalSearchHi
                         WHERE p.account_id=o.account_id AND p.id IN (SELECT value FROM json_each(o.project_ids_json))), '')||' '||
                     COALESCE((SELECT group_concat(name,' ') FROM cached_tags t
                         WHERE t.account_id=o.account_id AND t.id IN (SELECT value FROM json_each(o.tag_ids_json))), '')) AS hay,
-                '' AS kind
+                '' AS kind, '[]' AS projects
             FROM outbox_items o WHERE account_id=? AND state!='synced'
             UNION ALL
             SELECT c.id, 'cache', 'synced', display_title, plain_text, original_url, created_at, 1,
-                NULL, searchable_text, primary_type FROM cached_collections c
+                NULL, searchable_text, primary_type, COALESCE(json_extract(summary_json, '$.projects'), '[]') FROM cached_collections c
             WHERE account_id=? AND NOT EXISTS (SELECT 1 FROM outbox_items o WHERE o.id=c.id AND o.account_id=c.account_id AND o.state!='synced')
         )
-        SELECT id,source,state,title,plain,original_url,created_at,COALESCE(filename,''),kind FROM entries
+        SELECT id,source,state,title,plain,original_url,created_at,COALESCE(filename,''),kind,projects FROM entries
         WHERE NOT EXISTS (SELECT 1 FROM json_each(?) WHERE instr(hay,value)=0)
         ORDER BY rank,created_at DESC,id LIMIT ?`, accountID, accountID, string(terms), limit)
 	if err != nil {
@@ -236,9 +238,12 @@ func (s *Store) SearchLocal(accountID, query string, limit int) ([]LocalSearchHi
 	hits := make([]LocalSearchHit, 0)
 	for rows.Next() {
 		var hit LocalSearchHit
-		var plain, filename string
-		if err := rows.Scan(&hit.ID, &hit.Source, &hit.SyncState, &hit.DisplayTitle, &plain, &hit.OriginalURL, &hit.CreatedAt, &filename, &hit.PrimaryType); err != nil {
+		var plain, filename, projects string
+		if err := rows.Scan(&hit.ID, &hit.Source, &hit.SyncState, &hit.DisplayTitle, &plain, &hit.OriginalURL, &hit.CreatedAt, &filename, &hit.PrimaryType, &projects); err != nil {
 			return nil, err
+		}
+		if err := json.Unmarshal([]byte(projects), &hit.Projects); err != nil {
+			return nil, fmt.Errorf("decode cached project associations: %w", err)
 		}
 		hit.Snippet = firstLine(plain, 120)
 		if hit.DisplayTitle == "" {

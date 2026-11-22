@@ -1,6 +1,8 @@
+import { projectToneClass } from '../../../web/src/lib/projectTone';
 import { useEffect, useState, useRef } from 'react';
-import { Search as Lens, X, FileText, Copy, Eye } from 'lucide-react';
+import { Search as Lens, X, FileText, Link2, FileImage } from 'lucide-react';
 import {
+  active,
   type Hit,
   type Summary,
   type Request,
@@ -44,6 +46,8 @@ export function useSearch(req: Request, q: string, enabled = true) {
             setRemote(
               (v.items || []).map((x) => ({
                 id: x.collection.id,
+                projects: x.collection.projects,
+                primary_type: x.collection.primary_type,
                 created_at: x.collection.created_at,
                 original_url: x.collection.original_url,
                 display_title: x.collection.display_title,
@@ -70,6 +74,18 @@ export function useSearch(req: Request, q: string, enabled = true) {
     error,
   };
 }
+function Highlight({ text, query }: { text: string; query: string }) {
+  const words = query.trim().split(/\s+/u).filter(Boolean);
+  if (!words.length) return <>{text}</>;
+  const escaped = words.map((word) =>
+    word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+  );
+  const parts = text.split(new RegExp('(' + escaped.join('|') + ')', 'iu'));
+  return (
+    <>{parts.map((part, i) => (i % 2 ? <mark key={i}>{part}</mark> : part))}</>
+  );
+}
+
 export function Search({ req, back }: { req: Request; back: () => void }) {
   const [q, query] = useState(''),
     [committed, commit] = useState(''),
@@ -93,6 +109,19 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
   useEffect(() => {
     focus.current?.focus();
   }, []);
+  const currentRow = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    currentRow.current?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
+  function escape() {
+    if (preview) show(false);
+    else if (q) set('');
+    else back();
+  }
+  const openBook = () =>
+    req('window/main?id=' + (hit?.id || ''), 'POST').catch((e) =>
+      say(message(e)),
+    );
   async function copy() {
     if (!hit) return;
     try {
@@ -119,9 +148,7 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
         if (e.key === 'Escape') {
           e.preventDefault();
           e.stopPropagation();
-          if (preview) show(false);
-          else if (q) set('');
-          else back();
+          escape();
         } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           pick(
@@ -136,7 +163,7 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
             ]?.id || '',
           );
           show(false);
-        } else if (e.key === 'Enter' && hit) {
+        } else if (e.key === 'Enter' && hit && e.target === focus.current) {
           e.preventDefault();
           show(!preview);
         } else if (
@@ -150,7 +177,7 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
         } else if (e.metaKey && e.key.toLowerCase() === 'o') {
           e.preventDefault();
           e.stopPropagation();
-          void req('window/main?id=' + (hit?.id || ''), 'POST');
+          void openBook();
         } else if (e.key === ' ' && e.target !== focus.current) {
           e.preventDefault();
           show(!preview);
@@ -185,42 +212,68 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
         <button onClick={back}>记一条</button>
       </header>
       <div className="results">
-        {hits.map((h, i) => (
-          <button
-            className={'hit ' + (i === index ? 'chosen' : '')}
-            key={h.id}
-            onClick={() => {
-              pick(h.id);
-              show(true);
-            }}
-          >
-            <FileText />
-            <span>
-              <strong>{h.display_title}</strong>
-              <small>{h.snippet}</small>
-            </span>
-            {h.sync_state !== 'synced' && <small>{phase[h.sync_state]}</small>}
-          </button>
-        ))}
+        {hits.map((h, i) => {
+          const project = h.projects?.find((p) => p.name && active(p.decision));
+          const Icon =
+            h.primary_type === 'image'
+              ? FileImage
+              : h.primary_type === 'url'
+                ? Link2
+                : FileText;
+          return (
+            <button
+              className={'hit ' + (i === index ? 'chosen' : '')}
+              key={h.id}
+              ref={i === index ? currentRow : undefined}
+              aria-current={i === index}
+              onClick={() => {
+                pick(h.id);
+                show(true);
+              }}
+            >
+              <Icon />
+              <span>
+                <strong>
+                  <Highlight text={h.display_title} query={committed} />
+                </strong>
+                <small>
+                  <Highlight text={h.snippet} query={committed} />
+                </small>
+              </span>
+              {h.sync_state !== 'synced' ? (
+                <small className="sync-status">{phase[h.sync_state]}</small>
+              ) : (
+                project && (
+                  <small
+                    className={'washi ' + projectToneClass(project.project_id)}
+                  >
+                    {project.name}
+                  </small>
+                )
+              )}
+            </button>
+          );
+        })}
         {!hits.length && (
           <p className="empty">{q ? '没有找到相关收藏' : '还没有最近收藏'}</p>
         )}
         {preview && hit && <Preview req={req} id={hit.id} />}
       </div>
       <footer>
-        <Tool
-          label="预览选中收藏"
-          disabled={!hit}
-          onClick={() => show(!preview)}
-        >
-          <Eye />
-        </Tool>
-        <button disabled={!hit} onClick={copy}>
-          <Copy />
-          复制 <kbd>⌘C</kbd>
+        <button disabled={!hit} onClick={() => show(!preview)}>
+          <kbd>↵</kbd>预览
         </button>
-        <small>{offline ? '离线 · 仅搜索本机缓存' : '↑ ↓ 选择　↵ 预览'}</small>
+        <button disabled={!hit} onClick={copy}>
+          <kbd>⌘C</kbd>复制即走
+        </button>
+        <button onClick={openBook}>
+          <kbd>⌘O</kbd>打开手帐
+        </button>
+        <button onClick={escape}>
+          <kbd>Esc</kbd>返回
+        </button>
       </footer>
+      {offline && <small className="offline-note">离线 · 仅搜索本机缓存</small>}
       <Notice text={error || feedback} />
     </section>
   );
