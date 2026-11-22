@@ -527,7 +527,7 @@ export function classifyCollectionFiling(params: {
         : imageMaterial === 'waiting'
           ? '正在等待图片识别结果，完成后将自动为你匹配项目。'
           : organization.status === 'queued'
-            ? '已加入整理队列，离开页面仍会自动完成归类。'
+            ? '可以离开，整理会在后台继续。'
             : '正在分析内容并匹配主题项目，完成后将实时更新。';
     return {
       outcome: 'organizing',
