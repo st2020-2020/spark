@@ -134,7 +134,7 @@ Android 开发、调试和打包由外部环境负责。本机安卓开发会话
 
 完整流程见 [CONTRIBUTING.md](CONTRIBUTING.md)，版本拆分见 [docs/releases/](docs/releases/README.md)。要点：
 
-- 主干开发：`main` 始终可发布，只通过 Pull Request 合入，不直接推送。分支命名 `<类型>/<版本或需求编号>-<描述>`，例如 `feat/v0.2-triage-mode`。
+- 主干开发：`main` 始终可发布，只通过 Pull Request 合入，不直接推送。创建分支和合并后清理必须遵循 [分支命名与生命周期](CONTRIBUTING.md#11-分支命名)。
 - 提交使用 Conventional Commits：`<类型>(<范围>): <英文祈使句摘要>`，正文写做了什么、为什么、验证情况与限制。功能代码与独立的文档整理分开提交。
 - 同步用 `git rebase origin/main`；推送自己的分支只用 `--force-with-lease`。默认 Squash and merge，按主题整理过的多提交用 Rebase and merge，不用 merge commit。
 - 推送、创建 PR、合并、打标签与发布只在用户明确要求时执行。

@@ -6,25 +6,25 @@
 
 采用主干开发（trunk-based）：
 
-- `main` 是唯一的长期分支，始终保持可发布状态。所有改动通过短期分支与 Pull Request 合入，**不直接推送 `main`**。
+- `main` 是产品开发主干，始终保持可发布状态。所有改动通过短期分支与 Pull Request 合入，**不直接推送 `main`**。
 - 短期分支从最新的 `main` 创建，完成一个主题后合并并删除，建议存活不超过一周。
 - 发布以 `main` 上的 Git 标签标识，不维护长期的 `develop` 或 `release` 分支。
 
 ### 1.1 分支命名
 
-格式：`<类型>/<版本或需求编号>-<简短描述>`，全部小写，单词用 `-` 连接，总长不超过 50 个字符。没有对应版本时省略编号。
+交付分支必须使用 `<类型>/<完整目标版本或已有需求编号>-<主题>`，例如 `fix/v0.7.2-extension-save-feedback`。主题使用小写英文和连字符，写出受影响的功能及变化；全名最多 50 个字符。跨版本仓库维护可用 `docs/<主题>` 或 `chore/<主题>`。独立的版本收尾使用下表的 release 格式。
 
-同一个交付主题默认共用一条短期分支和一个 PR。使用目标发布的完整版本号和能辨认用户行为的描述，例如 `fix/v0.7.2-extension-save-feedback`。前后端并行开发可在同一分支按路径提交。只有需要单独合并或确实需要隔离工作时才拆分。独立打包机正在跟踪的分支名是外部接口，改名前须先迁移打包配置。
+同一个交付主题使用一条短期分支和一个 PR，建分支前先核对在途 PR 和已有工作树。前后端并行开发可在同一分支按路径提交。只有需要单独合并或确实需要隔离工作时才拆分。安卓打包机跟踪 `feat/android-mobile-shell`。该分支由外部安卓开发环境维护，清理或改名前须先完成打包机迁移。
 
 | 类型 | 用途 | 示例 |
 | --- | --- | --- |
-| `feat` | 新功能 | `feat/v0.2-triage-mode` |
-| `fix` | 缺陷修复 | `fix/composer-border-radius` |
-| `perf` | 性能优化 | `perf/v0.4-capacity` |
-| `refactor` | 不改变行为的重构 | `refactor/web-modal` |
-| `test` | 只涉及测试 | `test/v0.2-flow-timeout` |
+| `feat` | 新功能 | `feat/v0.2.0-note-triage` |
+| `fix` | 缺陷修复 | `fix/v0.7.0-remove-project-chip` |
+| `perf` | 性能优化 | `perf/v0.4.0-collection-search` |
+| `refactor` | 不改变行为的重构 | `refactor/v0.6.0-share-dialog` |
+| `test` | 只涉及测试 | `test/v0.2.0-export-timeout` |
 | `docs` | 只涉及文档 | `docs/repo-governance` |
-| `chore` | 构建、依赖、配置、运维脚本 | `chore/v0.4-backup` |
+| `chore` | 构建、依赖、配置、运维脚本 | `chore/v0.4.0-backup-restore` |
 | `release` | 版本收尾：版本号、CHANGELOG、文档 | `release/v0.2.0` |
 | `hotfix` | 已发布版本的紧急修复 | `hotfix/v0.2.1-export-timeout` |
 
@@ -55,7 +55,7 @@
 # 1. 从最新的 main 创建分支
 git switch main
 git pull --ff-only
-git switch -c feat/v0.2-triage-mode
+git switch -c feat/v0.2.0-note-triage
 
 # 2. 开发、按主题提交
 git add <文件>
@@ -66,7 +66,7 @@ git fetch origin
 git rebase origin/main
 
 # 4. 推送并创建 Pull Request
-git push -u origin feat/v0.2-triage-mode
+git push -u origin feat/v0.2.0-note-triage
 gh pr create --base main --fill
 ```
 
@@ -107,12 +107,12 @@ gh pr create --base main --fill
 - **默认使用 Squash and merge**：PR 标题成为 `main` 上的提交摘要，PR 描述精简为正文。
 - PR 内的提交已按主题整理、需要保留时（例如代码与文档分开的两个提交），使用 **Rebase and merge**。
 - **不使用 merge commit**，`main` 保持线性历史。
-- PR 合并后由负责人核对远端分支顶端仍为已合并的 PR head，再删除已交付的短期分支。先检查工作树的未提交或未跟踪文件及后续提交，确认临时工作树已交接再回收。本地未发布的提交须先查明归属。版本历史通过 PR 和正式标签回查。以下示例清理本地分支：
+- PR 合并后由负责人核对远端分支顶端仍为已合并的 PR head，并确认没有其他在途 PR 或打包机依赖，然后在本次交付中清理远端和本地分支。远端删除时用带预期提交的 `--force-with-lease=refs/heads/<分支>:<已核对的提交>` 防止误删刚推上的改动。先检查工作树的未提交或未跟踪文件及后续提交，确认临时工作树已交接再回收。本地未发布的提交须先查明归属。版本历史通过 PR 和正式标签回查。以下示例清理本地分支：
 
 ```bash
 git switch main
 git pull --ff-only
-git branch -d feat/v0.2-triage-mode
+git branch -d feat/v0.2.0-note-triage
 ```
 
 ## 6. 版本发布
