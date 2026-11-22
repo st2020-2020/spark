@@ -10,11 +10,16 @@ import (
 const (
 	textImageConsentVersion      = "spark-ai-image-material-v1"
 	textImageNotesConsentVersion = "spark-ai-image-notes-v1"
+	textImageTagsConsentVersion  = "spark-ai-image-notes-v2"
 	organizationImagePoll        = 2 * time.Second
 )
 
 func allowsTextImageMaterial(consent string) bool {
-	return consent == textImageConsentVersion || consent == textImageNotesConsentVersion
+	return consent == textImageConsentVersion || allowsImageArchive(consent)
+}
+
+func allowsImageArchive(consent string) bool {
+	return consent == textImageNotesConsentVersion || consent == textImageTagsConsentVersion
 }
 
 type ImageOrganizationScope struct {

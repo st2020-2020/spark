@@ -34,7 +34,7 @@
 
 结构化输出见 [结果 Schema](../../contracts/organization-result.schema.json) 和 [合成样例](../../contracts/examples/organization-result.json)，包含 title、可选 summary、tag_candidates、project_candidates。项目候选包含 project_id、reason、evidence 数组和辅助 confidence。evidence 引用输入 source_id 与原文短片段。后端校验项目集合、字符长度、引用片段和输出 Schema，无法校验的候选不自动采纳。标签包含已有 tag_id 时校验名称和归属，新标签按用户命名规则匹配或创建。
 
-建议标题最多 80 字、摘要最多 180 字、标签候选最多 5 个、项目候选最多 5 个，均作为初始策略参数。原文很短时 summary 可以省略。用户手动标题、标签与项目决定优先。
+建议标题最多 80 字、摘要最多 180 字。新建项目优先用宽于单条笔记的主题短语，中文建议 2–6 字，规范化后最多 12 个字符。一次至多归入一个项目。新版整理授权允许从材料中提取通常 2–3 个标签，最多 3 个；只有一处具体线索时可以只打一个。优先使用已有标签，人工排除的标签不再自动加入。原文很短时 summary 可以省略。用户手动标题、标签与项目决定优先。
 
 ## 阶段与状态
 

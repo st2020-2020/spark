@@ -74,6 +74,7 @@ const textTagConsentVersion = "spark-ai-tags-v1"
 
 type textInput struct {
 	tagConsent          bool
+	createTags          bool
 	waitingImages       bool
 	imageArchiveConsent bool
 	imageKeys           []string
@@ -83,9 +84,9 @@ type textInput struct {
 	Tags                []modelTag     `json:"tags,omitempty"`
 }
 type modelTag struct {
-	ID       string  `json:"tag_id"`
-	Name     string  `json:"name"`
-	ParentID *string `json:"parent_id,omitempty"`
+	ID       string          `json:"tag_id,omitempty"`
+	Name     string          `json:"name"`
+	Evidence []modelEvidence `json:"evidence,omitempty"`
 }
 type modelEvidence struct {
 	SourceID string `json:"source_id"`
@@ -98,11 +99,12 @@ type modelProject struct {
 	Confidence float64         `json:"confidence"`
 }
 type organizationResult struct {
-	Title    string         `json:"title"`
-	Summary  string         `json:"summary,omitempty"`
-	Tags     []modelTag     `json:"tag_candidates"`
-	Projects []modelProject `json:"project_candidates"`
-	Topic    *modelTopic    `json:"topic_candidate,omitempty"`
+	Title         string         `json:"title"`
+	Summary       string         `json:"summary,omitempty"`
+	Tags          []modelTag     `json:"tag_candidates"`
+	Projects      []modelProject `json:"project_candidates"`
+	Topic         *modelTopic    `json:"topic_candidate,omitempty"`
+	rejectedTopic bool
 }
 type modelTopic struct {
 	Name     string          `json:"name"`
@@ -258,7 +260,8 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		return r, input, false, err
 	}
 	input.tagConsent = consent == textTagConsentVersion || allowsTextImageMaterial(consent)
-	input.imageArchiveConsent = consent == textImageNotesConsentVersion
+	input.createTags = consent == textImageTagsConsentVersion
+	input.imageArchiveConsent = allowsImageArchive(consent)
 	var imageSources []textSource
 	if allowsTextImageMaterial(consent) {
 		var pending bool
@@ -318,7 +321,11 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		return r, input, false, err
 	}
 	if input.tagConsent {
-		input.Tags, err = textTagCandidates(ctx, tx, r, text, intent)
+		tagText, tagIntent := text, intent
+		if input.createTags {
+			tagText, tagIntent = projectMaterial.String(), ""
+		}
+		input.Tags, err = textTagCandidates(ctx, tx, r, tagText, tagIntent)
 		if err != nil {
 			return r, input, false, err
 		}
@@ -360,25 +367,49 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 	var schema map[string]any
 	_ = json.Unmarshal([]byte(organizationResultSchema), &schema)
 	delete(schema, "$schema")
-	if !input.archivesImage() {
-		delete(schema["properties"].(map[string]any), "topic_candidate")
+	properties := schema["properties"].(map[string]any)
+	if input.archivesImage() {
+		topic := properties["topic_candidate"].(map[string]any)
+		topic["properties"].(map[string]any)["name"].(map[string]any)["maxLength"] = maxAutomaticTopicChars
+	} else {
+		delete(properties, "topic_candidate")
 	}
-	schema["properties"].(map[string]any)["project_candidates"].(map[string]any)["maxItems"] = 1
-	tagSchema := schema["properties"].(map[string]any)["tag_candidates"].(map[string]any)
+	if route.OutputMode == "json_schema" {
+		required := append(schema["required"].([]any), "summary")
+		if input.archivesImage() {
+			required = append(required, "topic_candidate")
+		}
+		schema["required"] = required
+	}
+	properties["project_candidates"].(map[string]any)["maxItems"] = 1
+	tagSchema := properties["tag_candidates"].(map[string]any)
 	tagItem := tagSchema["items"].(map[string]any)
-	delete(tagItem["properties"].(map[string]any), "parent_id")
-	tagItem["required"] = []string{"name", "tag_id"}
+	if !input.createTags {
+		tagProperties := tagItem["properties"].(map[string]any)
+		delete(tagProperties, "evidence")
+		tagProperties["tag_id"].(map[string]any)["type"] = "string"
+		tagItem["required"] = []string{"name", "tag_id"}
+	} else if route.OutputMode == "json_schema" {
+		tagItem["required"] = []string{"name", "tag_id", "evidence"}
+	}
 	for {
-		tagSchema["maxItems"] = min(5, len(input.Tags))
+		tagLimit := min(3, len(input.Tags))
+		if input.createTags {
+			tagLimit = 3
+		}
+		tagSchema["maxItems"] = tagLimit
 		system := strings.Replace(systemTemplate, organizationResultSchema, string(jsonBytes(schema)), 1)
 		if input.imagePolicyVersion() != 0 {
 			system = strings.Replace(system, "(original_text or intent)", "(the exact source_id in sources). image_text is recognized text; image_description is a generated observation, not an original quotation", 1)
 		}
 		if input.archivesImage() {
 			system += " For this image note, choose one relevant existing project if possible. Otherwise suggest one reusable topic_candidate with a concise name, reason and exact image evidence. Never return a topic and a project together. Use image evidence for any project decision. If the image does not establish a topic, leave both options empty."
+			system += " Prefer a distinctive umbrella subject in 2–6 Chinese characters when appropriate, at most 12 characters. Avoid vague names, copying an entire note title or truncating it mid-phrase. 值班发布流程与回滚演练记录 → 应用交付 (labels 发布流程, 回滚演练); 花圃滴灌与周日修剪记录 → 园艺养护 (labels 滴灌, 修剪)."
 		}
-		if len(input.Tags) > 0 {
-			system = strings.Replace(system, emptyTags, "tag_candidates may select up to five relevant entries from tags. Copy tag_id and name exactly without duplicates", 1)
+		if input.createTags {
+			system = strings.Replace(system, emptyTags, "Return 2–3 short material-backed tags when useful, 0 or 1 for sparse material, never over 3. Reuse matching entries from tags by copying their tag_id and name. For a new tag omit tag_id or set it to null. Use a label literally present in sources or include exact evidence from sources for that label. Use details as tags rather than project names. Avoid generic or duplicate tags", 1)
+		} else if len(input.Tags) > 0 {
+			system = strings.Replace(system, emptyTags, "tag_candidates may select up to three relevant entries from tags. Copy tag_id and name exactly without duplicates", 1)
 		}
 		body := map[string]any{"model": route.Model, "stream": false, "max_tokens": route.MaxOutputTokens, "messages": []any{map[string]any{"role": "system", "content": system}, map[string]any{"role": "user", "content": string(jsonBytes(input))}}}
 		switch route.OutputMode {
@@ -426,22 +457,15 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 }
 func (w *TextWorker) validateResult(raw string, input textInput) (organizationResult, error) {
 	var result organizationResult
-	var v any
-	if json.Unmarshal([]byte(raw), &v) != nil || w.Schema.Validate(v) != nil || json.Unmarshal([]byte(raw), &result) != nil {
+	var fields map[string]any
+	if json.Unmarshal([]byte(raw), &fields) != nil || fields == nil {
 		return result, errors.New("invalid_model_output")
 	}
-	if strings.TrimSpace(result.Title) == "" || len(result.Tags) > len(input.Tags) || len(result.Projects) > 1 {
+	topicValue := fields["topic_candidate"]
+	delete(fields, "topic_candidate")
+	if w.Schema.Validate(fields) != nil || json.Unmarshal(jsonBytes(fields), &result) != nil ||
+		strings.TrimSpace(result.Title) == "" || len(result.Projects) > 1 {
 		return result, errors.New("invalid_model_output")
-	}
-	tags := make(map[string]string, len(input.Tags))
-	for _, tag := range input.Tags {
-		tags[tag.ID] = tag.Name
-	}
-	for _, tag := range result.Tags {
-		if name, ok := tags[tag.ID]; !ok || name != tag.Name || tag.ParentID != nil {
-			return result, errors.New("invalid_model_output")
-		}
-		delete(tags, tag.ID)
 	}
 	candidates := map[string]bool{}
 	for _, p := range input.Projects {
@@ -469,9 +493,22 @@ func (w *TextWorker) validateResult(raw string, input textInput) (organizationRe
 			return result, errors.New("invalid_model_output")
 		}
 	}
-	if topic := result.Topic; topic != nil && (!input.archivesImage() || len(result.Projects) != 0 ||
-		strings.TrimSpace(topic.Name) == "" || strings.TrimSpace(topic.Reason) == "" || !validEvidence(topic.Evidence, true)) {
+	var validTags bool
+	result.Tags, validTags = validateOrganizationTags(input, result.Tags, validEvidence)
+	if !validTags {
 		return result, errors.New("invalid_model_output")
+	}
+	if topicValue != nil {
+		var topic modelTopic
+		if input.archivesImage() && len(result.Projects) == 0 &&
+			w.Schema.Properties["topic_candidate"].Validate(topicValue) == nil &&
+			json.Unmarshal(jsonBytes(topicValue), &topic) == nil &&
+			strings.TrimSpace(topic.Reason) != "" && !strings.ContainsRune(topic.Reason, 0) &&
+			normalizeModelTopic(topic.Name) != "" && validEvidence(topic.Evidence, true) {
+			result.Topic = &topic
+		} else {
+			result.rejectedTopic = true
+		}
 	}
 	return result, nil
 }
@@ -662,7 +699,7 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	staleProject := false
 	if input.archivesImage() {
 		if out.ErrorCode == "" {
-			archive, staleProject, err = applyImageProject(ctx, tx, r, input, result)
+			archive, staleProject, err = applyImageProject(ctx, tx, r, input, &result)
 			if err != nil {
 				return false, err
 			}
@@ -688,7 +725,7 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		}
 	}
 	var tagsChanged bool
-	if input.tagConsent {
+	if input.tagConsent && (!input.createTags || out.ErrorCode == "") {
 		tagsChanged, err = applyOrganizationTags(ctx, tx, r, result.Tags)
 		if err != nil {
 			return false, err
@@ -703,6 +740,9 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		return false, err
 	}
 	state, code := "succeeded", ""
+	if result.rejectedTopic {
+		state, code = "partial", "invalid_topic_candidate"
+	}
 	if out.ErrorCode == "usage_uncertain" {
 		state, code = "partial", "usage_uncertain"
 	}
@@ -728,27 +768,6 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	}
 	return false, tx.Commit(ctx)
 }
-func applyOrganizationTags(ctx context.Context, tx pgx.Tx, r runSnapshot, candidates []modelTag) (bool, error) {
-	removed, err := tx.Exec(ctx, `DELETE FROM collection_tags
-		WHERE user_id=$1 AND collection_id=$2 AND decision='auto'`, r.UID, r.CollectionID)
-	if err != nil {
-		return false, err
-	}
-	changed := removed.RowsAffected() > 0
-	for _, candidate := range candidates {
-		// Recheck names against current account data. An override created
-		// during the request wins the unique association key.
-		applied, err := tx.Exec(ctx, `INSERT INTO collection_tags(user_id,collection_id,tag_id,decision,run_id)
-			SELECT user_id,$2,id,'auto',$5 FROM tags WHERE user_id=$1 AND id=$3 AND name=$4
-			ON CONFLICT(collection_id,tag_id) DO NOTHING`, r.UID, r.CollectionID, candidate.ID, candidate.Name, r.ID)
-		if err != nil {
-			return false, err
-		}
-		changed = changed || applied.RowsAffected() > 0
-	}
-	return changed, nil
-}
-
 func (w *TextWorker) Work(ctx context.Context, job *river.Job[TextOrganizationArgs]) error {
 	// A session advisory lock spans the external call, preventing duplicate charges
 	// if another process rescues the same job before this process has stopped.

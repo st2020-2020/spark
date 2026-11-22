@@ -746,6 +746,15 @@ describe('organization display helpers', () => {
     expect(partialProjectChanged.noProjectSuggestion).toBe(false);
     expect(partialProjectChanged.triggerLabel).toBe('重新整理');
 
+    const noTopic = classifyOrganizationDisplay({
+      organization: { ...baseOrg, status: 'partial', error_code: 'invalid_topic_candidate' },
+      aiEnabled: true,
+      aiExcluded: false,
+      projects: [],
+    });
+    expect(noTopic.description).toContain('已保留整理结果');
+    expect(noTopic.noProjectSuggestion).toBe(false);
+
     const partialUsageUncertain = classifyOrganizationDisplay({
       organization: {
         ...baseOrg,

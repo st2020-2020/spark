@@ -4,15 +4,27 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/text/unicode/norm"
 )
 
+const maxAutomaticTopicChars = 12
+
+func normalizeModelTopic(raw string) string {
+	name := strings.Join(strings.Fields(norm.NFKC.String(raw)), " ")
+	if strings.ContainsFunc(name, unicode.IsControl) {
+		return ""
+	}
+	return name
+}
+
 // The run holds the account change lock. Check the latest human choices and
 // the full account topic index before saving an automatic association.
-func applyImageProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput, result organizationResult) (string, bool, error) {
+func applyImageProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput, result *organizationResult) (string, bool, error) {
 	if len(result.Projects) == 0 && result.Topic == nil {
 		return "", false, nil
 	}
@@ -54,8 +66,9 @@ func applyImageProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input text
 	} else {
 		topic := result.Topic
 		reason, evidence = topic.Reason, topic.Evidence
-		name := strings.Join(strings.Fields(norm.NFKC.String(topic.Name)), " ")
-		if name == "" || len([]rune(name)) > 100 {
+		name := normalizeModelTopic(topic.Name)
+		if name == "" || utf8.RuneCountInString(name) > 100 {
+			result.Topic, result.rejectedTopic = nil, true
 			return "", false, nil
 		}
 		var state string
@@ -69,6 +82,10 @@ func applyImageProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input text
 			Scan(&project, &projectVersion, &state, &excluded)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
+			if utf8.RuneCountInString(name) > maxAutomaticTopicChars {
+				result.Topic, result.rejectedTopic = nil, true
+				return "", false, nil
+			}
 			if rejected {
 				return "", false, nil
 			}
