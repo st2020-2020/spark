@@ -14,6 +14,8 @@
 
 格式：`<类型>/<版本或需求编号>-<简短描述>`，全部小写，单词用 `-` 连接，总长不超过 50 个字符。没有对应版本时省略编号。
 
+同一个交付主题默认共用一条短期分支和一个 PR。使用目标发布的完整版本号和能辨认用户行为的描述，例如 `fix/v0.7.2-extension-save-feedback`。前后端并行开发可在同一分支按路径提交。只有需要单独合并或确实需要隔离工作时才拆分。独立打包机正在跟踪的分支名是外部接口，改名前须先迁移打包配置。
+
 | 类型 | 用途 | 示例 |
 | --- | --- | --- |
 | `feat` | 新功能 | `feat/v0.2-triage-mode` |
@@ -105,7 +107,7 @@ gh pr create --base main --fill
 - **默认使用 Squash and merge**：PR 标题成为 `main` 上的提交摘要，PR 描述精简为正文。
 - PR 内的提交已按主题整理、需要保留时（例如代码与文档分开的两个提交），使用 **Rebase and merge**。
 - **不使用 merge commit**，`main` 保持线性历史。
-- 合并后删除远端与本地分支：
+- PR 合并后由负责人核对远端分支顶端仍为已合并的 PR head，再删除已交付的短期分支。先检查工作树的未提交或未跟踪文件及后续提交，确认临时工作树已交接再回收。本地未发布的提交须先查明归属。版本历史通过 PR 和正式标签回查。以下示例清理本地分支：
 
 ```bash
 git switch main
@@ -118,7 +120,7 @@ git branch -d feat/v0.2-triage-mode
 版本号与准出标准见 [docs/releases/README.md](docs/releases/README.md)。
 
 1. 确认版本文档中的任务全部合并、验收标准通过。
-2. 创建 `release/vX.Y.Z` 分支，只做收尾：更新 `apps/web/package.json` 版本号、[CHANGELOG](docs/CHANGELOG.md) 新增版本条目、ROADMAP 记录验证证据、版本文档状态改为「已发布」。
+2. 在交付分支完成版本收尾。只有从主干单独提交版本元数据时才创建 `release/vX.Y.Z`。收尾包括：更新 `apps/web/package.json` 版本号、[CHANGELOG](docs/CHANGELOG.md) 新增版本条目、ROADMAP 记录验证证据、版本文档状态改为「已发布」。
 3. 发起 PR，合并到 `main`。
 4. 在 `main` 的合并提交上打附注标签并推送：
 
