@@ -4973,6 +4973,15 @@ export interface operations {
                     "application/json": components["schemas"]["DesktopTokenResult"];
                 };
             };
+            /** @description mixed_credentials 或 unexpected_credentials：兑换仅使用请求体的一次性证明。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description desktop_grant_invalid：配对已过期、已消费或被撤销。 */
             401: {
                 headers: {
