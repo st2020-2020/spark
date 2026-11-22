@@ -258,6 +258,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     renderWithAdapter(['/collections/' + col.id], api);
     await screen.findByText('上次整理缺少使用图片识别结果的授权。');
     await screen.findByRole('button', { name: '授权使用图片识别结果' });
+    await ui.click(screen.getByText('更多管理与整理详情'));
     await ui.click(screen.getByRole('button', { name: '重新整理' }));
     const dialog = await screen.findByRole('dialog', { name: '更新文字整理授权' });
     expect(dialog).toHaveTextContent('第三方文字模型');
@@ -318,7 +319,8 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     snapshot.projects = [];
     snapshot.has_suggestion = false;
     event();
-    await screen.findByText(/暂无匹配的项目建议/);
+    await screen.findByText('仍待归类');
+    await screen.findByText(/没有足够线索自动匹配或新建项目/);
     expect(screen.queryByRole('list', { name: '推荐依据摘录' })).toBeNull();
   });
 

@@ -65,6 +65,7 @@ import { generateIdempotencyKey } from '../lib/idempotency';
 import { projectToneClass } from '../lib/projectTone';
 import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import {
+  classifyCollectionFiling,
   classifyOrganizationDisplay,
   getExpectedProjectSuggestion,
   isOrganizationActiveStatus,
@@ -72,6 +73,44 @@ import {
   stageStatusLabel,
 } from '../lib/organization';
 import { purgeStatusLabel, resolvePurgeActionError } from '../lib/purge';
+
+interface BackfillAttemptRecord {
+  idempotencyKey: string;
+  baseDecisionVersion: number;
+  status: 'inflight' | 'succeeded' | 'stopped_conflict' | 'failed';
+  errorMessage?: string;
+  promise?: Promise<void>;
+}
+
+const backfillAttemptsByApi = new WeakMap<object, Map<string, BackfillAttemptRecord>>();
+const lastBackfillUserByApi = new WeakMap<object, string>();
+const MAX_BACKFILL_ATTEMPT_RECORDS = 50;
+
+function getBackfillAttemptMap(api: object, userId: string): Map<string, BackfillAttemptRecord> {
+  const prevUser = lastBackfillUserByApi.get(api);
+  let map = backfillAttemptsByApi.get(api);
+  if (!map) {
+    map = new Map();
+    backfillAttemptsByApi.set(api, map);
+  }
+  if (!userId || (prevUser && prevUser !== userId)) {
+    map.clear();
+  }
+  if (userId) {
+    lastBackfillUserByApi.set(api, userId);
+  } else {
+    lastBackfillUserByApi.delete(api);
+  }
+  if (map.size >= MAX_BACKFILL_ATTEMPT_RECORDS) {
+    for (const [k, v] of map) {
+      if (v.status !== 'inflight') {
+        map.delete(k);
+        if (map.size < MAX_BACKFILL_ATTEMPT_RECORDS) break;
+      }
+    }
+  }
+  return map;
+}
 
 interface EditDraft {
   baseContentVersion: number;
@@ -104,7 +143,7 @@ function draftFields(draft: EditDraft, col: Collection) {
 export function CollectionDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const api = useApi();
-  const { user, aiTrialEligible, aiPlatformEnabled, purgeEnabled, urlExtractionEnabled } = useAuth();
+  const { user, aiTrialEligible, aiPlatformEnabled, purgeEnabled, urlExtractionEnabled, refreshSession } = useAuth();
   const { openFollowUp } = useFollowUp();
   const { pushToast } = useToast();
   const navigate = useNavigate();
@@ -127,9 +166,12 @@ export function CollectionDetailPage() {
   const [selectedProjectToAdd, setSelectedProjectToAdd] = useState('');
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
+  const [orgDetailsExpanded, setOrgDetailsExpanded] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
   const [webArchiveConfirmOpen, setWebArchiveConfirmOpen] = useState(false);
   const [orgActionError, setOrgActionError] = useState<string | null>(null);
+  const [backfillState, setBackfillState] = useState<'idle' | 'applying' | 'failed' | 'stopped_conflict'>('idle');
+  const [backfillError, setBackfillError] = useState<string | null>(null);
   const [urlRefreshError, setUrlRefreshError] = useState<string | null>(null);
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false);
   const [purgeError, setPurgeError] = useState<string | null>(null);
@@ -139,6 +181,23 @@ export function CollectionDetailPage() {
   const autoReadMarkedRef = useRef<string | null>(null);
   const autoEditOpenedRef = useRef<string | null>(null);
   const editFileInputRef = useRef<HTMLInputElement | null>(null);
+  const manualProjectSelectRef = useRef<HTMLSelectElement | null>(null);
+  const activeUserIdRef = useRef(userId);
+  activeUserIdRef.current = userId;
+  const activeCollectionIdRef = useRef(id);
+  activeCollectionIdRef.current = id;
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    if (!userId) {
+      getBackfillAttemptMap(api, '');
+    }
+  }, [api, userId]);
   const orgRetryKeyRef = useRef<string>(generateIdempotencyKey());
   const orgRetryContextRef = useRef<string>('');
   const webArchiveKeyRef = useRef<string>(generateIdempotencyKey());
@@ -184,8 +243,11 @@ export function CollectionDetailPage() {
     setPurgeError(null);
     setPurgeConfirmOpen(false);
     setCheckingPurgeStatus(false);
+    setOrgDetailsExpanded(false);
+    setBackfillState('idle');
+    setBackfillError(null);
     purgeKeyRef.current = null;
-  }, [id]);
+  }, [id, userId]);
 
   const extractionsQuery = useQuery({
     queryKey: ['collection-extractions', id],
@@ -249,6 +311,173 @@ export function CollectionDetailPage() {
     collection?.content_version,
     collection?.organization.run_id,
     collection?.organization.status,
+  ]);
+
+  const hasWebArchiveConsent = Boolean(user?.ai_enabled && allowsWebArchive(user.ai_consent_version));
+  const backfillRunToken = collection
+    ? `${collection.organization.run_id ?? `cv${collection.content_version}`}`
+    : '';
+  const backfillAttemptKey = collection && userId ? `${userId}:${collection.id}:${backfillRunToken}` : '';
+
+  const runBackfillApply = (
+    record: BackfillAttemptRecord,
+    targetCollectionId: string,
+    targetUserId: string,
+  ) => {
+    const promise = api
+      .applyWebArchiveProject(
+        targetCollectionId,
+        { base_decision_version: record.baseDecisionVersion },
+        record.idempotencyKey,
+      )
+      .then((updated) => {
+        record.status = 'succeeded';
+        record.errorMessage = undefined;
+        if (activeUserIdRef.current !== targetUserId) return;
+        queryClient.setQueryData<Collection>(['collection', targetCollectionId], (prev) =>
+          prev && prev.decision_version > updated.decision_version ? prev : updated,
+        );
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['projects'] });
+        void queryClient.invalidateQueries({ queryKey: ['project'] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['tags'] });
+        if (
+          mountedRef.current &&
+          activeUserIdRef.current === targetUserId &&
+          activeCollectionIdRef.current === targetCollectionId
+        ) {
+          setBackfillState('idle');
+          setBackfillError(null);
+          setOrgActionError(null);
+        }
+      })
+      .catch((err) => {
+        const isTerminalConflictOrAuth =
+          isApiErrorCode(err, 'decision_conflict') ||
+          isApiErrorCode(err, 'project_backfill_unavailable') ||
+          isApiErrorCode(err, 'collection_in_trash') ||
+          isApiErrorCode(err, 'web_archive_consent_required') ||
+          isApiErrorCode(err, 'ai_excluded') ||
+          isApiErrorCode(err, 'not_found');
+
+        if (isTerminalConflictOrAuth) {
+          record.status = 'stopped_conflict';
+          record.errorMessage = undefined;
+          if (activeUserIdRef.current === targetUserId) {
+            void queryClient.invalidateQueries({
+              queryKey: ['collection', targetCollectionId],
+              exact: true,
+            });
+            if (isApiErrorCode(err, 'web_archive_consent_required')) {
+              void refreshSession();
+            }
+            if (
+              mountedRef.current &&
+              activeCollectionIdRef.current === targetCollectionId
+            ) {
+              setBackfillState('stopped_conflict');
+              setBackfillError(null);
+            }
+          }
+          return;
+        }
+
+        record.status = 'failed';
+        record.errorMessage = getFriendlyErrorMessage(err);
+        if (
+          mountedRef.current &&
+          activeUserIdRef.current === targetUserId &&
+          activeCollectionIdRef.current === targetCollectionId
+        ) {
+          setBackfillState('failed');
+          setBackfillError(record.errorMessage);
+        }
+      })
+      .finally(() => {
+        record.promise = undefined;
+      });
+
+    record.promise = promise;
+  };
+
+  useEffect(() => {
+    if (!userId || !collection || collection.id !== id || !backfillAttemptKey) return;
+    if (
+      collection.deleted_at ||
+      collection.ai_excluded ||
+      isOrganizationActiveStatus(collection.organization.status)
+    ) {
+      return;
+    }
+    if (!user?.ai_enabled || !hasWebArchiveConsent || !aiPlatformEnabled || !aiTrialEligible) {
+      return;
+    }
+    const isSettledNoMatch =
+      (collection.organization.status === 'succeeded' ||
+        collection.organization.status === 'partial') &&
+      collection.organization.web_archive_status === 'no_match';
+    if (!isSettledNoMatch || collection.organization.project_backfill_available !== true) {
+      return;
+    }
+
+    const attempts = getBackfillAttemptMap(api, userId);
+    const existing = attempts.get(backfillAttemptKey);
+    if (existing) {
+      if (existing.status === 'inflight') {
+        setBackfillState('applying');
+        existing.promise?.then(() => {
+          if (
+            mountedRef.current &&
+            activeUserIdRef.current === userId &&
+            activeCollectionIdRef.current === collection.id
+          ) {
+            if (existing.status === 'failed') {
+              setBackfillState('failed');
+              setBackfillError(existing.errorMessage ?? null);
+            } else if (existing.status === 'stopped_conflict') {
+              setBackfillState('stopped_conflict');
+              setBackfillError(null);
+            } else {
+              setBackfillState('idle');
+              setBackfillError(null);
+            }
+          }
+        });
+      } else if (existing.status === 'failed') {
+        setBackfillState('failed');
+        setBackfillError(existing.errorMessage ?? null);
+      } else if (existing.status === 'stopped_conflict') {
+        setBackfillState('stopped_conflict');
+        setBackfillError(null);
+      }
+      return;
+    }
+
+    const record: BackfillAttemptRecord = {
+      idempotencyKey: generateIdempotencyKey(),
+      baseDecisionVersion: collection.decision_version,
+      status: 'inflight',
+    };
+    attempts.set(backfillAttemptKey, record);
+    setBackfillState('applying');
+    setBackfillError(null);
+    runBackfillApply(record, collection.id, userId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    api,
+    userId,
+    id,
+    backfillAttemptKey,
+    collection?.deleted_at,
+    collection?.ai_excluded,
+    collection?.organization.status,
+    collection?.organization.web_archive_status,
+    collection?.organization.project_backfill_available,
+    user?.ai_enabled,
+    hasWebArchiveConsent,
+    aiPlatformEnabled,
+    aiTrialEligible,
   ]);
 
   const readAdvance = useRef<{ from: number; to: number } | null>(null);
@@ -782,14 +1011,8 @@ export function CollectionDetailPage() {
     aiExcluded: Boolean(collection.ai_excluded),
     projects: collection.projects,
   });
-  const imageArchive = collection.organization.image_archive_status;
-  const imageMaterial = collection.organization.image_material_status;
-  const webArchiveStatus = collection.organization.web_archive_status;
   const isOrgFailedOrBlocked =
     collection.organization.status === 'failed' || collection.organization.status === 'blocked';
-  const webArchiveBlockedByLedger =
-    isOrgFailedOrBlocked && collection.organization.web_archive_retry_available === false;
-  const hasWebArchiveConsent = Boolean(user?.ai_enabled && allowsWebArchive(user.ai_consent_version));
   const showWebArchiveAction =
     !isInTrash &&
     !collection.ai_excluded &&
@@ -803,16 +1026,93 @@ export function CollectionDetailPage() {
     (ext.status === 'succeeded' || ext.status === 'partial') && !!(ext.text?.trim() || ext.image_description?.trim()));
   const imagePrefs = imageAnalysisQuery.data;
   const canUseImages = Boolean(imagePrefs?.available && imagePrefs.enabled);
-  const hasTextConsent = user?.ai_enabled && allowsImageFiling(user.ai_consent_version);
-  const offerImageConsent = !hasTextConsent && aiTrialEligible && aiPlatformEnabled && canUseImages;
-  const orgPillClass =
-    orgDisplay.pillTone === 'green'
+  const hasTextConsent = Boolean(user?.ai_enabled && allowsImageFiling(user.ai_consent_version));
+  const filing = classifyCollectionFiling({
+    collection,
+    aiEnabled: Boolean(user?.ai_enabled),
+    aiPlatformEnabled,
+    aiTrialEligible,
+    hasWebArchiveConsent,
+    hasImageFilingConsent: hasTextConsent,
+    canUseImages,
+    hasExtractedImageText: Boolean(hasExtractedImageText),
+    hasProjects: availableProjects.length > 0,
+    isInTrash,
+    backfillState,
+  });
+  const filingPillClass =
+    filing.pillTone === 'green'
       ? 'sp-pill sp-pill--success'
-      : orgDisplay.pillTone === 'warning'
+      : filing.pillTone === 'warning'
         ? 'sp-pill sp-pill--warning'
-        : orgDisplay.pillTone === 'danger'
+        : filing.pillTone === 'danger'
           ? 'sp-pill sp-pill--danger'
-          : 'sp-pill';
+          : filing.pillTone === 'spark'
+            ? 'sp-pill sp-pill--spark'
+            : 'sp-pill';
+
+  const handleBackfillApplyAction = () => {
+    if (!collection || !userId || !backfillAttemptKey) return;
+    const attempts = getBackfillAttemptMap(api, userId);
+    let record = attempts.get(backfillAttemptKey);
+    if (!record) {
+      record = {
+        idempotencyKey: generateIdempotencyKey(),
+        baseDecisionVersion: collection.decision_version,
+        status: 'inflight',
+      };
+      attempts.set(backfillAttemptKey, record);
+    } else if (record.status === 'inflight') {
+      return;
+    } else {
+      if (record.status !== 'failed') {
+        record.idempotencyKey = generateIdempotencyKey();
+        record.baseDecisionVersion = collection.decision_version;
+      }
+      record.status = 'inflight';
+      record.errorMessage = undefined;
+    }
+    setBackfillState('applying');
+    setBackfillError(null);
+    runBackfillApply(record, collection.id, userId);
+  };
+
+  const nextStepPending =
+    (filing.nextStep.kind === 'enable_item_ai' && aiExclusionMutation.isPending) ||
+    (filing.nextStep.kind === 'restart_org' && restartOrgMutation.isPending) ||
+    (filing.nextStep.kind === 'open_web_archive' && archiveWebMutation.isPending) ||
+    ((filing.nextStep.kind === 'retry_backfill' || filing.nextStep.kind === 'apply_backfill') &&
+      backfillState === 'applying');
+
+  const handleNextStepClick = () => {
+    switch (filing.nextStep.kind) {
+      case 'retry_backfill':
+      case 'apply_backfill':
+        handleBackfillApplyAction();
+        break;
+      case 'enable_item_ai':
+        aiExclusionMutation.mutate(false);
+        break;
+      case 'open_consent':
+        setConsentOpen(true);
+        break;
+      case 'open_web_archive':
+        setWebArchiveConfirmOpen((prev) => !prev);
+        break;
+      case 'restart_org':
+        restartOrgMutation.mutate();
+        break;
+      case 'edit_collection':
+        startEditing(collection);
+        break;
+      case 'manual_select':
+        setOrgDetailsExpanded(true);
+        requestAnimationFrame(() => manualProjectSelectRef.current?.focus());
+        break;
+      default:
+        break;
+    }
+  };
 
   return (
     <div>
@@ -1232,33 +1532,84 @@ export function CollectionDetailPage() {
         )}
 
         <CollectionTags key={collection.id} collection={collection} />
-        {/* Project associations */}
-        <section className="sp-section">
-          <div className="sp-section-head">
-            <h2 id="collection-projects" tabIndex={-1} className="sp-section-title">关联项目</h2>
-            <span className="sp-section-note">决定版本 v{collection.decision_version}</span>
-          </div>
-
-          {decisionError && (
-            <div className="sp-banner sp-banner--error sp-spaced" role="alert">
-              <span>{decisionError}</span>
+        {/* Converged project filing outcome + collapsed management/process details */}
+        <section aria-label="归类结果" className="sp-section">
+          <div className="sp-filing-card">
+            <div className="sp-filing-head">
+              <div className="sp-row">
+                <h2 id="collection-projects" tabIndex={-1} className="sp-org-title">
+                  <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
+                  归类结果
+                </h2>
+                <span className={filingPillClass}>
+                  {filing.outcome === 'organizing' && (
+                    <Loader2 size={12} strokeWidth={2} className="sp-spin" aria-hidden="true" />
+                  )}
+                  <span>{filing.badgeLabel}</span>
+                </span>
+                {(filing.outcome === 'organizing' || filing.outcome === 'pending_action') &&
+                  filing.headline !== filing.badgeLabel && (
+                    <span className="sp-help">{filing.headline}</span>
+                  )}
+              </div>
             </div>
-          )}
 
-          {collection.projects.length === 0 && <p className="sp-help sp-spaced">暂未关联项目</p>}
+            {filing.effectiveProjects.length > 0 && (
+              <div className="sp-filing-projects">
+                <div className="sp-row">
+                  {filing.effectiveProjects.map((pa) => (
+                    <Link
+                      key={pa.project_id}
+                      to={`/projects/${pa.project_id}`}
+                      className={`sp-tape ${projectToneClass(pa.project_id)}`}
+                    >
+                      <span>{pa.name}</span>
+                    </Link>
+                  ))}
+                </div>
+                {filing.reason && <p className="sp-help sp-org-desc">{filing.reason}</p>}
+                {filing.effectiveProjects.map((pa) => (
+                  <ProjectSuggestionEvidence
+                    key={pa.project_id}
+                    association={pa}
+                    attachments={collection.attachments}
+                  />
+                ))}
+              </div>
+            )}
 
-          {collection.projects.length > 0 && (
-            <div className="sp-assoc-list">
-              {collection.projects.map((pa) => {
-                const isSuggested = pa.decision === 'suggested';
-                const isAuto = pa.decision === 'auto';
-                return (
+            {filing.effectiveProjects.length === 0 && filing.suggestedProjects.length === 0 && (
+              <div className="sp-stack sp-stack--tight">
+                <p className="sp-help sp-org-desc">{filing.reason}</p>
+                {filing.ledgerBlockedNote && <p className="sp-help">{filing.ledgerBlockedNote}</p>}
+                {!webArchiveConfirmOpen && filing.nextStep.kind !== 'none' && (
+                  <div className="sp-filing-actions">
+                    {filing.nextStep.kind === 'create_project_link' ? (
+                      <Link to="/projects" className="sp-btn sp-btn--sm sp-btn--primary">
+                        {filing.nextStep.label}
+                      </Link>
+                    ) : (
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn--sm sp-btn--primary"
+                        disabled={nextStepPending}
+                        onClick={handleNextStepClick}
+                      >
+                        {nextStepPending ? '处理中…' : filing.nextStep.label}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {filing.suggestedProjects.length > 0 && (
+              <div className="sp-assoc-list">
+                {filing.suggestedProjects.map((pa) => (
                   <div
                     key={pa.project_id}
-                    id={isSuggested ? 'ai-suggestion-section' : undefined}
-                    className={`sp-suggestion-card ${
-                      isSuggested ? 'sp-suggestion-card--highlighted' : ''
-                    }`}
+                    id="ai-suggestion-section"
+                    className="sp-suggestion-card sp-suggestion-card--highlighted"
                   >
                     <div className="sp-suggestion-head">
                       <div className="sp-row">
@@ -1268,260 +1619,63 @@ export function CollectionDetailPage() {
                         >
                           <span>{pa.name}</span>
                         </Link>
-                        <span
-                          className={`sp-pill ${
-                            isSuggested
-                              ? 'sp-pill--spark'
-                              : isAuto || pa.decision === 'confirmed'
-                                ? 'sp-pill--green'
-                                : ''
-                          }`}
-                        >
-                          {pa.decision === 'manual' && '手动关联'}
-                          {pa.decision === 'confirmed' && '已确认'}
-                          {pa.decision === 'auto' && '自动归入'}
-                          {pa.decision === 'suggested' && 'AI 建议'}
-                          {pa.decision === 'rejected' && '已忽略'}
-                        </span>
+                        <span className="sp-pill sp-pill--spark">AI 建议</span>
                       </div>
 
                       {!isInTrash && (
                         <div className="sp-row">
-                          {(isSuggested || isAuto) && (
-                            <button
-                              type="button"
-                              className="sp-btn sp-btn--sm sp-btn--primary"
-                              disabled={projectDecisionMutation.isPending}
-                              onClick={() =>
-                                projectDecisionMutation.mutate({
-                                  baseVersion: collection.decision_version,
-                                  projectId: pa.project_id,
-                                  expectedSuggestion: isSuggested ? getExpectedProjectSuggestion(collection, pa.project_id) : undefined,
-                                  action: 'include',
-                                })
-                              }
-                            >
-                              <Check size={14} strokeWidth={2} aria-hidden="true" />
-                              <span>{isSuggested ? '加入项目' : '确认'}</span>
-                            </button>
-                          )}
-                          {pa.decision !== 'rejected' && (
-                            <button
-                              type="button"
-                              className="sp-btn sp-btn--sm"
-                              disabled={projectDecisionMutation.isPending}
-                              onClick={() =>
-                                projectDecisionMutation.mutate({
-                                  baseVersion: collection.decision_version,
-                                  projectId: pa.project_id,
-                                  expectedSuggestion: isSuggested ? getExpectedProjectSuggestion(collection, pa.project_id) : undefined,
-                                  action: 'exclude',
-                                })
-                              }
-                            >
-                              <X size={14} strokeWidth={2} aria-hidden="true" />
-                              <span>{isSuggested ? '忽略' : '移除'}</span>
-                            </button>
-                          )}
-                          {pa.decision === 'rejected' && (
-                            <button
-                              type="button"
-                              className="sp-btn sp-btn--sm"
-                              disabled={projectDecisionMutation.isPending}
-                              onClick={() =>
-                                projectDecisionMutation.mutate({
-                                  baseVersion: collection.decision_version,
-                                  projectId: pa.project_id,
-                                  action: 'reset',
-                                })
-                              }
-                            >
-                              恢复自动判断
-                            </button>
-                          )}
+                          <button
+                            type="button"
+                            className="sp-btn sp-btn--sm sp-btn--primary"
+                            disabled={projectDecisionMutation.isPending}
+                            onClick={() =>
+                              projectDecisionMutation.mutate({
+                                baseVersion: collection.decision_version,
+                                projectId: pa.project_id,
+                                expectedSuggestion: getExpectedProjectSuggestion(
+                                  collection,
+                                  pa.project_id,
+                                ),
+                                action: 'include',
+                              })
+                            }
+                          >
+                            <Check size={14} strokeWidth={2} aria-hidden="true" />
+                            <span>加入项目</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="sp-btn sp-btn--sm"
+                            disabled={projectDecisionMutation.isPending}
+                            onClick={() =>
+                              projectDecisionMutation.mutate({
+                                baseVersion: collection.decision_version,
+                                projectId: pa.project_id,
+                                expectedSuggestion: getExpectedProjectSuggestion(
+                                  collection,
+                                  pa.project_id,
+                                ),
+                                action: 'exclude',
+                              })
+                            }
+                          >
+                            <X size={14} strokeWidth={2} aria-hidden="true" />
+                            <span>忽略</span>
+                          </button>
                         </div>
                       )}
                     </div>
-
-                    <ProjectSuggestionEvidence association={pa} attachments={collection.attachments} />
+                    <ProjectSuggestionEvidence
+                      association={pa}
+                      attachments={collection.attachments}
+                    />
                   </div>
-                );
-              })}
-            </div>
-          )}
-
-          {!isInTrash && availableProjects.length > 0 && (
-            <div className="sp-classify-row">
-              <select
-                aria-label="手动添加到项目"
-                className="sp-select sp-select--compact"
-                value={selectedProjectToAdd}
-                onChange={(e) => setSelectedProjectToAdd(e.target.value)}
-              >
-                <option value="">添加到项目…</option>
-                {availableProjects.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
                 ))}
-              </select>
-              <button
-                type="button"
-                className="sp-btn sp-btn--sm sp-btn--primary"
-                disabled={!selectedProjectToAdd || projectDecisionMutation.isPending}
-                onClick={() => {
-                  if (!selectedProjectToAdd) return;
-                  projectDecisionMutation.mutate(
-                    {
-                      baseVersion: collection.decision_version,
-                      projectId: selectedProjectToAdd,
-                      action: 'include',
-                    },
-                    { onSuccess: () => setSelectedProjectToAdd('') },
-                  );
-                }}
-              >
-                加入项目
-              </button>
-            </div>
-          )}
-          {!isInTrash && <MoreProjectChoices query={projectsQuery} />}
-        </section>
-
-        {/* AI organization status, controls and results */}
-        <section aria-label="AI 自动整理" className="sp-section">
-          <div className="sp-org-box">
-            <div className="sp-org-head">
-              <div className="sp-row">
-                <h2 className="sp-org-title">
-                  <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
-                  AI 自动整理
-                </h2>
-                <span className={orgPillClass}>
-                  {orgDisplay.kind === 'active' && (
-                    <Loader2 size={12} strokeWidth={2} className="sp-spin" aria-hidden="true" />
-                  )}
-                  <span>{orgDisplay.badgeLabel}</span>
-                </span>
               </div>
-
-              {!isInTrash && (
-                <div className="sp-row">
-                  <button
-                    type="button"
-                    className="sp-btn sp-btn--sm"
-                    disabled={aiExclusionMutation.isPending}
-                    onClick={() => aiExclusionMutation.mutate(!collection.ai_excluded)}
-                  >
-                    {collection.ai_excluded ? (
-                      <>
-                        <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
-                        <span>允许 AI 整理</span>
-                      </>
-                    ) : (
-                      <>
-                        <Ban size={14} strokeWidth={2} aria-hidden="true" />
-                        <span>不参与 AI 整理</span>
-                      </>
-                    )}
-                  </button>
-
-                  {showWebArchiveAction && (
-                    <button
-                      type="button"
-                      className="sp-btn sp-btn--sm"
-                      disabled={archiveWebMutation.isPending}
-                      onClick={() => setWebArchiveConfirmOpen((prev) => !prev)}
-                    >
-                      <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
-                      <span>
-                        {webArchiveConfirmOpen
-                          ? '收起归类确认'
-                          : isOrgFailedOrBlocked
-                            ? '重试网页归类'
-                            : '按网页内容归类'}
-                      </span>
-                    </button>
-                  )}
-
-                  {orgDisplay.canTrigger && (
-                    <button
-                      type="button"
-                      className="sp-btn sp-btn--sm sp-btn--primary"
-                      disabled={restartOrgMutation.isPending}
-                      onClick={() => restartOrgMutation.mutate()}
-                    >
-                      <RefreshCw
-                        size={14}
-                        strokeWidth={2}
-                        className={restartOrgMutation.isPending ? 'sp-spin' : undefined}
-                        aria-hidden="true"
-                      />
-                      <span>
-                        {restartOrgMutation.isPending ? '提交中…' : orgDisplay.triggerLabel}
-                      </span>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <p className="sp-help sp-org-desc">
-              {orgDisplay.description}
-              {orgDisplay.kind === 'disabled' && aiTrialEligible && aiPlatformEnabled && (
-                <>
-                  {' '}
-                  <Link to="/settings" className="sp-strong">
-                    前往设置开启
-                  </Link>
-                </>
-              )}
-            </p>
-
-            {imageMaterial === 'included' && (
-              <p className="sp-help">本次整理使用了图片识别结果。</p>
             )}
-            {!isInTrash &&
-              !collection.ai_excluded &&
-              !isOrganizationActiveStatus(collection.organization.status) &&
-              webArchiveStatus === 'consent_required' &&
-              aiPlatformEnabled &&
-              aiTrialEligible && (
-                <div className="sp-stack sp-stack--tight">
-                  <p className="sp-help">
-                    自动归档网页收藏需要更新整理授权（包含标题、纯文本选文与用途披露）。
-                  </p>
-                  {!hasWebArchiveConsent && (
-                    <div>
-                      <button
-                        type="button"
-                        className="sp-btn sp-btn--sm"
-                        onClick={() => setConsentOpen(true)}
-                      >
-                        更新整理授权以归类网页
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            {!isInTrash &&
-              !collection.ai_excluded &&
-              webArchiveBlockedByLedger && (
-                <p className="sp-help">
-                  上次网页归类已产生计费记录，为防重复计费不再提供直接重试；你可手动选择项目或编辑内容后重新整理。
-                </p>
-              )}
-            {!isInTrash &&
-              !collection.ai_excluded &&
-              !isOrganizationActiveStatus(collection.organization.status) &&
-              Boolean(collection.original_url) &&
-              !collection.web_archive_available &&
-              aiPlatformEnabled &&
-              aiTrialEligible && (
-                <p className="sp-help">
-                  当前网址收藏尚无可用于网页归类的标题、纯文本选文或用途；可点击上方「编辑」补充后触发按网页内容归类。
-                </p>
-              )}
+
+            {filing.imageMaterialHint && <p className="sp-help">{filing.imageMaterialHint}</p>}
+
             {webArchiveConfirmOpen && showWebArchiveAction && (
               <div className="sp-org-summary-card" role="region" aria-label="确认网页内容归类材料">
                 <div className="sp-org-field-label">即将发送至第三方文字模型的材料</div>
@@ -1567,67 +1721,253 @@ export function CollectionDetailPage() {
                 </div>
               </div>
             )}
-            {!isInTrash && !collection.ai_excluded && !isOrganizationActiveStatus(collection.organization.status) &&
-              (hasExtractedImageText || imageMaterial === 'consent_required' || imageArchive === 'consent_required') && (
-              <div className="sp-stack sp-stack--tight">
-                {imageArchive === 'consent_required' && <p className="sp-help">自动归入或创建项目需要更新整理授权。</p>}
-                {imageMaterial === 'consent_required' && <p className="sp-help">上次整理缺少使用图片识别结果的授权。</p>}
-                {imagePrefs && !canUseImages && <p className="sp-help">{imagePrefs.available
-                  ? <>图片理解已关闭。<Link to="/settings">前往设置</Link>可管理授权。</>
-                  : '当前账号暂未开放图片理解。'}</p>}
-                {offerImageConsent && <div>
-                  <button className="sp-btn sp-btn--sm" type="button" onClick={() => setConsentOpen(true)}>授权使用图片识别结果</button>
-                </div>}
-                {hasTextConsent && canUseImages && orgDisplay.canTrigger && <p className="sp-help">重新整理会检查已有识别结果，符合当前授权的内容可直接用于匹配，无需重新上传图片。</p>}
-              </div>
-            )}
-            <AIConsentModal open={consentOpen} onClose={() => setConsentOpen(false)} onEnabled={() => setOrgActionError(null)} />
 
-            {orgActionError && (
+            {(backfillError || decisionError || orgActionError) && (
               <div className="sp-banner sp-banner--error" role="alert">
-                <span>{orgActionError}</span>
+                <span>{backfillError || decisionError || orgActionError}</span>
               </div>
             )}
 
-            {collection.organization.stages.length > 0 && (
-              <div className="sp-org-stages" aria-label="整理阶段进度">
-                {collection.organization.stages.map((stage) => (
-                  <span
-                    key={stage.name}
-                    className={`sp-org-stage sp-org-stage--${stage.status}`}
-                  >
-                    <span>{stageNameLabel(stage.name)}</span>
-                    <span>· {stageStatusLabel(stage.status)}</span>
-                    {stage.attempts > 1 && <span>({stage.attempts}次)</span>}
-                  </span>
-                ))}
-              </div>
-            )}
+            <details
+              className="sp-details sp-filing-details"
+              open={orgDetailsExpanded}
+              onToggle={(e) => setOrgDetailsExpanded((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>更多管理与整理详情</summary>
+              {orgDetailsExpanded && (
+                <div className="sp-stack sp-details-body">
+                  {(filing.effectiveProjects.length > 0 || filing.rejectedProjects.length > 0) && (
+                    <div className="sp-assoc-list">
+                      {[...filing.effectiveProjects, ...filing.rejectedProjects].map((pa) => {
+                        const isAuto = pa.decision === 'auto';
+                        const isRejected = pa.decision === 'rejected';
+                        return (
+                          <div key={pa.project_id} className="sp-suggestion-card">
+                            <div className="sp-suggestion-head">
+                              <div className="sp-row">
+                                <Link
+                                  to={`/projects/${pa.project_id}`}
+                                  className={`sp-tape ${projectToneClass(pa.project_id)}`}
+                                >
+                                  <span>{pa.name}</span>
+                                </Link>
+                                <span className={`sp-pill ${!isRejected ? 'sp-pill--green' : ''}`}>
+                                  {pa.decision === 'manual' && '手动关联'}
+                                  {pa.decision === 'confirmed' && '已确认'}
+                                  {pa.decision === 'auto' && '自动归入'}
+                                  {pa.decision === 'rejected' && '已忽略'}
+                                </span>
+                              </div>
+                              {!isInTrash && (
+                                <div className="sp-row">
+                                  {isAuto && (
+                                    <button
+                                      type="button"
+                                      className="sp-btn sp-btn--sm sp-btn--primary"
+                                      disabled={projectDecisionMutation.isPending}
+                                      onClick={() =>
+                                        projectDecisionMutation.mutate({
+                                          baseVersion: collection.decision_version,
+                                          projectId: pa.project_id,
+                                          action: 'include',
+                                        })
+                                      }
+                                    >
+                                      <Check size={14} strokeWidth={2} aria-hidden="true" />
+                                      <span>确认</span>
+                                    </button>
+                                  )}
+                                  {!isRejected && (
+                                    <button
+                                      type="button"
+                                      className="sp-btn sp-btn--sm"
+                                      disabled={projectDecisionMutation.isPending}
+                                      onClick={() =>
+                                        projectDecisionMutation.mutate({
+                                          baseVersion: collection.decision_version,
+                                          projectId: pa.project_id,
+                                          action: 'exclude',
+                                        })
+                                      }
+                                    >
+                                      <X size={14} strokeWidth={2} aria-hidden="true" />
+                                      <span>移除</span>
+                                    </button>
+                                  )}
+                                  {isRejected && (
+                                    <button
+                                      type="button"
+                                      className="sp-btn sp-btn--sm"
+                                      disabled={projectDecisionMutation.isPending}
+                                      onClick={() =>
+                                        projectDecisionMutation.mutate({
+                                          baseVersion: collection.decision_version,
+                                          projectId: pa.project_id,
+                                          action: 'reset',
+                                        })
+                                      }
+                                    >
+                                      恢复自动判断
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
 
-            {(collection.organization.generated_title || collection.organization.summary) && (
-              <div className="sp-org-summary-card">
-                {collection.organization.generated_title && (
-                  <div>
-                    <div className="sp-org-field-label">
-                      AI 建议标题
-                      {collection.manual_title ? '（当前展示你的自定义标题）' : ''}
+                  {!isInTrash && availableProjects.length > 0 && (
+                    <div className="sp-classify-row">
+                      <select
+                        ref={manualProjectSelectRef}
+                        aria-label="手动添加到项目"
+                        className="sp-select sp-select--compact"
+                        value={selectedProjectToAdd}
+                        onChange={(e) => setSelectedProjectToAdd(e.target.value)}
+                      >
+                        <option value="">添加到项目…</option>
+                        {availableProjects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn--sm sp-btn--primary"
+                        disabled={!selectedProjectToAdd || projectDecisionMutation.isPending}
+                        onClick={() => {
+                          if (!selectedProjectToAdd) return;
+                          projectDecisionMutation.mutate(
+                            {
+                              baseVersion: collection.decision_version,
+                              projectId: selectedProjectToAdd,
+                              action: 'include',
+                            },
+                            { onSuccess: () => setSelectedProjectToAdd('') },
+                          );
+                        }}
+                      >
+                        加入项目
+                      </button>
                     </div>
-                    <div className="sp-org-field-value sp-org-field-value--title sp-break-anywhere">
-                      {collection.organization.generated_title}
+                  )}
+                  {!isInTrash && <MoreProjectChoices query={projectsQuery} />}
+
+                  {!isInTrash && (
+                    <div className="sp-row">
+                      {filing.nextStep.kind !== 'enable_item_ai' && (
+                        <button
+                          type="button"
+                          className="sp-btn sp-btn--sm"
+                          disabled={aiExclusionMutation.isPending}
+                          onClick={() => aiExclusionMutation.mutate(!collection.ai_excluded)}
+                        >
+                          {collection.ai_excluded ? (
+                            <>
+                              <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
+                              <span>允许 AI 整理</span>
+                            </>
+                          ) : (
+                            <>
+                              <Ban size={14} strokeWidth={2} aria-hidden="true" />
+                              <span>不参与 AI 整理</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {orgDisplay.canTrigger && filing.nextStep.kind !== 'restart_org' && (
+                        <button
+                          type="button"
+                          className="sp-btn sp-btn--sm"
+                          disabled={restartOrgMutation.isPending}
+                          onClick={() => restartOrgMutation.mutate()}
+                        >
+                          <RefreshCw
+                            size={14}
+                            strokeWidth={2}
+                            className={restartOrgMutation.isPending ? 'sp-spin' : undefined}
+                            aria-hidden="true"
+                          />
+                          <span>
+                            {restartOrgMutation.isPending ? '提交中…' : orgDisplay.triggerLabel}
+                          </span>
+                        </button>
+                      )}
+
+                      {showWebArchiveAction &&
+                        !webArchiveConfirmOpen &&
+                        filing.nextStep.kind !== 'open_web_archive' && (
+                          <button
+                            type="button"
+                            className="sp-btn sp-btn--sm"
+                            disabled={archiveWebMutation.isPending}
+                            onClick={() => setWebArchiveConfirmOpen(true)}
+                          >
+                            <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
+                            <span>{isOrgFailedOrBlocked ? '重试网页归类' : '按网页内容归类'}</span>
+                          </button>
+                        )}
                     </div>
-                  </div>
-                )}
-                {collection.organization.summary && (
-                  <div>
-                    <div className="sp-org-field-label">AI 摘要</div>
-                    <p className="sp-org-field-value sp-break-anywhere">
-                      {collection.organization.summary}
-                    </p>
-                  </div>
-                )}
-              </div>
-            )}
+                  )}
+
+                  {collection.organization.stages.length > 0 && (
+                    <div className="sp-org-stages" aria-label="整理阶段进度">
+                      {collection.organization.stages.map((stage) => (
+                        <span
+                          key={stage.name}
+                          className={`sp-org-stage sp-org-stage--${stage.status}`}
+                        >
+                          <span>{stageNameLabel(stage.name)}</span>
+                          <span>· {stageStatusLabel(stage.status)}</span>
+                          {stage.attempts > 1 && <span>({stage.attempts}次)</span>}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {(collection.organization.summary ||
+                    (collection.organization.generated_title &&
+                      collection.organization.generated_title.trim() !==
+                        (collection.manual_title?.trim() || collection.display_title?.trim()))) && (
+                    <div className="sp-org-summary-card">
+                      {collection.organization.generated_title &&
+                        collection.organization.generated_title.trim() !==
+                          (collection.manual_title?.trim() || collection.display_title?.trim()) && (
+                          <div>
+                            <div className="sp-org-field-label">
+                              AI 建议标题
+                              {collection.manual_title ? '（当前展示你的自定义标题）' : ''}
+                            </div>
+                            <div className="sp-org-field-value sp-org-field-value--title sp-break-anywhere">
+                              {collection.organization.generated_title}
+                            </div>
+                          </div>
+                        )}
+                      {collection.organization.summary && (
+                        <div>
+                          <div className="sp-org-field-label">AI 摘要</div>
+                          <p className="sp-org-field-value sp-break-anywhere">
+                            {collection.organization.summary}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </details>
           </div>
+
+          <AIConsentModal
+            open={consentOpen}
+            onClose={() => setConsentOpen(false)}
+            onEnabled={() => setOrgActionError(null)}
+          />
         </section>
 
         <CollectionThreadTimeline collection={collection} />

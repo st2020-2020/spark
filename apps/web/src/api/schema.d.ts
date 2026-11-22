@@ -782,6 +782,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collections/{id}/organization/web-archive/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 复用已结算网页结果归入项目
+         * @description Web 会话按当前决策版本应用已有的具体标签及可复核引文。此操作同步完成，既不入队也不调用模型。跨账号返回 404。权限或授权不足返回 403。决策版本冲突（decision_conflict）或状态、材料不再适用（project_backfill_unavailable）返回 409。
+         */
+        post: operations["applyWebArchiveProject"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections/{id}/extractions": {
         parameters: {
             query?: never;
@@ -1507,6 +1527,8 @@ export interface components {
             web_archive_status?: "consent_required" | "linked" | "created" | "no_match";
             /** @description 本次网页归类失败或因额度阻塞且没有账本记录时为 true。用户可用新幂等键主动重排，仍校验授权与额度；同键只回放原回执。 */
             web_archive_retry_available?: boolean;
+            /** @description 这次已结算的网页整理仍可使用有据标签归入项目。读取状态不会写入，成功归类后省略。 */
+            project_backfill_available?: boolean;
         };
         Collection: {
             /** Format: uuid */
@@ -1959,6 +1981,9 @@ export interface components {
         ExtensionCollectionReceipt: {
             /** Format: uuid */
             id: string;
+        };
+        ProjectBackfillRequest: {
+            base_decision_version: number;
         };
     };
     responses: never;
@@ -3849,6 +3874,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    applyWebArchiveProject: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProjectBackfillRequest"];
+            };
+        };
+        responses: {
+            /** @description 任务已持久化，异步处理 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Collection"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

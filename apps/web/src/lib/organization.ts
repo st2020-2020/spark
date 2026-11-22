@@ -387,6 +387,507 @@ export function classifyOrganizationDisplay(params: {
   };
 }
 
+export type CollectionFilingOutcome =
+  | 'filed'
+  | 'organizing'
+  | 'pending_suggestion'
+  | 'pending_action';
+
+export type CollectionFilingNextStepKind =
+  | 'none'
+  | 'retry_backfill'
+  | 'apply_backfill'
+  | 'enable_item_ai'
+  | 'open_consent'
+  | 'open_web_archive'
+  | 'restart_org'
+  | 'edit_collection'
+  | 'manual_select'
+  | 'create_project_link';
+
+export interface CollectionFilingNextStep {
+  kind: CollectionFilingNextStepKind;
+  label: string;
+}
+
+export interface CollectionFilingModel {
+  outcome: CollectionFilingOutcome;
+  badgeLabel: string;
+  pillTone: 'default' | 'green' | 'warning' | 'danger' | 'spark';
+  headline: string;
+  reason: string;
+  effectiveProjects: ProjectAssociation[];
+  suggestedProjects: ProjectAssociation[];
+  rejectedProjects: ProjectAssociation[];
+  nextStep: CollectionFilingNextStep;
+  imageMaterialHint?: string;
+  ledgerBlockedNote?: string;
+}
+
+export function classifyCollectionFiling(params: {
+  collection: Collection;
+  aiEnabled: boolean;
+  aiPlatformEnabled: boolean;
+  aiTrialEligible: boolean;
+  hasWebArchiveConsent: boolean;
+  hasImageFilingConsent: boolean;
+  canUseImages: boolean;
+  hasExtractedImageText: boolean;
+  hasProjects: boolean;
+  isInTrash: boolean;
+  backfillState?: 'idle' | 'applying' | 'failed' | 'stopped_conflict';
+}): CollectionFilingModel {
+  const {
+    collection,
+    aiEnabled,
+    aiPlatformEnabled,
+    aiTrialEligible,
+    hasWebArchiveConsent,
+    hasImageFilingConsent,
+    canUseImages,
+    hasExtractedImageText,
+    hasProjects,
+    isInTrash,
+    backfillState = 'idle',
+  } = params;
+
+  const { organization, ai_excluded: aiExcluded, projects } = collection;
+  const effectiveProjects = projects.filter(
+    (p) => p.decision === 'auto' || p.decision === 'confirmed' || p.decision === 'manual',
+  );
+  const suggestedProjects = projects.filter((p) => p.decision === 'suggested');
+  const rejectedProjects = projects.filter((p) => p.decision === 'rejected');
+
+  const isActive = !aiExcluded && isOrganizationActiveStatus(organization.status);
+  const orgDisplay = classifyOrganizationDisplay({
+    organization,
+    aiEnabled,
+    aiExcluded,
+    projects,
+  });
+  const errCode = organization.error_code;
+  const webArchiveStatus = organization.web_archive_status;
+  const imageArchive = organization.image_archive_status;
+  const imageMaterial = organization.image_material_status;
+  const isOrgFailedOrBlocked =
+    organization.status === 'failed' || organization.status === 'blocked';
+  const webArchiveBlockedByLedger =
+    isOrgFailedOrBlocked && organization.web_archive_retry_available === false;
+  const webArchiveAvailable = Boolean(collection.web_archive_available);
+  const canShowWebArchive =
+    !isInTrash &&
+    !aiExcluded &&
+    !isActive &&
+    webArchiveAvailable &&
+    aiPlatformEnabled &&
+    aiTrialEligible &&
+    (!isOrgFailedOrBlocked || organization.web_archive_retry_available === true);
+  const imageMaterialHint =
+    imageMaterial === 'included' ? '本次整理使用了图片识别结果。' : undefined;
+
+  if (effectiveProjects.length > 0) {
+    const hasAuto = effectiveProjects.some((p) => p.decision === 'auto');
+    const archiveOutcome = webArchiveStatus || imageArchive;
+    let reason = '';
+    if (isActive) {
+      reason = '后台仍在补充标签或摘要，已归入的项目不会被覆盖。';
+    } else if (hasAuto && archiveOutcome === 'created') {
+      reason = '已新建主题项目并自动归入。';
+    } else if (hasAuto && archiveOutcome === 'linked') {
+      reason = '已自动归入已有项目。';
+    } else if (hasAuto) {
+      reason = '已自动归入对应项目，无需额外确认。';
+    }
+    return {
+      outcome: 'filed',
+      badgeLabel: '已归入',
+      pillTone: 'green',
+      headline: '已归入项目',
+      reason,
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'none', label: '' },
+      imageMaterialHint,
+    };
+  }
+
+  if (isActive || backfillState === 'applying') {
+    const headline =
+      backfillState === 'applying'
+        ? '正在按已有线索自动归类'
+        : imageMaterial === 'waiting'
+          ? '等待图片识别'
+          : organization.status === 'queued'
+            ? '整理排队中'
+            : '正在整理';
+    const reason =
+      backfillState === 'applying'
+        ? '正在复用已有具体标签与原文线索匹配或创建项目，不消耗模型额度。'
+        : imageMaterial === 'waiting'
+          ? '正在等待图片识别结果，完成后将自动为你匹配项目。'
+          : organization.status === 'queued'
+            ? '已加入整理队列，离开页面仍会自动完成归类。'
+            : '正在分析内容并匹配主题项目，完成后将实时更新。';
+    return {
+      outcome: 'organizing',
+      badgeLabel: '正在归类',
+      pillTone: 'default',
+      headline,
+      reason,
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'none', label: '' },
+    };
+  }
+
+  if (suggestedProjects.length > 0) {
+    return {
+      outcome: 'pending_suggestion',
+      badgeLabel: '仍待归类',
+      pillTone: 'spark',
+      headline: '有 AI 推荐项目待确认',
+      reason: '确认「加入项目」后即可归入对应项目。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'none', label: '' },
+      imageMaterialHint,
+    };
+  }
+
+  const manualStep: CollectionFilingNextStep = hasProjects
+    ? { kind: 'manual_select', label: '手动选择项目' }
+    : { kind: 'create_project_link', label: '前往创建项目' };
+
+  if (isInTrash) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '尚未归入项目',
+      reason: '该收藏位于回收站，恢复后可继续归类。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'none', label: '' },
+    };
+  }
+
+  if (backfillState === 'failed') {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'danger',
+      headline: '自动补归类未完成',
+      reason: '应用已有分析结果时遇到网络异常，已保留原请求，重试不会额外调用模型。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'retry_backfill', label: '重试归类' },
+    };
+  }
+
+  if (organization.project_backfill_available === true && !aiExcluded) {
+    if (!aiEnabled && aiPlatformEnabled && aiTrialEligible) {
+      return {
+        outcome: 'pending_action',
+        badgeLabel: '仍待归类',
+        pillTone: 'warning',
+        headline: '待开启 AI 整理授权',
+        reason: '已有可复用的网页分析线索，开启 AI 整理后即可自动归入项目。',
+        effectiveProjects,
+        suggestedProjects,
+        rejectedProjects,
+        nextStep: { kind: 'open_consent', label: '开启 AI 整理' },
+      };
+    }
+    if (aiEnabled && !hasWebArchiveConsent && aiPlatformEnabled && aiTrialEligible) {
+      return {
+        outcome: 'pending_action',
+        badgeLabel: '仍待归类',
+        pillTone: 'warning',
+        headline: '待更新整理授权',
+        reason: '已有可复用的网页分析线索，更新整理授权后即可自动归入项目。',
+        effectiveProjects,
+        suggestedProjects,
+        rejectedProjects,
+        nextStep: { kind: 'open_consent', label: '更新整理授权以归类网页' },
+      };
+    }
+    if (aiEnabled && hasWebArchiveConsent && aiPlatformEnabled && aiTrialEligible) {
+      return {
+        outcome: 'pending_action',
+        badgeLabel: '仍待归类',
+        pillTone: 'default',
+        headline: '可按已有线索归入项目',
+        reason: '已有可复用的具体标签与原文线索，可一键匹配或创建项目（不额外消耗模型额度）。',
+        effectiveProjects,
+        suggestedProjects,
+        rejectedProjects,
+        nextStep: { kind: 'apply_backfill', label: '按已有线索归类' },
+      };
+    }
+  }
+
+  if (aiExcluded) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '已排除 AI',
+      reason: '你已设置本条收藏不参与 AI 自动整理，可在更多管理中手动选择项目或重新允许整理。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'enable_item_ai', label: '允许 AI 整理' },
+    };
+  }
+
+  if (!aiEnabled) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '未开启 AI 自动整理',
+      reason: '当前账号未开启 AI 自动整理，原有内容与手动归类不受影响。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep:
+        aiPlatformEnabled && aiTrialEligible
+          ? { kind: 'open_consent', label: '开启 AI 整理' }
+          : manualStep,
+    };
+  }
+
+  if (
+    (webArchiveStatus === 'consent_required' || errCode === 'web_archive_consent_required') &&
+    !hasWebArchiveConsent &&
+    aiPlatformEnabled &&
+    aiTrialEligible
+  ) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'warning',
+      headline: '待更新整理授权',
+      reason: '网页收藏自动归类需要更新 AI 整理授权（包含标题、纯文本选文与用途披露）。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'open_consent', label: '更新整理授权以归类网页' },
+    };
+  }
+
+  if (
+    (imageMaterial === 'consent_required' || imageArchive === 'consent_required') &&
+    !hasImageFilingConsent &&
+    aiPlatformEnabled &&
+    aiTrialEligible &&
+    canUseImages
+  ) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'warning',
+      headline: '待授权图片线索',
+      reason: '上次整理缺少使用图片识别结果的授权。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'open_consent', label: '授权使用图片识别结果' },
+    };
+  }
+
+  if (isOrgFailedOrBlocked) {
+    if (errCode === 'integration_not_configured' || errCode === 'test_adapter_no_model') {
+      return {
+        outcome: 'pending_action',
+        badgeLabel: '仍待归类',
+        pillTone: 'default',
+        headline: '未配置模型服务',
+        reason: organizationErrorMessage(errCode),
+        effectiveProjects,
+        suggestedProjects,
+        rejectedProjects,
+        nextStep: manualStep,
+      };
+    }
+
+    const isQuota = organization.status === 'blocked' || errCode === 'quota_exceeded';
+    const headline = isQuota ? '额度不足暂停' : '整理失败';
+    const reason = organizationErrorMessage(isQuota ? 'quota_exceeded' : errCode);
+    const ledgerBlockedNote = webArchiveBlockedByLedger
+      ? '上次网页归类已产生计费记录，为防重复计费不再提供直接重试；你可手动选择项目或编辑内容后重新整理。'
+      : undefined;
+    const nextStep: CollectionFilingNextStep =
+      canShowWebArchive && organization.web_archive_retry_available === true
+        ? { kind: 'open_web_archive', label: '重试网页归类' }
+        : webArchiveBlockedByLedger
+          ? manualStep
+          : { kind: 'restart_org', label: '重试整理' };
+
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: isQuota ? 'warning' : 'danger',
+      headline,
+      reason,
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep,
+      ledgerBlockedNote,
+    };
+  }
+
+  if (errCode === 'ai_excluded' || errCode === 'ai_disabled') {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '尚未整理',
+      reason:
+        errCode === 'ai_excluded'
+          ? '已允许本条参与 AI 整理，可点击「重新整理」按最新内容处理。'
+          : '该条保存时尚未开启 AI 整理，可点击「重新整理」按最新内容处理。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'restart_org', label: '重新整理' },
+    };
+  }
+
+  if (canShowWebArchive && webArchiveStatus !== 'no_match') {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '尚未按网页内容归类',
+      reason: '可根据已保存的标题、纯文本选文和用途自动匹配或创建项目。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'open_web_archive', label: '按网页内容归类' },
+    };
+  }
+
+  if (
+    organization.status === 'superseded' ||
+    (organization.status === 'partial' && errCode !== 'invalid_topic_candidate')
+  ) {
+    const usageUncertain = errCode === 'usage_uncertain';
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'warning',
+      headline: organization.status === 'superseded' ? '内容已更新待归类' : '部分整理未完成',
+      reason: usageUncertain
+        ? '已生成并保留有效标题与摘要（暂无匹配项目建议）；本次用量待核对，无需重复重整。'
+        : orgDisplay.description,
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: usageUncertain ? manualStep : { kind: 'restart_org', label: orgDisplay.triggerLabel },
+    };
+  }
+
+  if (
+    hasImageFilingConsent &&
+    canUseImages &&
+    hasExtractedImageText &&
+    imageMaterial === 'consent_required'
+  ) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '可按图片识别结果重新归类',
+      reason: '重新整理会检查已有识别结果，符合当前授权的内容可直接用于匹配，无需重新上传图片。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'restart_org', label: '重新整理' },
+    };
+  }
+
+  if (
+    errCode === 'insufficient_material' ||
+    errCode === 'empty_input' ||
+    errCode === 'no_text_material' ||
+    (Boolean(collection.original_url) && !webArchiveAvailable)
+  ) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '待补充材料',
+      reason:
+        Boolean(collection.original_url) && !webArchiveAvailable
+          ? '当前网址收藏尚无可用于网页归类的标题、纯文本选文或用途，因此暂未自动归类。'
+          : '本次没有可用的整理材料，可补充正文或用途说明后归类。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: { kind: 'edit_collection', label: '补充标题或用途' },
+    };
+  }
+
+  if (
+    organization.status === 'succeeded' ||
+    webArchiveStatus === 'no_match' ||
+    errCode === 'invalid_topic_candidate'
+  ) {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '暂无匹配项目',
+      reason:
+        webArchiveStatus === 'no_match'
+          ? '已完成网页收藏分析，证据不足以自动匹配或创建项目；你仍可手动选择项目或补充标题/用途。'
+          : errCode === 'invalid_topic_candidate'
+            ? '已保留整理结果。本次未能确定合适的项目名称，你可以手动选择项目。'
+            : '已完成内容分析，当前没有足够线索自动匹配或新建项目；你仍可手动选择项目。',
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: manualStep,
+      imageMaterialHint,
+    };
+  }
+
+  if (errCode === 'integration_not_configured' || errCode === 'test_adapter_no_model') {
+    return {
+      outcome: 'pending_action',
+      badgeLabel: '仍待归类',
+      pillTone: 'default',
+      headline: '未配置模型服务',
+      reason: organizationErrorMessage(errCode),
+      effectiveProjects,
+      suggestedProjects,
+      rejectedProjects,
+      nextStep: manualStep,
+    };
+  }
+
+  return {
+    outcome: 'pending_action',
+    badgeLabel: '仍待归类',
+    pillTone: 'default',
+    headline: '尚未整理',
+    reason: errCode
+      ? organizationErrorMessage(errCode)
+      : '该条保存时尚未执行自动整理，可点击重新整理按最新内容处理。',
+    effectiveProjects,
+    suggestedProjects,
+    rejectedProjects,
+    nextStep: { kind: 'restart_org', label: '重新整理' },
+  };
+}
+
 export class StaleSuggestionError extends Error {
   readonly freshCollection: Collection;
 

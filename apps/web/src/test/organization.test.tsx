@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -100,19 +101,19 @@ describe('Platform AI organization & UI states', () => {
     // Click toast CTA to jump straight to collection detail
     await user.click(toastActionBtn);
     expect(openedSpy).toHaveBeenCalledTimes(1);
-    await screen.findByText('已整理');
+    await screen.findByText('仍待归类');
     expect(getOrgSpy).not.toHaveBeenCalled();
     expect(getCollectionSpy).toHaveBeenCalledTimes(2);
 
-    // Generated title, summary, AI suggestion & evidence quote are displayed
-    await screen.findByText('AI 建议标题');
-    await screen.findByText('AI 摘要');
+    // AI suggestion & evidence quote are displayed cleanly while technical summary sits inside collapsed disclosure
     await screen.findByText('AI 建议');
     const evidenceList = await screen.findByRole('list', { name: '推荐依据摘录' });
     expect(within(evidenceList).getByText('用途说明')).toBeInTheDocument();
     expect(
       within(evidenceList).getByText(/前端交互升级需要参考这个卡片对齐细节/),
     ).toBeInTheDocument();
+    await user.click(screen.getByText('更多管理与整理详情'));
+    await screen.findByText('AI 摘要');
 
     // 5. Verify sidebar badge + Unclassified page also displays AI suggestion + evidence before confirming
     await sidebar.findByRole('link', { name: '1 条待确认 AI 建议' });
@@ -172,11 +173,11 @@ describe('Platform AI organization & UI states', () => {
     await user.click(screen.getByRole('button', { name: '允许 AI 整理' }));
     await screen.findByRole('button', { name: '重新整理' });
 
-    // Trigger restartOrganization and poll to suggestion, then click 忽略 -> 恢复自动判断
+    // Trigger restartOrganization and poll to suggestion, then click 忽略 -> 恢复自动判断 (in collapsed management drawer)
     await user.click(screen.getByRole('button', { name: '重新整理' }));
     await waitFor(
       () => {
-        expect(screen.getByText('已整理')).toBeInTheDocument();
+        expect(screen.getByText('AI 建议')).toBeInTheDocument();
       },
       { timeout: 7000 },
     );
@@ -184,6 +185,7 @@ describe('Platform AI organization & UI states', () => {
     const detailCard = screen.getByRole('article');
     await within(detailCard).findByText(proj.name);
     await user.click(within(detailCard).getByRole('button', { name: '忽略' }));
+    await user.click(within(detailCard).getByText('更多管理与整理详情'));
     await within(detailCard).findByText('已忽略');
     await user.click(within(detailCard).getByRole('button', { name: '恢复自动判断' }));
     await waitFor(() => {
@@ -244,11 +246,11 @@ describe('Platform AI organization & UI states', () => {
 
     await waitFor(
       () => {
-        expect(screen.getByText('已整理')).toBeInTheDocument();
+        expect(screen.getByText('暂无匹配项目')).toBeInTheDocument();
       },
       { timeout: 7000 },
     );
-    await screen.findByText(/暂无匹配的项目建议/);
+    await screen.findByText(/没有足够线索自动匹配或新建项目/);
   }, 15000);
 
   it('verifies no-credential interaction works cleanly when backend returns integration_not_configured', async () => {
@@ -281,7 +283,8 @@ describe('Platform AI organization & UI states', () => {
     await screen.findByText('未配置模型服务');
     await screen.findByText(/尚未配置模型服务凭证/);
 
-    // User can still toggle per-item exclusion cleanly without credentials
+    // User can still toggle per-item exclusion cleanly inside collapsed management drawer
+    await user.click(screen.getByText('更多管理与整理详情'));
     await user.click(screen.getByRole('button', { name: '不参与 AI 整理' }));
     await screen.findByText('已排除 AI');
     await user.click(screen.getByRole('button', { name: '允许 AI 整理' }));
@@ -790,5 +793,473 @@ describe('organization display helpers', () => {
 
     expect(evidenceSourceLabel('original_text')).toBe('正文');
     expect(evidenceSourceLabel('intent')).toBe('用途说明');
+  });
+
+  it('converges detail default view to clear project outcomes, hides stage/duplicate title clutter behind disclosure, and removes 已整理/无项目 contradiction', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+
+    const filedProj = await adapter.createProject(
+      { name: '潮汐传感器研究', description: '传感器测试项目', focus_points: ['潮汐'] },
+      'proj-converge-filed-1',
+    );
+
+    const noMatchCol = await adapter.createCollection(
+      {
+        id: 'dddddddd-dddd-4ddd-8ddd-111111111111',
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '大模型最新开源动态汇总' }] }],
+          },
+        },
+        intent: '',
+        manual_title: '大模型开源进展追踪',
+        original_url: 'https://example.org/llm-news',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: false,
+      },
+      'col-converge-nomatch-1',
+    );
+    const readNoMatch = await adapter.setReadState(noMatchCol.id, { read: true });
+    const settledNoMatch = {
+      ...readNoMatch,
+      tags: [
+        {
+          tag_id: 'tag-llm',
+          name: '大模型动态',
+          path: '大模型动态',
+          decision: 'auto' as const,
+        },
+      ],
+      projects: [],
+      has_suggestion: false,
+      organization: {
+        ...readNoMatch.organization,
+        status: 'succeeded' as const,
+        web_archive_status: 'no_match' as const,
+        generated_title: '大模型开源进展追踪',
+        summary: '汇总本周主流大模型动态。',
+        stages: [
+          { name: 'generate' as const, status: 'succeeded' as const, attempts: 1 },
+          { name: 'match_projects' as const, status: 'succeeded' as const, attempts: 1 },
+          { name: 'apply' as const, status: 'succeeded' as const, attempts: 1 },
+        ],
+      },
+    };
+
+    const filedCol = await adapter.createCollection(
+      {
+        id: 'dddddddd-dddd-4ddd-8ddd-222222222222',
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '潮汐传感器标定记录' }] }],
+          },
+        },
+        intent: '',
+        manual_title: '潮汐传感器标定记录',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-converge-filed-2',
+    );
+    const readFiled = await adapter.setReadState(filedCol.id, { read: true });
+    const settledFiled = {
+      ...readFiled,
+      ai_excluded: false,
+      projects: [
+        {
+          project_id: filedProj.id,
+          name: filedProj.name,
+          decision: 'auto' as const,
+          reason: '材料匹配潮汐传感器主题',
+          evidence: [{ source_id: 'page_title', quote: '潮汐传感器' }],
+        },
+      ],
+      organization: {
+        ...readFiled.organization,
+        status: 'succeeded' as const,
+        web_archive_status: 'linked' as const,
+        generated_title: '潮汐传感器标定记录',
+        stages: [
+          { name: 'generate' as const, status: 'succeeded' as const, attempts: 1 },
+          { name: 'match_projects' as const, status: 'succeeded' as const, attempts: 1 },
+          { name: 'apply' as const, status: 'succeeded' as const, attempts: 1 },
+        ],
+      },
+    };
+
+    const origGet = adapter.getCollection.bind(adapter);
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === settledNoMatch.id) return structuredClone(settledNoMatch);
+      if (id === settledFiled.id) return structuredClone(settledFiled);
+      return origGet(id, signal);
+    });
+
+    // 1. Settled no_match: MUST say 仍待归类 + reason, NEVER 已整理 / 暂未关联项目 / 决定版本 / visible stages / duplicate title
+    const v1 = renderApp([`/collections/${settledNoMatch.id}`], adapter);
+    const filingRegion1 = await screen.findByRole('region', { name: '归类结果' });
+    expect(within(filingRegion1).getByText('仍待归类')).toBeInTheDocument();
+    expect(within(filingRegion1).queryByText('已整理')).not.toBeInTheDocument();
+    expect(within(filingRegion1).queryByText('暂未关联项目')).not.toBeInTheDocument();
+    expect(within(filingRegion1).queryByText(/决定版本/)).not.toBeInTheDocument();
+    expect(within(filingRegion1).queryByText('AI 建议标题')).not.toBeInTheDocument();
+    expect(within(filingRegion1).queryByText(/项目匹配/)).not.toBeInTheDocument();
+    // At most one primary CTA button outside collapsed disclosure
+    expect(within(filingRegion1).getByRole('button', { name: '手动选择项目' })).toBeInTheDocument();
+    expect(within(filingRegion1).queryByRole('button', { name: '不参与 AI 整理' })).not.toBeInTheDocument();
+
+    // Expanding disclosure reveals management & technical details
+    await user.click(within(filingRegion1).getByText('更多管理与整理详情'));
+    expect(within(filingRegion1).getByRole('button', { name: '不参与 AI 整理' })).toBeVisible();
+    expect(within(filingRegion1).getByText('项目匹配')).toBeVisible();
+    v1.unmount();
+
+    // 2. Filed (auto): MUST show 已归入 + clickable project link, ZERO action buttons outside collapsed disclosure
+    renderApp([`/collections/${settledFiled.id}`], adapter);
+    const filingRegion2 = await screen.findByRole('region', { name: '归类结果' });
+    expect(within(filingRegion2).getByText('已归入')).toBeInTheDocument();
+    expect(within(filingRegion2).getByRole('link', { name: filedProj.name })).toHaveAttribute(
+      'href',
+      `/projects/${filedProj.id}`,
+    );
+    expect(within(filingRegion2).queryByRole('button', { name: '确认' })).not.toBeInTheDocument();
+    expect(within(filingRegion2).queryByRole('button', { name: '移除' })).not.toBeInTheDocument();
+    expect(within(filingRegion2).queryByRole('button', { name: '重新整理' })).not.toBeInTheDocument();
+    expect(within(filingRegion2).queryByRole('button', { name: '不参与 AI 整理' })).not.toBeInTheDocument();
+    expect(within(filingRegion2).queryByText('AI 建议标题')).not.toBeInTheDocument();
+    expect(within(filingRegion2).queryByText(/决定版本/)).not.toBeInTheDocument();
+  });
+
+  it('auto-applies settled project_backfill_available on detail open once (StrictMode-safe), updates project views, blocks ineligible triggers, and retries same key on failure', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+
+    const created = await adapter.createCollection(
+      {
+        id: 'eeeeeeee-eeee-4eee-8eee-111111111111',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: '',
+        manual_title: '潮汐传感器部署参数',
+        original_url: 'https://example.org/tide-sensor',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-backfill-seed-1',
+    );
+    const readCol = await adapter.setReadState(created.id, { read: true });
+    let liveBackfill = true;
+    const backfillState = {
+      ...readCol,
+      ai_excluded: false,
+      decision_version: 2,
+      tags: [{ tag_id: 'tag-tide', name: '潮汐传感器', path: '潮汐传感器', decision: 'auto' as const }],
+      organization: {
+        ...readCol.organization,
+        run_id: 'eeeeeeee-1111-4111-8111-111111111111',
+        status: 'succeeded' as const,
+        web_archive_status: 'no_match' as const,
+        project_backfill_available: true,
+        stages: [
+          { name: 'generate' as const, status: 'succeeded' as const, attempts: 1 },
+          { name: 'match_projects' as const, status: 'succeeded' as const, attempts: 1 },
+          { name: 'apply' as const, status: 'succeeded' as const, attempts: 1 },
+        ],
+      },
+    };
+    const appliedResult = {
+      ...backfillState,
+      decision_version: 3,
+      projects: [
+        {
+          project_id: 'eeeeeeee-2222-4222-8222-222222222222',
+          name: '潮汐传感器',
+          decision: 'auto' as const,
+          reason: '复用已有具体标签「潮汐传感器」安全补归类',
+          evidence: [{ source_id: 'page_title', quote: '潮汐传感器部署参数' }],
+        },
+      ],
+      organization: {
+        ...backfillState.organization,
+        web_archive_status: 'created' as const,
+        project_backfill_available: undefined,
+      },
+    };
+
+    const origGetCollection = adapter.getCollection.bind(adapter);
+    const origListCollections = adapter.listCollections.bind(adapter);
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === backfillState.id) return structuredClone(liveBackfill ? backfillState : appliedResult);
+      return origGetCollection(id, signal);
+    });
+    vi.spyOn(adapter, 'listCollections').mockImplementation(async (query, signal) => {
+      const page = await origListCollections(query, signal);
+      return {
+        ...page,
+        items: page.items.map((item) =>
+          item.id === backfillState.id ? { ...item, organization_status: 'succeeded' } : item,
+        ),
+      };
+    });
+
+    const applySpy = vi.spyOn(adapter, 'applyWebArchiveProject');
+
+    // 1. Old consent + Inbox list must NEVER auto-trigger apply
+    await adapter.updatePreferences({ ai_enabled: true, consent_version: 'spark-ai-image-notes-v2' });
+    const inboxView = renderApp(['/inbox'], adapter);
+    await screen.findByText('潮汐传感器部署参数');
+    expect(applySpy).not.toHaveBeenCalled();
+    inboxView.unmount();
+
+    const oldConsentDetail = renderApp([`/collections/${backfillState.id}`], adapter);
+    await screen.findByRole('button', { name: '更新整理授权以归类网页' });
+    expect(applySpy).not.toHaveBeenCalled();
+    oldConsentDetail.unmount();
+
+    // 2. Grant valid consent, simulate 1 transient network error then 200 success on manual same-key retry
+    await adapter.updatePreferences({ ai_enabled: true, consent_version: 'spark-ai-extension-archive-v1' });
+    let attempt = 0;
+    applySpy.mockImplementation(async (_id, body, _key) => {
+      attempt += 1;
+      expect(body.base_decision_version).toBe(2);
+      if (attempt === 1) {
+        throw new Error('网络临时中断');
+      }
+      liveBackfill = false;
+      return structuredClone(appliedResult);
+    });
+
+    const strictView = render(
+      <StrictMode>
+        <MemoryRouter initialEntries={[`/collections/${backfillState.id}`]}>
+          <AppProviders api={adapter}>
+            <AppRoutes />
+          </AppProviders>
+        </MemoryRouter>
+      </StrictMode>,
+    );
+
+    // Auto-fires ONCE despite StrictMode, fails cleanly -> shows 仍待归类 + single retry button
+    await screen.findByRole('button', { name: '重试归类' });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+
+    // Retry reuses the EXACT SAME Idempotency-Key and immediately resolves to 已归入 <潮汐传感器>
+    await user.click(screen.getByRole('button', { name: '重试归类' }));
+    expect(applySpy).toHaveBeenCalledTimes(2);
+    expect(applySpy.mock.calls[0][2]).toBe(applySpy.mock.calls[1][2]);
+
+    const filingRegion = await screen.findByRole('region', { name: '归类结果' });
+    expect(within(filingRegion).getByText('已归入')).toBeInTheDocument();
+    expect(within(filingRegion).getByRole('link', { name: '潮汐传感器' })).toHaveAttribute(
+      'href',
+      '/projects/eeeeeeee-2222-4222-8222-222222222222',
+    );
+    expect(within(filingRegion).queryByRole('button', { name: '重试归类' })).not.toBeInTheDocument();
+    strictView.unmount();
+
+    // 3. Reopening detail after applied does NOT trigger again, and 409 conflict on a distinct run stops auto-retrying
+    const conflictState = {
+      ...backfillState,
+      id: 'eeeeeeee-eeee-4eee-8eee-333333333333',
+      organization: {
+        ...backfillState.organization,
+        run_id: 'eeeeeeee-3333-4333-8333-333333333333',
+      },
+    };
+    const conflictResolved = {
+      ...appliedResult,
+      id: conflictState.id,
+      organization: {
+        ...appliedResult.organization,
+        run_id: conflictState.organization.run_id,
+      },
+    };
+    let conflictPending = true;
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === backfillState.id) return structuredClone(appliedResult);
+      if (id === conflictState.id) return structuredClone(conflictPending ? conflictState : conflictResolved);
+      return origGetCollection(id, signal);
+    });
+    const conflictApply = vi.fn().mockImplementation(async () => {
+      conflictPending = false;
+      const { ApiError } = await import('../api/errors');
+      throw new ApiError({ status: 409, code: 'decision_conflict', message: '版本冲突' });
+    });
+    applySpy.mockImplementation(conflictApply);
+    const conflictView = renderApp([`/collections/${conflictState.id}`], adapter);
+    const afterConflict = await screen.findByRole('region', { name: '归类结果' });
+    await waitFor(() => {
+      expect(within(afterConflict).getByText('已归入')).toBeInTheDocument();
+    });
+    expect(conflictApply).toHaveBeenCalledTimes(1);
+    conflictView.unmount();
+
+    // 4. Excluded, trashed, or never-run (skipped) must NEVER auto-trigger apply
+    const excludedState = {
+      ...backfillState,
+      id: 'eeeeeeee-eeee-4eee-8eee-444444444444',
+      ai_excluded: true,
+      organization: { ...backfillState.organization, run_id: 'eeeeeeee-4444-4444-8444-444444444444' },
+    };
+    const trashedState = {
+      ...backfillState,
+      id: 'eeeeeeee-eeee-4eee-8eee-555555555555',
+      deleted_at: new Date().toISOString(),
+      organization: { ...backfillState.organization, run_id: 'eeeeeeee-5555-4555-8555-555555555555' },
+    };
+    const skippedState = {
+      ...backfillState,
+      id: 'eeeeeeee-eeee-4eee-8eee-666666666666',
+      organization: {
+        ...backfillState.organization,
+        run_id: undefined,
+        status: 'skipped' as const,
+        web_archive_status: undefined,
+      },
+    };
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === excludedState.id) return structuredClone(excludedState);
+      if (id === trashedState.id) return structuredClone(trashedState);
+      if (id === skippedState.id) return structuredClone(skippedState);
+      return origGetCollection(id, signal);
+    });
+    const guardApply = vi.fn();
+    applySpy.mockImplementation(guardApply);
+    for (const guardId of [excludedState.id, trashedState.id, skippedState.id]) {
+      const v = renderApp([`/collections/${guardId}`], adapter);
+      await screen.findByRole('region', { name: '归类结果' });
+      v.unmount();
+    }
+    expect(guardApply).not.toHaveBeenCalled();
+
+    // 5. Settled partial (no_match) with project_backfill_available=true auto-applies cleanly
+    const partialCol = await adapter.createCollection(
+      {
+        id: 'eeeeeeee-eeee-4eee-8eee-777777777777',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: '',
+        manual_title: '气象站校准指南',
+        original_url: 'https://example.org/weather-partial',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-backfill-partial-1',
+    );
+    const partialRead = await adapter.setReadState(partialCol.id, { read: true });
+    const partialState = {
+      ...partialRead,
+      ai_excluded: false,
+      decision_version: 2,
+      tags: [{ tag_id: 'tag-weather', name: '气象站', path: '气象站', decision: 'auto' as const }],
+      organization: {
+        ...partialRead.organization,
+        run_id: 'eeeeeeee-7777-4777-8777-777777777777',
+        status: 'partial' as const,
+        web_archive_status: 'no_match' as const,
+        project_backfill_available: true,
+      },
+    };
+    const partialResolved = {
+      ...partialState,
+      decision_version: 3,
+      projects: [
+        {
+          project_id: 'eeeeeeee-8888-4888-8888-888888888888',
+          name: '气象站',
+          decision: 'auto' as const,
+          evidence: [{ source_id: 'page_title', quote: '气象站校准指南' }],
+        },
+      ],
+      organization: {
+        ...partialState.organization,
+        status: 'succeeded' as const,
+        web_archive_status: 'created' as const,
+        project_backfill_available: undefined,
+      },
+    };
+
+    // 6. Slow A apply fails AFTER navigating A -> B: B must stay completely clean (no bleed)
+    const slowA = {
+      ...backfillState,
+      id: 'eeeeeeee-eeee-4eee-8eee-999999999999',
+      manual_title: '慢请求收藏 A',
+      organization: {
+        ...backfillState.organization,
+        run_id: 'eeeeeeee-9999-4999-8999-999999999999',
+      },
+    };
+    const cleanB = {
+      ...appliedResult,
+      id: 'eeeeeeee-eeee-4eee-8eee-aaaaaaaaaaaa',
+      manual_title: '普通已归入收藏 B',
+      organization: {
+        ...appliedResult.organization,
+        run_id: 'eeeeeeee-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      },
+    };
+
+    let partialDone = false;
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === partialState.id) return structuredClone(partialDone ? partialResolved : partialState);
+      if (id === slowA.id) return structuredClone(slowA);
+      if (id === cleanB.id) return structuredClone(cleanB);
+      return origGetCollection(id, signal);
+    });
+    let rejectSlowA!: (err: Error) => void;
+    applySpy.mockImplementation(async (colId) => {
+      if (colId === partialState.id) {
+        partialDone = true;
+        return structuredClone(partialResolved);
+      }
+      if (colId === slowA.id) {
+        return new Promise((_, rej) => {
+          rejectSlowA = rej;
+        });
+      }
+      throw new Error(`Unexpected apply call for ${colId}`);
+    });
+
+    const partialView = renderApp([`/collections/${partialState.id}`], adapter);
+    const partialRegion = await screen.findByRole('region', { name: '归类结果' });
+    await waitFor(() => {
+      expect(within(partialRegion).getByText('已归入')).toBeInTheDocument();
+      expect(within(partialRegion).getByRole('link', { name: '气象站' })).toBeInTheDocument();
+    });
+    partialView.unmount();
+
+    const navView = renderApp([`/collections/${slowA.id}`], adapter);
+    await screen.findByRole('heading', { name: '慢请求收藏 A' });
+    // Navigate A -> B while A apply is still in flight
+    await user.click(screen.getByRole('link', { name: '返回' }));
+    await screen.findByRole('heading', { name: '收件箱' });
+    // Mount B directly within the same session
+    navView.unmount();
+    renderApp([`/collections/${cleanB.id}`], adapter);
+    await screen.findByRole('heading', { name: '普通已归入收藏 B' });
+    await act(async () => {
+      rejectSlowA(new Error('收藏 A 后台超时'));
+      await Promise.resolve();
+    });
+    const bRegion = await screen.findByRole('region', { name: '归类结果' });
+    expect(within(bRegion).getByText('已归入')).toBeInTheDocument();
+    expect(within(bRegion).queryByText(/收藏 A 后台超时/)).not.toBeInTheDocument();
+    expect(within(bRegion).queryByRole('button', { name: '重试归类' })).not.toBeInTheDocument();
   });
 });
