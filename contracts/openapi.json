@@ -4144,6 +4144,422 @@
         },
         "description": "需要 active 管理员账号。返回内容限于运行元数据。"
       }
+    },
+    "/extension/grants": {
+      "post": {
+        "operationId": "approveExtensionGrant",
+        "summary": "确认浏览器扩展配对",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "409": {
+            "description": "extension_account_changed 或 extension_grant_conflict：重新连接扩展并确认账号。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：配对字段无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionGrantCreate"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/extension/token": {
+      "post": {
+        "operationId": "exchangeExtensionGrant",
+        "summary": "一次性兑换浏览器扩展凭据",
+        "tags": [
+          "extension"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionTokenResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "extension_grant_invalid：配对已过期、已消费或被撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "extension_grant_pending：尚未收到 Web 确认。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：兑换证明格式无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionTokenExchange"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/extension/session": {
+      "get": {
+        "operationId": "getExtensionSession",
+        "summary": "读取当前扩展绑定信息",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "extensionBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "extension_session_expired：扩展未连接、已到期或已撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "revokeExtensionSession",
+        "summary": "撤销当前扩展绑定",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "extensionBearer": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "操作成功"
+          },
+          "401": {
+            "description": "extension_session_expired：扩展未连接、已到期或已撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/extension/projects": {
+      "get": {
+        "operationId": "listExtensionProjects",
+        "summary": "搜索可选的进行中项目",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "extensionBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionProjectPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request 或 invalid_cursor：分页参数无效。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "extension_session_expired：扩展未连接、已到期或已撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 30
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/extension/collections": {
+      "post": {
+        "operationId": "createExtensionCollection",
+        "summary": "用网页标题、网址和选文收藏",
+        "tags": [
+          "extension"
+        ],
+        "security": [
+          {
+            "extensionBearer": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "操作成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionCollectionReceipt"
+                }
+              }
+            },
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "原键原体命中已成功的保存时返回 true。",
+                "schema": {
+                  "type": "string",
+                  "enum": [
+                    "true"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "extension_session_expired：扩展未连接、已到期或已撤销。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "project_unavailable：项目不存在、无权限或不再进行中。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "operation_in_progress、idempotency_mismatch 或 duplicate_resource：请按错误码处理幂等或核对原收藏。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "validation_failed：字段、字符数或网址不符合约定。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionCollectionCreate"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4152,6 +4568,11 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "spark_session"
+      },
+      "extensionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "仅限浏览器扩展接口的独立凭据。"
       }
     },
     "schemas": {
@@ -6967,6 +7388,195 @@
         "required": [
           "base_version",
           "text"
+        ]
+      },
+      "ExtensionGrantCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "minLength": 43,
+            "maxLength": 43,
+            "description": "UTF-8 verifier 的 SHA-256 摘要，经无填充 base64url 编码。"
+          },
+          "browser": {
+            "type": "string",
+            "enum": [
+              "chrome",
+              "edge"
+            ]
+          },
+          "expected_account_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "批准时 Web 页面向用户展示的当前账号 ID。仅作前置条件。"
+          }
+        },
+        "required": [
+          "challenge",
+          "browser",
+          "expected_account_id"
+        ]
+      },
+      "ExtensionTokenExchange": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "verifier": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "minLength": 43,
+            "maxLength": 43,
+            "description": "扩展生成的 32 字节随机数，经无填充 base64url 编码。仅在请求正文发送。"
+          }
+        },
+        "required": [
+          "verifier"
+        ]
+      },
+      "ExtensionSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_label": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "account_id",
+          "account_label",
+          "expires_at"
+        ]
+      },
+      "ExtensionTokenResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "token": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "minLength": 43,
+            "maxLength": 43,
+            "description": "仅此响应返回的扩展 Bearer 凭据。"
+          },
+          "account_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "account_label": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "token",
+          "account_id",
+          "account_label",
+          "expires_at"
+        ]
+      },
+      "ExtensionProjectOption": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ]
+      },
+      "ExtensionProjectPage": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ExtensionProjectOption"
+            }
+          },
+          "next_cursor": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "ExtensionCollectionCreate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "original_url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096,
+            "description": "当前页面的 HTTP(S) 来源网址，不含凭据。"
+          },
+          "manual_title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "selected_text": {
+            "type": "string",
+            "maxLength": 50000,
+            "description": "实际选取的纯文本，与用途合计最多 50,000 个字符。"
+          },
+          "intent": {
+            "type": "string",
+            "maxLength": 50000
+          },
+          "project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "maxItems": 50,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "id",
+          "original_url",
+          "project_ids"
+        ]
+      },
+      "ExtensionCollectionReceipt": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "id"
         ]
       }
     }

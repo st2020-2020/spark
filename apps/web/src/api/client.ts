@@ -15,6 +15,7 @@ import type {
   DownloadGrant,
   ExportDownloadResult,
   ExportFormat,
+  ExtensionGrantCreate,
   Extraction,
   ExtractionList,
   GetCollectionThreadQuery,
@@ -109,6 +110,7 @@ export interface SparkApi {
   exportMyData(format: ExportFormat, signal?: AbortSignal): Promise<ExportDownloadResult>;
   listSessions(): Promise<SessionList>;
   revokeSession(id: string): Promise<void>;
+  approveExtensionGrant(body: ExtensionGrantCreate): Promise<void>;
 
   createProject(body: ProjectCreate, idempotencyKey: string): Promise<Project>;
   listProjects(query?: ListProjectsQuery): Promise<ProjectPage>;
@@ -417,6 +419,8 @@ export function createRealApiClient(): SparkApi {
     listSessions: () => request<SessionList>('GET', '/sessions'),
     revokeSession: (id) =>
       request<void>('DELETE', `/sessions/${encodeURIComponent(id)}`, { requiresCsrf: true }),
+    approveExtensionGrant: (body) =>
+      request<void>('POST', '/extension/grants', { body, requiresCsrf: true }),
 
     createProject: (body, idempotencyKey) =>
       request<Project>('POST', '/projects', {

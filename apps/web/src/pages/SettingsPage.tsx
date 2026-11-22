@@ -15,6 +15,7 @@ import {
   type PaletteId,
   type ThemePref,
 } from '../lib/appearance';
+import { isExtensionDeviceLabel } from '../lib/extensionPair';
 import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/format';
 
 export function SettingsPage() {
@@ -232,33 +233,42 @@ export function SettingsPage() {
 
         <section className="sp-card" aria-label="活跃设备会话">
           <h2 className="sp-card-title">活跃设备会话</h2>
+          <p className="sp-help">
+            撤销浏览器扩展会话会立即使其凭据失效；重设密码会同时撤销所有网页与扩展设备。
+          </p>
           {isSessionsUnavailable ? (
             <p className="sp-help">多设备会话管理暂未开放，将在后续里程碑接入。</p>
           ) : (
             <div>
-              {(sessionsQuery.data?.items ?? []).map((sess) => (
-                <div key={sess.id} className="sp-session-row">
-                  <div className="sp-setting-row-main">
-                    <div className="sp-row">
-                      <span className="sp-strong" title={sess.device_label}>
-                        {formatDeviceLabel(sess.device_label)}
-                      </span>
-                      {sess.current && <span className="sp-pill sp-pill--green">当前设备</span>}
+              {(sessionsQuery.data?.items ?? []).map((sess) => {
+                const isExtension = isExtensionDeviceLabel(sess.device_label);
+                return (
+                  <div key={sess.id} className="sp-session-row">
+                    <div className="sp-setting-row-main">
+                      <div className="sp-row">
+                        <span className="sp-strong" title={sess.device_label}>
+                          {formatDeviceLabel(sess.device_label)}
+                        </span>
+                        {isExtension && <span className="sp-pill">浏览器扩展</span>}
+                        {sess.current && <span className="sp-pill sp-pill--green">当前设备</span>}
+                      </div>
+                      <div className="sp-help sp-tabular">
+                        创建于 {formatDateTime(sess.created_at)} · 到期于 {formatDateTime(sess.expires_at)}
+                      </div>
                     </div>
-                    <div className="sp-help sp-tabular">到期于 {formatDateTime(sess.expires_at)}</div>
+                    {!sess.current && (
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn--sm sp-btn--danger"
+                        disabled={revokeMutation.isPending}
+                        onClick={() => revokeMutation.mutate(sess.id)}
+                      >
+                        撤销
+                      </button>
+                    )}
                   </div>
-                  {!sess.current && (
-                    <button
-                      type="button"
-                      className="sp-btn sp-btn--sm sp-btn--danger"
-                      disabled={revokeMutation.isPending}
-                      onClick={() => revokeMutation.mutate(sess.id)}
-                    >
-                      撤销
-                    </button>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

@@ -84,6 +84,7 @@ gh pr create --base main --fill
 | 涉及模块 | 必须通过 |
 | --- | --- |
 | `apps/web/` | `npm run typecheck`、`npm run test`、`npm run build` |
+| `apps/extension/` | 在扩展目录运行 `npm ci`、`npm test` 和 `npm run build`（含类型检查）；由现有 Web CI 一并执行。浏览器加载、绑定及撤销使用隔离服务验收。 |
 | `server/` | `CGO_ENABLED=0 go test ./...`、`CGO_ENABLED=0 go build ./...`、`go vet ./...`（集成测试在容器中） |
 | 根目录桌面代码 | `CGO_ENABLED=0 go test ./...`、`CGO_ENABLED=0 go build ./...` |
 | `contracts/` | 重新生成前后端类型，两端检查通过 |

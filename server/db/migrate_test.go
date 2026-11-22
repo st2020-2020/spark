@@ -361,3 +361,41 @@ func TestUpgradeV15PreservesCollectionsAndAssignsIndependentThreads(t *testing.T
 		previousActive, previousTrashed = activeThread, trashedThread
 	}
 }
+
+func TestUpgradeV16PreservesWebSessions(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:16] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,16)`)
+	owner, session := uuid.New(), uuid.New()
+	webToken, csrf := []byte("synthetic-web-token-digest"), []byte("synthetic-csrf-digest")
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash)
+		VALUES($1,'extension-migration@example.test','synthetic')`, owner)
+	execTestSQL(t, pool, `INSERT INTO sessions(id,user_id,token_digest,csrf_digest,expires_at,device_label)
+		VALUES($1,$2,$3,$4,now()+interval '1 day','Existing Web')`, session, owner, webToken, csrf)
+
+	for range 2 {
+		if err := Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.New(pool).GetSession(ctx, webToken)
+	if err != nil || row.ID.Bytes != session || row.UserID.Bytes != owner || string(row.CsrfDigest) != string(csrf) {
+		t.Fatalf("Web session was not preserved: %v", err)
+	}
+	extensionToken := []byte("synthetic-extension-token-digest")
+	execTestSQL(t, pool, `INSERT INTO sessions(id,user_id,token_digest,expires_at,device_label,kind)
+		VALUES($1,$2,$3,now()+interval '1 day','Extension','extension')`, uuid.New(), owner, extensionToken)
+	if _, err := store.New(pool).GetSession(ctx, extensionToken); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("extension token was visible to Web session lookup: %v", err)
+	}
+}

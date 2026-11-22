@@ -268,3 +268,61 @@
     margin-left: 0;
   }
 }
+
+/* ---------- v0.7 浏览器扩展配对页面 ---------- */
+.sp-ext-pair-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sp-ext-pair-code {
+  font-family: var(--sp-font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-align: center;
+  padding: 12px 14px;
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-accent);
+  color: var(--sp-accent-fg);
+  border: 1px solid var(--sp-border);
+  user-select: all;
+}
+
+.sp-ext-pair-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-surface-muted);
+  border: 1px solid var(--sp-border);
+}
+
+.sp-ext-perm-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--sp-radius-control);
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
+}
+
+.sp-ext-perm-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: var(--sp-text-sm);
+  color: var(--sp-fg-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sp-ext-pair-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}

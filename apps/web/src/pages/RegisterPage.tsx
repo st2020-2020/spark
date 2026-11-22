@@ -1,15 +1,21 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { AuthLayout } from '../components/AuthLayout';
 import { useAuth } from '../context/AuthContext';
 import { countUnicodeChars } from '../lib/document';
+import { resolveSafeRedirectPath } from '../lib/extensionPair';
 import { EmailVerificationFields, useEmailVerification } from '../components/EmailVerification';
 
 export function RegisterPage() {
   const { register } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectTarget = resolveSafeRedirectPath(
+    (location.state as { from?: unknown } | null)?.from,
+    '/inbox',
+  );
 
   const verification = useEmailVerification('register');
   const [inviteCode, setInviteCode] = useState('');
@@ -41,7 +47,7 @@ export function RegisterPage() {
         verification_code: code.trim(),
         invite_code: inviteCode.trim(),
       });
-      navigate('/inbox', { replace: true });
+      navigate(redirectTarget, { replace: true });
     } catch (err) {
       setError(getFriendlyErrorMessage(err));
     } finally {
@@ -56,7 +62,7 @@ export function RegisterPage() {
       messages={error && <div className="sp-banner sp-banner--error" role="alert">{error}</div>}
       footer={
         <>
-          <Link to="/login">已有账号？去登录</Link>
+          <Link to="/login" state={{ from: redirectTarget }}>已有账号？去登录</Link>
           <Link to="/reset-password">忘记密码</Link>
         </>
       }

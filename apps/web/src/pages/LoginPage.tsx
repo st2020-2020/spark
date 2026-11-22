@@ -1,15 +1,21 @@
 import { useState, type FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff } from 'lucide-react';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { AuthLayout } from '../components/AuthLayout';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
+import { resolveSafeRedirectPath } from '../lib/extensionPair';
 
 export function LoginPage() {
   const api = useApi();
   const { login, sessionError } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+  const redirectTarget = resolveSafeRedirectPath(
+    (location.state as { from?: unknown } | null)?.from,
+    '/inbox',
+  );
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -23,7 +29,7 @@ export function LoginPage() {
     setSubmitting(true);
     try {
       await login({ email: email.trim(), password });
-      navigate('/inbox', { replace: true });
+      navigate(redirectTarget, { replace: true });
     } catch (err) {
       setError(getFriendlyErrorMessage(err));
     } finally {
@@ -65,7 +71,7 @@ export function LoginPage() {
       }
       footer={
         <>
-          <Link to="/register">使用邀请码注册</Link>
+          <Link to="/register" state={{ from: redirectTarget }}>使用邀请码注册</Link>
           <Link to="/reset-password">忘记密码</Link>
         </>
       }
