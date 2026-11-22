@@ -61,6 +61,11 @@ const DEFAULT_CODE_MESSAGES: Record<string, string> = {
   registration_failed: '注册失败，请确认邮箱验证码、邀请码和密码均有效。',
   rate_limited: '操作过于频繁，请稍后再试。',
   quota_exceeded: '今日 AI 额度已达上限，收藏仍可正常保存。',
+  extension_account_changed: '当前登录账号已变更，请在扩展中重新发起配对。',
+  extension_grant_conflict: '该扩展配对请求已失效或已被使用，请在扩展中重新发起连接。',
+  extension_grant_pending: '扩展授权尚未确认，请先在网页端确认授权后再完成连接。',
+  extension_grant_invalid: '扩展配对已过期、已消费或被撤销，请重新发起连接。',
+  extension_session_expired: '扩展授权已到期或被撤销，请重新连接 Spark。',
   service_unavailable: '服务暂时不可用，已保留你的输入，请稍后重试。',
   network_error: '无法连接到后端服务，请确认网络或本地服务状态后重试。',
 };

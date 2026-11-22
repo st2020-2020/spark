@@ -120,10 +120,10 @@ func (s *Server) updateProject(c *gin.Context) (any, error) {
 	}
 	return p, nil
 }
-func (s *Server) listProjects(c *gin.Context) (any, error) {
+func (s *Server) queryProjectPage(c *gin.Context, state, projection string) (pgx.Rows, int, error) {
 	limit, cur, err := s.pagination(c)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	uid := current(c).User.ID
 	var t any
@@ -132,7 +132,12 @@ func (s *Server) listProjects(c *gin.Context) (any, error) {
 		t = cur.Time
 		id = cur.ID
 	}
-	rows, err := s.Pool.Query(c.Request.Context(), projectSelect+`WHERE p.user_id=$1 AND ($2::text='' OR p.state=$2) AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) AND ($6::text='' OR strpos(lower(p.name),lower($6))>0) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, uid, c.Query("state"), t, id, limit+1, strings.TrimSpace(c.Query("q")))
+	rows, err := s.Pool.Query(c.Request.Context(), projection+`WHERE p.user_id=$1 AND ($2::text='' OR p.state=$2) AND ($3::timestamptz IS NULL OR (p.created_at,p.id)<($3,$4::uuid)) AND ($6::text='' OR strpos(lower(p.name),lower($6))>0) ORDER BY p.created_at DESC,p.id DESC LIMIT $5`, uid, state, t, id, limit+1, strings.TrimSpace(c.Query("q")))
+	return rows, limit, err
+}
+
+func (s *Server) listProjects(c *gin.Context) (any, error) {
+	rows, limit, err := s.queryProjectPage(c, c.Query("state"), projectSelect)
 	if err != nil {
 		return nil, err
 	}

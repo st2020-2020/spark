@@ -1042,6 +1042,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/extension/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 确认浏览器扩展配对 */
+        post: operations["approveExtensionGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extension/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 一次性兑换浏览器扩展凭据 */
+        post: operations["exchangeExtensionGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extension/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取当前扩展绑定信息 */
+        get: operations["getExtensionSession"];
+        put?: never;
+        post?: never;
+        /** 撤销当前扩展绑定 */
+        delete: operations["revokeExtensionSession"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extension/projects": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 搜索可选的进行中项目 */
+        get: operations["listExtensionProjects"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/extension/collections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用网页标题、网址和选文收藏 */
+        post: operations["createExtensionCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1784,6 +1870,61 @@ export interface components {
             base_version: number;
             /** @description 空白删除正文段。 */
             text: string;
+        };
+        ExtensionGrantCreate: {
+            /** @description UTF-8 verifier 的 SHA-256 摘要，经无填充 base64url 编码。 */
+            challenge: string;
+            /** @enum {string} */
+            browser: "chrome" | "edge";
+            /**
+             * Format: uuid
+             * @description 批准时 Web 页面向用户展示的当前账号 ID。仅作前置条件。
+             */
+            expected_account_id: string;
+        };
+        ExtensionTokenExchange: {
+            /** @description 扩展生成的 32 字节随机数，经无填充 base64url 编码。仅在请求正文发送。 */
+            verifier: string;
+        };
+        ExtensionSession: {
+            /** Format: uuid */
+            account_id: string;
+            account_label: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        ExtensionTokenResult: {
+            /** @description 仅此响应返回的扩展 Bearer 凭据。 */
+            token: string;
+            /** Format: uuid */
+            account_id: string;
+            account_label: string;
+            /** Format: date-time */
+            expires_at: string;
+        };
+        ExtensionProjectOption: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+        };
+        ExtensionProjectPage: {
+            items: components["schemas"]["ExtensionProjectOption"][];
+            next_cursor?: string;
+        };
+        ExtensionCollectionCreate: {
+            /** Format: uuid */
+            id: string;
+            /** @description 当前页面的 HTTP(S) 来源网址，不含凭据。 */
+            original_url: string;
+            manual_title?: string;
+            /** @description 实际选取的纯文本，与用途合计最多 50,000 个字符。 */
+            selected_text?: string;
+            intent?: string;
+            project_ids: string[];
+        };
+        ExtensionCollectionReceipt: {
+            /** Format: uuid */
+            id: string;
         };
     };
     responses: never;
@@ -4217,6 +4358,315 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FailureList"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    approveExtensionGrant: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionGrantCreate"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description extension_account_changed 或 extension_grant_conflict：重新连接扩展并确认账号。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description validation_failed：配对字段无效。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    exchangeExtensionGrant: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionTokenExchange"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionTokenResult"];
+                };
+            };
+            /** @description extension_grant_invalid：配对已过期、已消费或被撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description extension_grant_pending：尚未收到 Web 确认。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description validation_failed：兑换证明格式无效。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    getExtensionSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionSession"];
+                };
+            };
+            /** @description extension_session_expired：扩展未连接、已到期或已撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    revokeExtensionSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description extension_session_expired：扩展未连接、已到期或已撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listExtensionProjects: {
+        parameters: {
+            query?: {
+                q?: string;
+                limit?: number;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionProjectPage"];
+                };
+            };
+            /** @description invalid_request 或 invalid_cursor：分页参数无效。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description extension_session_expired：扩展未连接、已到期或已撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    createExtensionCollection: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExtensionCollectionCreate"];
+            };
+        };
+        responses: {
+            /** @description 操作成功 */
+            201: {
+                headers: {
+                    /** @description 原键原体命中已成功的保存时返回 true。 */
+                    "Idempotent-Replayed"?: "true";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExtensionCollectionReceipt"];
+                };
+            };
+            /** @description extension_session_expired：扩展未连接、已到期或已撤销。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description project_unavailable：项目不存在、无权限或不再进行中。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description operation_in_progress、idempotency_mismatch 或 duplicate_resource：请按错误码处理幂等或核对原收藏。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description validation_failed：字段、字符数或网址不符合约定。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

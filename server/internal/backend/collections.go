@@ -156,88 +156,102 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	uid, id, ctx := current(c).User.ID, req.Id.String(), c.Request.Context()
-	checkTombstone := func(tx pgx.Tx) error {
-		_, err := store.New(tx).GetCollectionDeletion(ctx, store.GetCollectionDeletionParams{UserID: idPG(uid), CollectionID: idPG(id)})
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		return problem(409, "duplicate_resource", "收藏已永久删除。")
-	}
 	return s.idempotentWithReplay(c, req, 201, func(tx pgx.Tx) (any, error) {
-		if err := checkTombstone(tx); err != nil {
+		if err := checkCollectionTombstone(ctx, tx, uid, id); err != nil {
 			return nil, err
 		}
-		if len(req.UploadIds) > 0 && s.Assets == nil {
-			return nil, uploadsUnavailable
-		}
-		for _, pid := range req.ProjectIds {
-			var exists bool
-			if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2)`, uid, pid.String()).Scan(&exists); err != nil {
-				return nil, err
-			}
-			if !exists {
-				return nil, notFound
-			}
-		}
-		if err := checkOwnedTags(ctx, tx, uid, req.TagIds); err != nil {
-			return nil, err
-		}
-		// The account change lock serializes source validation with trash and purge.
-		inserted, err := tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded,thread_id,source_collection_id)
-			SELECT $1,$2,$3,$4,$5,$6,$7,$8,coalesce(source.thread_id,gen_random_uuid()),source.id
-			FROM (VALUES ($9::uuid)) requested(id)
-			LEFT JOIN collections source ON (source.user_id,source.id)=($2,requested.id)
-			 AND source.deleted_at IS NULL AND source.purge_requested_at IS NULL
-			WHERE requested.id IS NULL OR source.id IS NOT NULL`,
-			id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded), req.SourceCollectionId)
-		if err != nil {
-			return nil, err
-		}
-		if inserted.RowsAffected() == 0 {
-			return nil, notFound
-		}
-		for _, pid := range req.ProjectIds {
-			if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision) VALUES($1,$2,$3,'manual')`, uid, id, pid.String()); err != nil {
-				return nil, err
-			}
-		}
-		if len(req.TagIds) > 0 {
-			if _, err = tx.Exec(ctx, `INSERT INTO collection_tags(user_id,collection_id,tag_id,decision)
-				SELECT $1,$2,id,'manual' FROM unnest($3::uuid[]) AS tag(id)`, uid, id, req.TagIds); err != nil {
-				return nil, err
-			}
-		}
-		attachments, err := attachUploads(ctx, store.New(tx), uid, id, 0, req.UploadIds)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.enqueueImageAnalysis(ctx, tx, uid, id, attachments); err != nil {
-			return nil, err
-		}
-		if err = snapshot(ctx, tx, uid, id); err != nil {
-			return nil, err
-		}
-		if err = record(ctx, tx, uid, "collection", id, 1); err != nil {
-			return nil, err
-		}
-		if _, _, err = s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
-			return nil, err
-		}
-		if _, err = s.enqueueURLExtraction(ctx, tx, uid, id, false); err != nil {
+		if err := s.persistCollection(ctx, tx, uid, req, plain, originalURL, false); err != nil {
 			return nil, err
 		}
 		row, err := s.loadCollection(ctx, tx, uid, id)
 		return row.Collection, err
 	}, func(tx pgx.Tx, response json.RawMessage) (any, error) {
-		if err := checkTombstone(tx); err != nil {
+		if err := checkCollectionTombstone(ctx, tx, uid, id); err != nil {
 			return nil, err
 		}
 		return response, nil
 	})
 }
+
+func checkCollectionTombstone(ctx context.Context, tx pgx.Tx, uid, id string) error {
+	_, err := store.New(tx).GetCollectionDeletion(ctx, store.GetCollectionDeletionParams{UserID: idPG(uid), CollectionID: idPG(id)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return problem(409, "duplicate_resource", "收藏已永久删除。")
+}
+
+// persistCollection runs under the account change lock inside the create transaction.
+func (s *Server) persistCollection(ctx context.Context, tx pgx.Tx, uid string, req contract.CollectionCreate, plain, originalURL string, activeProjectsOnly bool) error {
+	id := req.Id.String()
+	if len(req.UploadIds) > 0 && s.Assets == nil {
+		return uploadsUnavailable
+	}
+	for _, pid := range req.ProjectIds {
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2 AND (NOT $3::boolean OR state='active'))`, uid, pid.String(), activeProjectsOnly).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			if activeProjectsOnly {
+				return problem(404, "project_unavailable", "所选项目已不可用，请重新选择。")
+			}
+			return notFound
+		}
+	}
+	if err := checkOwnedTags(ctx, tx, uid, req.TagIds); err != nil {
+		return err
+	}
+	// The account change lock serializes source validation with trash and purge.
+	inserted, err := tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded,thread_id,source_collection_id)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,coalesce(source.thread_id,gen_random_uuid()),source.id
+		FROM (VALUES ($9::uuid)) requested(id)
+		LEFT JOIN collections source ON (source.user_id,source.id)=($2,requested.id)
+		 AND source.deleted_at IS NULL AND source.purge_requested_at IS NULL
+		WHERE requested.id IS NULL OR source.id IS NOT NULL`,
+		id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded), req.SourceCollectionId)
+	if err != nil {
+		return err
+	}
+	if inserted.RowsAffected() == 0 {
+		return notFound
+	}
+	for _, pid := range req.ProjectIds {
+		if _, err := tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision) VALUES($1,$2,$3,'manual')`, uid, id, pid.String()); err != nil {
+			return err
+		}
+	}
+	if len(req.TagIds) > 0 {
+		if _, err := tx.Exec(ctx, `INSERT INTO collection_tags(user_id,collection_id,tag_id,decision)
+			SELECT $1,$2,id,'manual' FROM unnest($3::uuid[]) AS tag(id)`, uid, id, req.TagIds); err != nil {
+			return err
+		}
+	}
+	attachments, err := attachUploads(ctx, store.New(tx), uid, id, 0, req.UploadIds)
+	if err != nil {
+		return err
+	}
+	if err := s.enqueueImageAnalysis(ctx, tx, uid, id, attachments); err != nil {
+		return err
+	}
+	if err := snapshot(ctx, tx, uid, id); err != nil {
+		return err
+	}
+	if err := record(ctx, tx, uid, "collection", id, 1); err != nil {
+		return err
+	}
+	if _, _, err := s.Organizer.Enqueue(ctx, tx, uid, id, false); err != nil {
+		return err
+	}
+	if _, err := s.enqueueURLExtraction(ctx, tx, uid, id, false); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Server) updateCollection(c *gin.Context) (any, error) {
 	req, err := bind[contract.CollectionUpdate](s, c)
 	if err != nil {

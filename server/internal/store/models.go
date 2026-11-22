@@ -192,6 +192,15 @@ type EmailChallenge struct {
 	CreatedAt       pgtype.Timestamptz
 }
 
+type ExtensionGrant struct {
+	Challenge    []byte
+	UserID       pgtype.UUID
+	WebSessionID pgtype.UUID
+	Browser      string
+	ExpiresAt    pgtype.Timestamptz
+	ConsumedAt   pgtype.Timestamptz
+}
+
 type Extraction struct {
 	ID                           pgtype.UUID
 	UserID                       pgtype.UUID
@@ -372,6 +381,7 @@ type Session struct {
 	RevokedAt   pgtype.Timestamptz
 	DeviceLabel string
 	CreatedAt   pgtype.Timestamptz
+	Kind        string
 }
 
 type Tag struct {

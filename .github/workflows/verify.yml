@@ -54,6 +54,12 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Test and build the browser extension
+        working-directory: apps/extension
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm run build
 
   backend:
     name: API and PostgreSQL

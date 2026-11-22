@@ -37,6 +37,20 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 
 初始管理员由受控的部署初始化命令创建，使用与普通用户相同的认证机制并附加角色校验。管理员角色变更通过运维流程，普通注册固定为 user。
 
+## 浏览器扩展
+
+| 入口 | 鉴权与响应 |
+| --- | --- |
+| `POST /extension/grants` | Web 登录、同源和 CSRF。提交 `challenge`、`browser`（`chrome` 或 `edge`）、确认页展示账号的 `expected_account_id`。成功返回 204。同一批准会话的重复确认沿用原期限。账号变化、授权已消费或过期返回 409，须重新发起。 |
+| `POST /extension/token` | JSON 正文提交 `verifier`。成功返回 `token`、`account_id`、`account_label` 和 `expires_at`，有效期 7 天。尚未确认返回 `404 extension_grant_pending`，已过期、已消费或批准会话失效返回 `401 extension_grant_invalid`。 |
+| `GET /extension/session`、`DELETE /extension/session` | 仅扩展 Bearer。查询返回本人的 `account_id`、`account_label`（登录邮箱）和 `expires_at`。断开当前设备返回 204。Web 设备列表继续使用 `GET /sessions`，撤销使用 `DELETE /sessions/{id}`。 |
+| `GET /extension/projects` | 仅扩展 Bearer。按名称字面匹配 `q`，支持 `limit` 和 `cursor`。只返回本账号进行中项目的 `items: [{id,name}]` 与可选的 `next_cursor`。 |
+| `POST /extension/collections` | 仅扩展 Bearer 和 `Idempotency-Key`。请求字段为客户端 UUID `id`、HTTP(S) `original_url`、可选的 `manual_title`、`selected_text`、`intent`，以及 `project_ids` 数组。成功返回 `201 {id}`。不存在、他人或非进行中项目统一返回 `404 project_unavailable`。 |
+
+`verifier` 为扩展生成的 32 个随机字节，经无填充 base64url 编码。`challenge` 是该编码字符串 UTF-8 字节的 SHA-256 摘要，再用无填充 base64url 编码。Web 仅获得摘要，在同源页面显示当前账号、浏览器和配对码后等待主动确认。批准后可在 5 分钟内兑换一次。令牌只在成功兑换的响应中返回。两种凭据分别由不同路由验证，扩展凭据失效时返回 `401 extension_session_expired`。Web 登录 Cookie 和 CSRF 流程照常。兑换证明和访问令牌均通过 HTTPS 发送，分别在请求体和 Authorization 头内。
+
+扩展按站点和账号保存提交快照。同账号用原 UUID、原请求和原幂等键重试，成功回放返回同一收藏 ID 和 `Idempotent-Replayed: true`。状态已确认失败时可调整输入。超出 7 天窗口或无法确认结果时，按原 ID 到 Web 核对。同键异体返回 409，永久删除墓碑阻止回放和重建。换号后原账号的待提交快照继续留在原账号。服务端拒绝未知字段，选文和用途合计最多 50,000 字，标题最多 200 字，网址最多 4,096 字。
+
 ## 幂等与版本
 
 OpenAPI 中必填的 Idempotency-Key 使用 16 至 128 字符的随机键。项目决定 PATCH 的键为可选，整理模式会提供。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。

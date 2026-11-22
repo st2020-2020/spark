@@ -8,6 +8,8 @@ import type {
   CollectionCreate,
   CollectionSummary,
   Extraction,
+  ExtensionGrantCreate,
+  ExtensionTokenResult,
   ImageAnalysisPreferences,
   InviteBatch,
   InviteCode,
@@ -134,6 +136,7 @@ export interface TestAdapter extends SparkApi {
   emitMockOrganizationEvent(event: OrganizationEvent): void;
   emitMockOrganizationError(closed?: boolean): void;
   getOrganizationSubscriberCount(): number;
+  redeemExtensionGrantForTest(challenge: string): Promise<ExtensionTokenResult>;
 }
 
 const DEFAULT_ADMIN_ID = '00000000-0000-4000-8000-000000000001';
@@ -193,6 +196,10 @@ export function createTestAdapter(): TestAdapter {
   let mockPurgeBehavior: MockPurgeBehavior = {};
   let mockImageAnalysisBehavior: MockImageAnalysisBehavior = {};
   const imageRecoveryByBase = new Map<string, string>();
+  const extensionGrants = new Map<
+    string,
+    { user_id: string; browser: 'chrome' | 'edge'; expiresAtMs: number; consumed: boolean }
+  >();
   const orgSubscribers = new Set<{ userId: string; handlers: OrganizationEventsHandlers }>();
   const pendingOrgTimers = new Map<string, number>();
 
@@ -277,6 +284,7 @@ export function createTestAdapter(): TestAdapter {
     purges = new Map();
     idempotencyStore = new Map();
     imageRecoveryByBase.clear();
+    extensionGrants.clear();
     projectUndoStore = new Map();
     mockOrganizationMode = 'succeed';
     mockAiTrialEligible = true;
@@ -895,6 +903,40 @@ export function createTestAdapter(): TestAdapter {
       return orgSubscribers.size;
     },
 
+    async redeemExtensionGrantForTest(challenge: string) {
+      const grant = extensionGrants.get(challenge);
+      if (!grant) {
+        throw new ApiError({ status: 404, code: 'extension_grant_pending', message: '尚未在网页端确认连接' });
+      }
+      if (grant.consumed || Date.now() > grant.expiresAtMs) {
+        throw new ApiError({ status: 401, code: 'extension_grant_invalid', message: '配对请求已失效或过期' });
+      }
+      const user = users.find((u) => u.id === grant.user_id && u.status === 'active');
+      if (!user) {
+        throw new ApiError({ status: 401, code: 'extension_grant_invalid', message: '账号不可用' });
+      }
+      grant.consumed = true;
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const sessionId = generateUuid();
+      sessions.unshift({
+        id: sessionId,
+        user_id: user.id,
+        device_label: grant.browser === 'edge' ? 'Spark 浏览器扩展 (Edge)' : 'Spark 浏览器扩展 (Chrome)',
+        created_at: now.toISOString(),
+        expires_at: expiresAt,
+        current: false,
+        csrf_token: generateUuid(),
+        revoked: false,
+      });
+      return {
+        token: `ext_test_${generateUuid().replace(/-/g, '')}`,
+        account_id: user.id,
+        account_label: user.email,
+        expires_at: expiresAt,
+      };
+    },
+
     subscribeOrganizationEvents(handlers) {
       const sess = currentSessionId ? sessions.find((s) => s.id === currentSessionId && !s.revoked) : undefined;
       if (!sess) {
@@ -1042,6 +1084,9 @@ export function createTestAdapter(): TestAdapter {
       user.password = body.new_password;
       for (const s of sessions) {
         if (s.user_id === user.id) s.revoked = true;
+      }
+      for (const g of extensionGrants.values()) {
+        if (g.user_id === user.id) g.consumed = true;
       }
       currentSessionId = null;
       clientCsrfToken = null;
@@ -1231,6 +1276,38 @@ export function createTestAdapter(): TestAdapter {
         currentSessionId = null;
         clientCsrfToken = null;
       }
+    },
+
+    async approveExtensionGrant(body: ExtensionGrantCreate) {
+      const user = requireUser(true);
+      const challenge = body.challenge.trim();
+      if (!/^[A-Za-z0-9_-]{43}$/.test(challenge) || (body.browser !== 'chrome' && body.browser !== 'edge')) {
+        throw new ApiError({ status: 422, code: 'validation_failed', message: '配对参数无效' });
+      }
+      if (body.expected_account_id !== user.id) {
+        throw new ApiError({
+          status: 409,
+          code: 'extension_account_changed',
+          message: '当前登录账号已变更，请在扩展中重新发起配对',
+        });
+      }
+      const existing = extensionGrants.get(challenge);
+      if (existing) {
+        if (existing.user_id !== user.id || existing.consumed || Date.now() > existing.expiresAtMs) {
+          throw new ApiError({
+            status: 409,
+            code: 'extension_grant_conflict',
+            message: '该配对请求已失效或已被使用，请重新发起连接',
+          });
+        }
+        return;
+      }
+      extensionGrants.set(challenge, {
+        user_id: user.id,
+        browser: body.browser,
+        expiresAtMs: Date.now() + 5 * 60_000,
+        consumed: false,
+      });
     },
 
     async createProject(body, idempotencyKey) {

@@ -13,6 +13,8 @@ import { ToastProvider } from './context/ToastContext';
 import { AdminPage } from './pages/AdminPage';
 import { CollectionDetailPage } from './pages/CollectionDetailPage';
 import { CollectionsPage } from './pages/CollectionsPage';
+import { ExtensionPairPage } from './pages/ExtensionPairPage';
+import { resolveSafeRedirectPath } from './lib/extensionPair';
 import { InboxPage } from './pages/InboxPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectDetailPage } from './pages/ProjectDetailPage';
@@ -54,6 +56,7 @@ function AuthenticatedShell() {
 
 function PublicOnly({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuth();
+  const location = useLocation();
   if (isLoading) {
     return (
       <div className="sp-auth-page">
@@ -64,7 +67,11 @@ function PublicOnly({ children }: { children: ReactNode }) {
     );
   }
   if (user) {
-    return <Navigate to="/inbox" replace />;
+    const target = resolveSafeRedirectPath(
+      (location.state as { from?: unknown } | null)?.from,
+      '/inbox',
+    );
+    return <Navigate to={target} replace />;
   }
   return <>{children}</>;
 }
@@ -101,6 +108,7 @@ export function AppRoutes() {
           </PublicOnly>
         }
       />
+      <Route path="/extension/pair" element={<ExtensionPairPage />} />
 
       <Route element={<AuthenticatedShell />}>
         <Route path="/inbox" element={<InboxPage />} />

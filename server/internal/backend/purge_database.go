@@ -76,7 +76,7 @@ func purgeDatabase(ctx context.Context, tx pgx.Tx, row store.DeletionLedger) err
 			DELETE FROM attachments WHERE user_id=$1 AND collection_id=$2 RETURNING user_id,upload_id
 		) DELETE FROM uploads u USING removed a WHERE (u.user_id,u.id)=(a.user_id,a.upload_id)`},
 		{"cached collection responses", `DELETE FROM idempotency_keys WHERE user_id=$1 AND (
-			(operation='POST /api/v1/collections' AND response_json->>'id'=$2::uuid::text)
+			(operation IN ('POST /api/v1/collections','POST /api/v1/extension/collections') AND response_json->>'id'=$2::uuid::text)
 			OR lower(operation) = 'triage_undo_receipt:' || $2::uuid::text
 			OR (lower(operation) LIKE '% /api/v1/collections/' || $2::uuid::text || '/%'
 			    AND lower(operation) <> 'post /api/v1/collections/' || $2::uuid::text || '/purge')
