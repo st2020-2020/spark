@@ -114,14 +114,19 @@ func (s *Server) Router() *gin.Engine {
 	auth.POST("/login", s.handle(s.login))
 	auth.POST("/password-reset", s.handle(s.resetPassword))
 	api.POST("/extension/token", s.handle(s.exchangeExtensionGrant))
+	api.POST("/desktop/token", s.handle(s.exchangeDesktopGrant))
 	extension := api.Group("/extension")
 	extension.Use(s.authenticateExtension)
-	extension.GET("/session", s.handle(s.getExtensionSession))
+	extension.GET("/session", s.handle(s.getDeviceSession))
 	extension.GET("/projects", s.handle(s.listExtensionProjects))
 	extension.POST("/collections", s.handle(s.createExtensionCollection))
-	extension.DELETE("/session", s.handle(s.revokeExtensionSession))
+	extension.DELETE("/session", s.handle(s.revokeDeviceSession))
+	desktop := api.Group("/desktop")
+	desktop.Use(s.authenticateDesktop)
+	desktop.GET("/session", s.handle(s.getDeviceSession))
+	desktop.DELETE("/session", s.handle(s.revokeDeviceSession))
 	secured := api.Group("")
-	secured.Use(s.authenticate, s.origin, s.csrf)
+	secured.Use(s.authenticateBusiness, s.cookieOrigin, s.cookieCSRF)
 	secured.PATCH("/me/preferences", s.handle(s.updatePreferences))
 	secured.GET("/me/activity", s.handle(s.getActivity))
 	secured.GET("/me/resurface", s.handle(s.getResurface))
@@ -135,6 +140,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.GET("/auth/session", s.handle(s.currentSession))
 	secured.POST("/auth/logout", s.handle(s.logout))
 	secured.POST("/extension/grants", s.handle(s.approveExtensionGrant))
+	secured.POST("/desktop/grants", s.handle(s.approveDesktopGrant))
 	secured.GET("/sessions", s.handle(s.listSessions))
 	secured.DELETE("/sessions/:id", s.handle(s.revokeSession))
 	secured.POST("/tags", s.handle(s.createTag))
@@ -384,6 +390,10 @@ func (s *Server) userTx(c *gin.Context) (pgx.Tx, error) {
 		return nil, err
 	}
 	if _, err = store.New(tx).LockUserChanges(c.Request.Context(), idPG(current(c).User.ID)); err != nil {
+		_ = tx.Rollback(c.Request.Context())
+		return nil, err
+	}
+	if err = lockDesktopWriteSession(c, tx); err != nil {
 		_ = tx.Rollback(c.Request.Context())
 		return nil, err
 	}

@@ -25,6 +25,7 @@ import (
 
 type signedIn struct {
 	ID, Token, CSRF string
+	Kind            string
 	Expires         time.Time
 	User            userView
 }
@@ -230,19 +231,19 @@ func (s *Server) logout(c *gin.Context) (any, error) {
 	return nil, nil
 }
 func (s *Server) listSessions(c *gin.Context) (any, error) {
-	rows, err := s.Pool.Query(c.Request.Context(), `SELECT id,device_label,created_at,expires_at FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 100`, current(c).User.ID)
+	rows, err := s.Pool.Query(c.Request.Context(), `SELECT id,device_label,created_at,expires_at,kind FROM sessions WHERE user_id=$1 AND revoked_at IS NULL AND expires_at>now() ORDER BY created_at DESC LIMIT 100`, current(c).User.ID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []any{}
 	for rows.Next() {
-		var id, label string
+		var id, label, kind string
 		var created, expires time.Time
-		if err = rows.Scan(&id, &label, &created, &expires); err != nil {
+		if err = rows.Scan(&id, &label, &created, &expires, &kind); err != nil {
 			return nil, err
 		}
-		out = append(out, gin.H{"id": id, "device_label": label, "created_at": created, "expires_at": expires, "current": id == current(c).ID})
+		out = append(out, gin.H{"id": id, "device_label": label, "kind": kind, "created_at": created, "expires_at": expires, "current": id == current(c).ID})
 	}
 	return gin.H{"items": out}, rows.Err()
 }

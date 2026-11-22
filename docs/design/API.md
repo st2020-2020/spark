@@ -63,6 +63,28 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 
 已结算的网页归类结果可以用已有具体标签及当前可复核引文补归类。`GET /collections/{id}` 和 `GET /collections/{id}/organization` 只读，满足条件时返回 `Organization.project_backfill_available: true`。详情可在用户打开后发出独立的 `POST /collections/{id}/organization/web-archive/apply`，使用 Web 会话、CSRF、幂等键和 `{base_decision_version}`。同步返回更新后的 Collection。成功时返回实际 `auto` 项目及 `web_archive_status` 的 `linked` 或 `created`，并省略可补归类标记。应用零入队、零模型调用。不同键争用旧版本返回 `409 decision_conflict`，材料、已结算结果或人工决定已发生变化返回 `409 project_backfill_unavailable`，客户端重读详情。同键回放在当前权限下返回当前收藏。
 
+## macOS 桌面设备会话
+
+桌面生成 32 字节随机数作为无填充 base64url 的 `verifier`。配对摘要为 UTF-8 字符串 `spark-desktop-pair-v1:` 后接 `verifier` 的 SHA-256，再做无填充 base64url 编码。系统浏览器只收到 `/desktop/pair#challenge=...`。两端显示摘要的前八位供确认，桌面与浏览器扩展各自使用不同的证明域和会话类型。
+
+| 入口 | 鉴权与响应 |
+| --- | --- |
+| `POST /desktop/grants` | Web Cookie、同源与 CSRF。在展示账号后提交 `{challenge,expected_account_id}`，成功 204。批准 5 分钟内有效，同一 Web 会话的重复批准不延长有效期。账号变化和已用或失效的批准分别返回 `409 desktop_account_changed` 和 `409 desktop_grant_conflict`。 |
+| `POST /desktop/token` | 请求体为 `{verifier}`，使用一次性证明。200 返回 `{token,account_id,account_label,expires_at}`。待批准返回 `404 desktop_grant_pending`，已用、过期或批准会话撤销返回 `401 desktop_grant_invalid`。 |
+| `GET /desktop/session`、`DELETE /desktop/session` | 桌面 Bearer。查询仅回本人账号 ID、账号标签和到期时间，删除返回 204。令牌绝对有效期 30 天，查询和使用均不续期，过期后重新配对。 |
+| `GET /sessions`、`DELETE /sessions/{id}` | Web 继续用原接口查看和撤销单个设备。会话列表通过 `kind` 区别 `web`、`extension` 与 `desktop`。 |
+
+桌面 Bearer 可使用下列方法与原业务路径，保留同一请求结构、响应、归属检查和幂等作用域。
+
+| 方法 | 路径 |
+| --- | --- |
+| POST、GET | `/collections` |
+| GET | `/collections/{id}`、`/projects`、`/tags`、`/search` |
+| POST | `/uploads`、`/uploads/{id}/complete` |
+| GET | `/uploads/{id}`、`/attachments/{id}/download`、`/attachments/{id}/thumbnail` |
+
+成功认证的桌面请求按上表通过，Web 请求继续校验 Cookie、来源和 CSRF。混用 Cookie 与 Authorization 返回 `400 mixed_credentials`，无效或已撤销的桌面令牌返回 `401 desktop_session_expired`。桌面令牌访问其他私有业务操作返回 `403 desktop_scope_forbidden`。桌面兑换仅使用一次性证明，附带单独的 Cookie 或 Authorization 返回 `400 unexpected_credentials`。签名对象 URL 承载独立的短时对象授权，桌面向对象地址发送字节时仅附上传响应规定的头。
+
 ## 幂等与版本
 
 OpenAPI 中必填的 Idempotency-Key 使用 16 至 128 字符的随机键。项目决定 PATCH 的键为可选，整理模式会提供。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。

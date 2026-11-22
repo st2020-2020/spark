@@ -92,7 +92,7 @@ func TestExtensionGrantExpiryAndRevocation(t *testing.T) {
 	web := signedExportAccount(t, app, base, "extension-expiration")
 	ext := newClient(t, app, base)
 	verifier := approveTestExtension(t, web)
-	if _, err := app.Pool.Exec(t.Context(), `UPDATE extension_grants SET expires_at=now()-interval '1 second' WHERE challenge=$1`, digest(verifier)); err != nil {
+	if _, err := app.Pool.Exec(t.Context(), `UPDATE device_grants SET expires_at=now()-interval '1 second' WHERE kind='extension' AND challenge=$1`, digest(verifier)); err != nil {
 		t.Fatal(err)
 	}
 	extensionError(t, exchangeTestExtension(ext, verifier), 401, "extension_grant_invalid")

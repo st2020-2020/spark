@@ -92,7 +92,7 @@ func (s *Server) createExtensionCollection(c *gin.Context) (any, error) {
 		return nil, err
 	}
 	authorize := func(tx pgx.Tx) error {
-		if _, err := lockExtensionPrincipal(ctx, tx, uid, session.ID, extensionSessionKind); err != nil {
+		if _, err := lockDevicePrincipal(ctx, tx, uid, session.ID, extensionSessionKind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return extensionSessionExpired
 			}

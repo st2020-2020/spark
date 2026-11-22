@@ -438,3 +438,46 @@ func TestUpgradeV17BackfillsOnlyVerifiedExtensionReceipts(t *testing.T) {
 		t.Fatalf("source migration changed historical data, mislabeled an ordinary note, or queued organization: %v", err)
 	}
 }
+
+func TestUpgradeV18PreservesWebAndExtensionDeviceSessions(t *testing.T) {
+	ctx, pool := t.Context(), migrationTestPool(t)
+	for _, name := range migrationNames[:18] {
+		sql, err := migrations.ReadFile("migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execTestSQL(t, pool, string(sql))
+	}
+	execTestSQL(t, pool, `CREATE TABLE schema_migrations(version int PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now());
+		INSERT INTO schema_migrations(version) SELECT generate_series(1,18)`)
+	owner, web, extension := uuid.New(), uuid.New(), uuid.New()
+	webDigest, extDigest := []byte("synthetic-web-digest"), []byte("synthetic-extension-digest")
+	proof := make([]byte, 32)
+	execTestSQL(t, pool, `INSERT INTO users(id,email_normalized,password_hash)
+		VALUES($1,'desktop-upgrade@example.test','synthetic')`, owner)
+	execTestSQL(t, pool, `INSERT INTO sessions(id,user_id,token_digest,csrf_digest,expires_at,device_label,kind)
+		VALUES($1,$3,$4,decode('00','hex'),'2099-01-01 UTC','Web','web'),
+		      ($2,$3,$5,NULL,'2099-01-02 UTC','Edge','extension')`, web, extension, owner, webDigest, extDigest)
+	execTestSQL(t, pool, `INSERT INTO extension_grants(challenge,user_id,web_session_id,browser,expires_at)
+		VALUES($1,$2,$3,'edge','2099-01-01 UTC')`, proof, owner, web)
+	for range 2 {
+		if err := Migrate(ctx, pool); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Ready(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if legacy, err := store.New(pool).GetSession(ctx, webDigest); err != nil || legacy.ID.Bytes != web {
+		t.Fatalf("legacy Web session became unusable: %v", err)
+	}
+	var preserves bool
+	err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM sessions WHERE (id,user_id,token_digest)=($1,$2,$3)
+		AND kind='extension' AND csrf_digest IS NULL AND expires_at='2099-01-02 UTC')
+		AND EXISTS(SELECT 1 FROM device_grants WHERE (user_id,web_session_id,challenge)=($2,$4,$5)
+		AND kind='extension' AND device='edge' AND consumed_at IS NULL AND expires_at='2099-01-01 UTC')`,
+		extension, owner, extDigest, web, proof).Scan(&preserves)
+	if err != nil || !preserves {
+		t.Fatalf("upgrade lost a legacy extension credential or grant: %v", err)
+	}
+}
