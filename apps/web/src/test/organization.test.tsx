@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
+import { QueryClient } from '@tanstack/react-query';
 import { AppProviders, AppRoutes } from '../App';
 import type { Organization } from '../api/types';
 import { classifyOrganizationDisplay, evidenceSourceLabel } from '../lib/organization';
@@ -1261,5 +1262,204 @@ describe('organization display helpers', () => {
     expect(within(bRegion).getByText('已归入')).toBeInTheDocument();
     expect(within(bRegion).queryByText(/收藏 A 后台超时/)).not.toBeInTheDocument();
     expect(within(bRegion).queryByRole('button', { name: '重试归类' })).not.toBeInTheDocument();
+  });
+
+  it('drops unmounted/signed-out late apply writes without repopulating cleared cache, and preserves newer resource/content versions at equal decision_version', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+
+    const seed = await adapter.createCollection(
+      {
+        id: 'ffffffff-1111-4111-8111-111111111111',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: '',
+        manual_title: '未完成已退出样本',
+        original_url: 'https://example.org/late-unmount',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-late-unmount-1',
+    );
+    const readSeed = await adapter.setReadState(seed.id, { read: true });
+    const pendingBackfill = {
+      ...readSeed,
+      ai_excluded: false,
+      decision_version: 2,
+      content_version: 1,
+      resource_version: 2,
+      tags: [{ tag_id: 'tag-late', name: '迟到回归', path: '迟到回归', decision: 'auto' as const }],
+      organization: {
+        ...readSeed.organization,
+        run_id: 'ffffffff-2222-4222-8222-222222222222',
+        status: 'succeeded' as const,
+        web_archive_status: 'no_match' as const,
+        project_backfill_available: true,
+      },
+    };
+    const lateReceipt = {
+      ...pendingBackfill,
+      decision_version: 3,
+      content_version: 1,
+      resource_version: 3,
+      projects: [
+        {
+          project_id: 'ffffffff-3333-4333-8333-333333333333',
+          name: '迟到回归',
+          decision: 'auto' as const,
+        },
+      ],
+      organization: {
+        ...pendingBackfill.organization,
+        web_archive_status: 'created' as const,
+        project_backfill_available: undefined,
+      },
+    };
+
+    const origGet = adapter.getCollection.bind(adapter);
+    const getCollectionSpy = vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === pendingBackfill.id) return structuredClone(pendingBackfill);
+      return origGet(id, signal);
+    });
+
+    let resolveLate!: (col: typeof lateReceipt) => void;
+    let rejectConflict!: (err: unknown) => void;
+    const applySpy = vi.spyOn(adapter, 'applyWebArchiveProject').mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveLate = res;
+        }),
+    );
+
+    const view1 = renderApp([`/collections/${pendingBackfill.id}`], adapter);
+    await screen.findByRole('heading', { name: '未完成已退出样本' });
+    expect(applySpy).toHaveBeenCalledTimes(1);
+
+    // Sign out from AppShell (clears session & query cache) BEFORE the in-flight apply resolves
+    await user.click(screen.getByRole('button', { name: '账号菜单' }));
+    await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
+    await screen.findByRole('heading', { name: '登录你的空间' });
+    const sessionCallsBeforeResolve = vi.spyOn(adapter, 'currentSession');
+    sessionCallsBeforeResolve.mockClear();
+    getCollectionSpy.mockClear();
+    const setQueryDataSpy = vi.spyOn(QueryClient.prototype, 'setQueryData');
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+
+    await act(async () => {
+      resolveLate(structuredClone(lateReceipt));
+      await Promise.resolve();
+    });
+    expect(sessionCallsBeforeResolve).not.toHaveBeenCalled();
+    expect(getCollectionSpy).not.toHaveBeenCalled();
+    expect(setQueryDataSpy).not.toHaveBeenCalled();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+    setQueryDataSpy.mockRestore();
+    invalidateSpy.mockRestore();
+    // Stale detail title must NOT reappear in UI after logout
+    expect(screen.queryByRole('heading', { name: '未完成已退出样本' })).not.toBeInTheDocument();
+
+    // Verify 403/409 after unmount also does not call refreshSession()
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+    const seed2 = {
+      ...pendingBackfill,
+      id: 'ffffffff-4444-4444-8444-444444444444',
+      organization: {
+        ...pendingBackfill.organization,
+        run_id: 'ffffffff-5555-4555-8555-555555555555',
+      },
+    };
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === seed2.id) return structuredClone(seed2);
+      return origGet(id, signal);
+    });
+    applySpy.mockImplementationOnce(
+      () =>
+        new Promise((_, rej) => {
+          rejectConflict = rej;
+        }),
+    );
+    view1.unmount();
+    const view2 = renderApp([`/collections/${seed2.id}`], adapter);
+    await screen.findByRole('heading', { name: '未完成已退出样本' });
+    view2.unmount();
+    const sessionCallsAfterUnmount = vi.spyOn(adapter, 'currentSession');
+    sessionCallsAfterUnmount.mockClear();
+    const invalidateAfterUnmountSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
+    await act(async () => {
+      const { ApiError } = await import('../api/errors');
+      rejectConflict(new ApiError({ status: 403, code: 'web_archive_consent_required', message: '需授权' }));
+      await Promise.resolve();
+    });
+    expect(sessionCallsAfterUnmount).not.toHaveBeenCalled();
+    expect(invalidateAfterUnmountSpy).not.toHaveBeenCalled();
+    invalidateAfterUnmountSpy.mockRestore();
+
+    // Case 2: Equal decision_version (3) but newer content_version (2) / resource_version (4) in cache -> late apply receipt (cv=1, rv=3) MUST NOT overwrite edited title/body
+    const seed3 = {
+      ...pendingBackfill,
+      id: 'ffffffff-6666-4666-8666-666666666666',
+      manual_title: '初始网页标题',
+      organization: {
+        ...pendingBackfill.organization,
+        run_id: 'ffffffff-7777-4777-8777-777777777777',
+      },
+    };
+    const editedNewer = {
+      ...lateReceipt,
+      id: seed3.id,
+      manual_title: '刚编辑保存的新标题',
+      display_title: '刚编辑保存的新标题',
+      decision_version: 3,
+      content_version: 2,
+      resource_version: 4,
+      organization: {
+        ...lateReceipt.organization,
+        run_id: seed3.organization.run_id,
+      },
+    };
+    let resolveDelayedApply!: (col: typeof lateReceipt) => void;
+    let useEdited = false;
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === seed3.id) return structuredClone(useEdited ? editedNewer : seed3);
+      return origGet(id, signal);
+    });
+    vi.spyOn(adapter, 'updateCollection').mockImplementation(async () => {
+      useEdited = true;
+      return structuredClone(editedNewer);
+    });
+    applySpy.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveDelayedApply = res;
+        }),
+    );
+
+    renderApp([`/collections/${seed3.id}`], adapter);
+    await screen.findByRole('heading', { name: '初始网页标题' });
+
+    // User concurrently edits and saves newer manual_title (cv=2, rv=4, dv=3) while apply is still in flight
+    await user.click(screen.getByRole('button', { name: '编辑' }));
+    const titleInput = screen.getByLabelText('可选标题（留空恢复默认）');
+    await user.clear(titleInput);
+    await user.type(titleInput, '刚编辑保存的新标题');
+    await user.click(screen.getByRole('button', { name: '保存修改' }));
+    await screen.findByRole('heading', { name: '刚编辑保存的新标题' });
+
+    // Now late apply receipt arrives with dv=3, cv=1, rv=3, manual_title='未完成已退出样本' -> MUST NOT overwrite '刚编辑保存的新标题'!
+    await act(async () => {
+      resolveDelayedApply(structuredClone({ ...lateReceipt, id: seed3.id }));
+      await Promise.resolve();
+    });
+    expect(screen.getByRole('heading', { name: '刚编辑保存的新标题' })).toBeInTheDocument();
   });
 });

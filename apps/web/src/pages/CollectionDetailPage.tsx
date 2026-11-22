@@ -79,7 +79,26 @@ interface BackfillAttemptRecord {
   baseDecisionVersion: number;
   status: 'inflight' | 'succeeded' | 'stopped_conflict' | 'failed';
   errorMessage?: string;
+  needsSyncOnMount?: boolean;
   promise?: Promise<void>;
+}
+
+function shouldKeepCachedCollection(prev: Collection, incoming: Collection): boolean {
+  if (
+    prev.decision_version > incoming.decision_version ||
+    prev.content_version > incoming.content_version ||
+    prev.resource_version > incoming.resource_version
+  ) {
+    return true;
+  }
+  if (
+    prev.decision_version === incoming.decision_version &&
+    (prev.content_version >= incoming.content_version ||
+      prev.resource_version >= incoming.resource_version)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 const backfillAttemptsByApi = new WeakMap<object, Map<string, BackfillAttemptRecord>>();
@@ -333,20 +352,34 @@ export function CollectionDetailPage() {
       .then((updated) => {
         record.status = 'succeeded';
         record.errorMessage = undefined;
-        if (activeUserIdRef.current !== targetUserId) return;
-        queryClient.setQueryData<Collection>(['collection', targetCollectionId], (prev) =>
-          prev && prev.decision_version > updated.decision_version ? prev : updated,
-        );
+        if (
+          !mountedRef.current ||
+          !activeUserIdRef.current ||
+          activeUserIdRef.current !== targetUserId
+        ) {
+          record.needsSyncOnMount = true;
+          return;
+        }
+        let keptNewerCache = false;
+        queryClient.setQueryData<Collection>(['collection', targetCollectionId], (prev) => {
+          if (prev && shouldKeepCachedCollection(prev, updated)) {
+            keptNewerCache = true;
+            return prev;
+          }
+          return updated;
+        });
+        if (keptNewerCache) {
+          void queryClient.invalidateQueries({
+            queryKey: ['collection', targetCollectionId],
+            exact: true,
+          });
+        }
         void queryClient.invalidateQueries({ queryKey: ['collections'] });
         void queryClient.invalidateQueries({ queryKey: ['projects'] });
         void queryClient.invalidateQueries({ queryKey: ['project'] });
         void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
         void queryClient.invalidateQueries({ queryKey: ['tags'] });
-        if (
-          mountedRef.current &&
-          activeUserIdRef.current === targetUserId &&
-          activeCollectionIdRef.current === targetCollectionId
-        ) {
+        if (activeCollectionIdRef.current === targetCollectionId) {
           setBackfillState('idle');
           setBackfillError(null);
           setOrgActionError(null);
@@ -364,21 +397,24 @@ export function CollectionDetailPage() {
         if (isTerminalConflictOrAuth) {
           record.status = 'stopped_conflict';
           record.errorMessage = undefined;
-          if (activeUserIdRef.current === targetUserId) {
-            void queryClient.invalidateQueries({
-              queryKey: ['collection', targetCollectionId],
-              exact: true,
-            });
-            if (isApiErrorCode(err, 'web_archive_consent_required')) {
-              void refreshSession();
-            }
-            if (
-              mountedRef.current &&
-              activeCollectionIdRef.current === targetCollectionId
-            ) {
-              setBackfillState('stopped_conflict');
-              setBackfillError(null);
-            }
+          if (
+            !mountedRef.current ||
+            !activeUserIdRef.current ||
+            activeUserIdRef.current !== targetUserId
+          ) {
+            record.needsSyncOnMount = true;
+            return;
+          }
+          void queryClient.invalidateQueries({
+            queryKey: ['collection', targetCollectionId],
+            exact: true,
+          });
+          if (isApiErrorCode(err, 'web_archive_consent_required')) {
+            void refreshSession();
+          }
+          if (activeCollectionIdRef.current === targetCollectionId) {
+            setBackfillState('stopped_conflict');
+            setBackfillError(null);
           }
           return;
         }
@@ -424,6 +460,16 @@ export function CollectionDetailPage() {
     const attempts = getBackfillAttemptMap(api, userId);
     const existing = attempts.get(backfillAttemptKey);
     if (existing) {
+      if (existing.needsSyncOnMount && existing.status !== 'inflight') {
+        existing.needsSyncOnMount = false;
+        void queryClient.invalidateQueries({ queryKey: ['collection', collection.id], exact: true });
+        if (existing.status === 'succeeded') {
+          void queryClient.invalidateQueries({ queryKey: ['collections'] });
+          void queryClient.invalidateQueries({ queryKey: ['projects'] });
+          void queryClient.invalidateQueries({ queryKey: ['project'] });
+          void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+        }
+      }
       if (existing.status === 'inflight') {
         setBackfillState('applying');
         existing.promise?.then(() => {
