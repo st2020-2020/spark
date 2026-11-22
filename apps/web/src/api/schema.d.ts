@@ -1168,6 +1168,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/desktop/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 在 macOS 桌面端使用邮箱和密码登录
+         * @description 沿用 Web 登录的身份校验、失败策略和限流。只返回 30 天桌面会话。请求仅以 JSON 正文传递登录凭据。
+         */
+        post: operations["loginDesktop"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/desktop/grants": {
         parameters: {
             query?: never;
@@ -4883,6 +4903,77 @@ export interface operations {
             /** @description validation_failed：字段、字符数或网址不符合约定。 */
             422: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    loginDesktop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description 登录成功，返回独立的桌面会话。 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DesktopTokenResult"];
+                };
+            };
+            /** @description mixed_credentials 或 unexpected_credentials：客户端须使用请求体凭据。 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description authentication_failed：邮箱或密码不正确。 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description validation_failed：请求未通过字段校验。 */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description rate_limited：登录尝试过多或校验繁忙。 */
+            429: {
+                headers: {
+                    /** @description 建议等待的秒数。 */
+                    "Retry-After"?: string;
                     [name: string]: unknown;
                 };
                 content: {
