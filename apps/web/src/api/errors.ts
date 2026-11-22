@@ -41,6 +41,7 @@ const DEFAULT_CODE_MESSAGES: Record<string, string> = {
   not_found: '目标内容不存在或无权访问。',
   content_conflict: '内容已被其他操作更新，请对比后重新保存。',
   decision_conflict: '关联决定已被更新，请刷新当前状态后再操作。',
+  project_backfill_unavailable: '当前收藏状态或决定已变更，无法按旧分析结果自动补归类，已为你同步最新状态。',
   suggestion_conflict: '这条建议已在其他地方处理，请刷新当前状态后再操作。',
   undo_unavailable: '撤销回执不可用或已过期，无法撤销当前更改。',
   resource_conflict: '资源版本已变更，请刷新后重试。',

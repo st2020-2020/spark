@@ -61,6 +61,8 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 
 `Organization.web_archive_status` 区分待同意、关联已有项目、新建项目并归入和证据不足留空。处理进度沿用原有状态和整理事件。`web_archive_retry_available` 标记失败前没有账本记录且仍可处理的运行。同键回放原回执，明确主动的新键可在当前额度允许时重排一次新的运行。已经出现计费或尚待核对的运行不会因此再次调用。对历史记录确认授权不会批量触发整理。
 
+已结算的网页归类结果可以用已有具体标签及当前可复核引文补归类。`GET /collections/{id}` 和 `GET /collections/{id}/organization` 只读，满足条件时返回 `Organization.project_backfill_available: true`。详情可在用户打开后发出独立的 `POST /collections/{id}/organization/web-archive/apply`，使用 Web 会话、CSRF、幂等键和 `{base_decision_version}`。同步返回更新后的 Collection。成功时返回实际 `auto` 项目及 `web_archive_status` 的 `linked` 或 `created`，并省略可补归类标记。应用零入队、零模型调用。不同键争用旧版本返回 `409 decision_conflict`，材料、已结算结果或人工决定已发生变化返回 `409 project_backfill_unavailable`，客户端重读详情。同键回放在当前权限下返回当前收藏。
+
 ## 幂等与版本
 
 OpenAPI 中必填的 Idempotency-Key 使用 16 至 128 字符的随机键。项目决定 PATCH 的键为可选，整理模式会提供。相同用户、操作和键只代表同一次意图。请求正文按规范 JSON 序列化计算摘要，相同请求重放返回原成功状态与结果，并加 `Idempotent-Replayed: true`。尚在执行返回 409 operation_in_progress 和 Retry-After。幂等结果与业务修改同事务完成。

@@ -82,6 +82,7 @@ it.each(['composer', 'filter', 'detail', 'unclassified'])('selects project 101 o
     entry === 'detail' ? `/collections/${col.id}` : '/unclassified');
   if (entry === 'composer') await ui.click(await screen.findByRole('button', { name: '添加项目' }));
   if (entry === 'filter') await ui.click(await screen.findByRole('button', { name: '筛选' }));
+  if (entry === 'detail') await ui.click(await screen.findByText('更多管理与整理详情'));
   const more = await screen.findByRole('button', { name: '加载更多项目' });
   expect(list.mock.calls.some(([q]) => q?.cursor)).toBe(false);
   await ui.click(more);
@@ -144,7 +145,7 @@ it('only records explicit detail activation and lets the user hide a card', asyn
   const section = within(await screen.findByRole('region', { name: '今日重现' }));
   expect(opened).not.toHaveBeenCalled();
   await user.click(section.getByRole('link', { name: '归类' }));
-  expect(await screen.findByRole('heading', { name: '关联项目' })).toHaveFocus();
+  expect(await screen.findByRole('heading', { name: '归类结果' })).toHaveFocus();
   expect(opened.mock.calls).toEqual([[c.id]]);
   await user.click(screen.getByRole('link', { name: '返回' }));
   await user.click(within(await screen.findByRole('region', { name: '今日重现' })).getByRole('button', { name: '今天不再显示' }));

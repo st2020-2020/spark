@@ -744,6 +744,13 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	if _, err = tx.Exec(ctx, `DELETE FROM collection_projects WHERE user_id=$1 AND collection_id=$2 AND decision='suggested'`, r.UID, r.CollectionID); err != nil {
 		return false, err
 	}
+	var tagsChanged bool
+	if input.tagConsent && (!input.createTags || out.ErrorCode == "") {
+		tagsChanged, err = applyOrganizationTags(ctx, tx, r, result.Tags)
+		if err != nil {
+			return false, err
+		}
+	}
 	archive := ""
 	staleProject := false
 	if input.archivesProject() {
@@ -751,6 +758,23 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 			archive, staleProject, err = applyAutomaticProject(ctx, tx, r, input, &result)
 			if err != nil {
 				return false, err
+			}
+			if input.webArchive && archive == "" {
+				topic, err := webFilingTopic(ctx, tx, r, result.Tags, input.Sources, false)
+				if err != nil {
+					return false, err
+				}
+				if topic != nil {
+					fallback := organizationResult{Topic: topic}
+					var changed bool
+					archive, changed, err = applyAutomaticProject(ctx, tx, r, input, &fallback)
+					if err != nil {
+						return false, err
+					}
+					if archive != "" {
+						staleProject = changed
+					}
+				}
 			}
 		}
 	} else {
@@ -771,13 +795,6 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 			if _, err = tx.Exec(ctx, `INSERT INTO collection_projects(user_id,collection_id,project_id,decision,reason,evidence,project_version,run_id) VALUES($1,$2,$3,'suggested',$4,$5,$6,$7) ON CONFLICT(collection_id,project_id) DO UPDATE SET reason=excluded.reason,evidence=excluded.evidence,project_version=excluded.project_version,run_id=excluded.run_id,updated_at=now() WHERE collection_projects.decision='suggested'`, r.UID, r.CollectionID, p.ID, p.Reason, jsonBytes(p.Evidence), version, r.ID); err != nil {
 				return false, err
 			}
-		}
-	}
-	var tagsChanged bool
-	if input.tagConsent && (!input.createTags || out.ErrorCode == "") {
-		tagsChanged, err = applyOrganizationTags(ctx, tx, r, result.Tags)
-		if err != nil {
-			return false, err
 		}
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO organization_current(user_id,collection_id,run_id,content_version,generated_title,summary) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(collection_id) DO UPDATE SET run_id=excluded.run_id,content_version=excluded.content_version,generated_title=excluded.generated_title,summary=excluded.summary,updated_at=now()`, r.UID, r.CollectionID, r.ID, r.CV, result.Title, result.Summary); err != nil {

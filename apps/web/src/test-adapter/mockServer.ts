@@ -2625,6 +2625,116 @@ export function createTestAdapter(): TestAdapter {
       return nextOrg;
     },
 
+    async applyWebArchiveProject(id, body, idempotencyKey) {
+      const user = requireUser(true);
+      const replay = checkIdempotency<Collection>(user.id, 'applyWebArchiveProject', idempotencyKey, {
+        id,
+        base_decision_version: body.base_decision_version,
+      });
+      if (replay) return replay;
+
+      const col = collections.find((c) => c.id === id && c.user_id === user.id);
+      if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，请先恢复后再整理',
+        });
+      }
+      if (col.ai_excluded) {
+        throw new ApiError({ status: 403, code: 'ai_excluded', message: '该条收藏已设置不参与 AI 整理' });
+      }
+      if (!user.ai_enabled || user.ai_consent_version !== 'spark-ai-extension-archive-v1') {
+        throw new ApiError({
+          status: 403,
+          code: 'web_archive_consent_required',
+          message: '网页收藏归类需要确认最新 AI 整理授权（需包含标题、纯文本选文与用途披露）。',
+        });
+      }
+      if (
+        col.organization.status !== 'succeeded' ||
+        col.organization.web_archive_status !== 'no_match' ||
+        col.organization.project_backfill_available !== true
+      ) {
+        throw new ApiError({
+          status: 409,
+          code: 'project_backfill_unavailable',
+          message: '当前收藏状态或材料已不再适用安全补归类。',
+        });
+      }
+      if (body.base_decision_version !== col.decision_version) {
+        throw new ApiError({
+          status: 409,
+          code: 'decision_conflict',
+          message: '决定版本冲突，请刷新后核对当前项目归属。',
+        });
+      }
+      const candidateTag = col.tags.find((t) => t.decision === 'auto' || t.decision === 'confirmed');
+      if (!candidateTag) {
+        throw new ApiError({
+          status: 409,
+          code: 'project_backfill_unavailable',
+          message: '当前缺少可安全复用的具体标签线索。',
+        });
+      }
+
+      const now = new Date().toISOString();
+      const topicName = candidateTag.path.split('/').pop() || candidateTag.path;
+      const activeProj = projects.find(
+        (p) => p.user_id === user.id && p.state === 'active' && p.name === topicName,
+      );
+      let targetProj = activeProj;
+      let statusOut: 'linked' | 'created' = 'linked';
+      if (!targetProj) {
+        targetProj = {
+          id: generateUuid(),
+          user_id: user.id,
+          name: topicName,
+          description: '由已有网页分析线索安全补归类创建',
+          focus_points: [topicName],
+          state: 'active',
+          version: 1,
+          collection_count: 1,
+          created_at: now,
+          updated_at: now,
+        };
+        projects.unshift(targetProj);
+        statusOut = 'created';
+      }
+
+      const quote =
+        (col.manual_title?.trim() || derivePlainText(col.document).trim() || col.intent.trim() || topicName).slice(
+          0,
+          60,
+        );
+      col.projects.push({
+        project_id: targetProj.id,
+        name: targetProj.name,
+        decision: 'auto',
+        reason: `复用已有具体标签「${topicName}」与原文证据安全补归类`,
+        project_version: targetProj.version,
+        suggestion_run_id: col.organization.run_id,
+        evidence: [{ source_id: col.manual_title?.trim() ? 'page_title' : 'original_text', quote }],
+      });
+      col.decision_version += 1;
+      col.resource_version += 1;
+      col.updated_at = now;
+      const nextOrg: Organization = { ...col.organization, web_archive_status: statusOut, updated_at: now };
+      delete nextOrg.project_backfill_available;
+      col.organization = nextOrg;
+      refreshProjectCounts(user.id);
+      const out = toPublicCollection(col);
+      saveIdempotency(
+        user.id,
+        'applyWebArchiveProject',
+        idempotencyKey,
+        { id, base_decision_version: body.base_decision_version },
+        out,
+      );
+      return out;
+    },
+
     async updateImageNote(id, body) {
       const user = requireUser(true);
       const col = collections.find(c => c.user_id === user.id && c.attachments.some(a => a.id === id));

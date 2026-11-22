@@ -46,6 +46,7 @@ import type {
   PasswordReset,
   Preferences,
   Project,
+  ProjectBackfillRequest,
   ProjectCreate,
   ProjectPage,
   ProjectUpdate,
@@ -159,6 +160,11 @@ export interface SparkApi {
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
   archiveWebCollection(id: string, idempotencyKey: string): Promise<Organization>;
+  applyWebArchiveProject(
+    id: string,
+    body: ProjectBackfillRequest,
+    idempotencyKey: string,
+  ): Promise<Collection>;
   updateImageNote(attachmentId: string, body: ImageNoteUpdate): Promise<Collection>;
   retryImageAnalysis(attachmentId: string, body: ImageRetryRequest, idempotencyKey: string): Promise<Extraction>;
   getExtractions(id: string): Promise<ExtractionList>;
@@ -609,6 +615,16 @@ export function createRealApiClient(): SparkApi {
         requiresCsrf: true,
         idempotencyKey,
       }),
+    applyWebArchiveProject: (id, body, idempotencyKey) =>
+      request<Collection>(
+        'POST',
+        `/collections/${encodeURIComponent(id)}/organization/web-archive/apply`,
+        {
+          body,
+          requiresCsrf: true,
+          idempotencyKey,
+        },
+      ),
     updateImageNote: (id, body) => request<Collection>('PATCH', `/attachments/${encodeURIComponent(id)}/image-note`, {
       body, requiresCsrf: true,
     }),

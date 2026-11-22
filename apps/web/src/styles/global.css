@@ -4398,6 +4398,42 @@ a.sp-pill:hover {
   margin: 0;
 }
 
+.sp-filing-card {
+  padding: 16px;
+  background: var(--sp-bg);
+  border: 1px solid var(--sp-border);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sp-filing-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.sp-filing-projects {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sp-filing-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sp-filing-details {
+  border-top: 1px solid var(--sp-border);
+  padding-top: 6px;
+}
+
 .sp-org-summary-card {
   padding: 12px 14px;
   background: var(--sp-surface);
