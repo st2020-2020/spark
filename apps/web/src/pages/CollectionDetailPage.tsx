@@ -29,7 +29,7 @@ import type {
   SparkDocument,
 } from '../api/types';
 import { ApiError, getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
-import { AIConsentModal, allowsImageFiling } from '../components/AIConsentModal';
+import { AIConsentModal, allowsImageFiling, allowsWebArchive } from '../components/AIConsentModal';
 import { AttachmentGallery } from '../components/AttachmentGallery';
 import {
   ImageAnalysisPanel,
@@ -128,6 +128,7 @@ export function CollectionDetailPage() {
   const [revisionsOpen, setRevisionsOpen] = useState(false);
   const [secondaryExpanded, setSecondaryExpanded] = useState(false);
   const [consentOpen, setConsentOpen] = useState(false);
+  const [webArchiveConfirmOpen, setWebArchiveConfirmOpen] = useState(false);
   const [orgActionError, setOrgActionError] = useState<string | null>(null);
   const [urlRefreshError, setUrlRefreshError] = useState<string | null>(null);
   const [purgeConfirmOpen, setPurgeConfirmOpen] = useState(false);
@@ -140,6 +141,7 @@ export function CollectionDetailPage() {
   const editFileInputRef = useRef<HTMLInputElement | null>(null);
   const orgRetryKeyRef = useRef<string>(generateIdempotencyKey());
   const orgRetryContextRef = useRef<string>('');
+  const webArchiveKeyRef = useRef<string>(generateIdempotencyKey());
   const urlRetryKeyRef = useRef<string>(generateIdempotencyKey());
   const urlRetryContextRef = useRef<string>('');
   const purgeKeyRef = useRef<{ version: number; key: string } | null>(null);
@@ -238,6 +240,16 @@ export function CollectionDetailPage() {
     }
     urlRetryContextRef.current = nextContext;
   }, [id, collection?.content_version, collection?.original_url, matchedUrlExtraction?.id]);
+
+  useEffect(() => {
+    webArchiveKeyRef.current = generateIdempotencyKey();
+    setWebArchiveConfirmOpen(false);
+  }, [
+    id,
+    collection?.content_version,
+    collection?.organization.run_id,
+    collection?.organization.status,
+  ]);
 
   const readAdvance = useRef<{ from: number; to: number } | null>(null);
   const resourceWriteScope = { id: `collection-state:${userId}:${id}` };
@@ -619,6 +631,31 @@ export function CollectionDetailPage() {
     },
   });
 
+  const archiveWebMutation = useMutation({
+    mutationFn: () => api.archiveWebCollection(id, webArchiveKeyRef.current),
+    onSuccess: async (org) => {
+      setOrgActionError(null);
+      setWebArchiveConfirmOpen(false);
+      webArchiveKeyRef.current = generateIdempotencyKey();
+      if (isOrganizationActiveStatus(org.status)) {
+        pushToast({ message: '网页归类请求已受理' });
+      }
+      await collectionQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
+    },
+    onError: (err) => {
+      if (isApiErrorCode(err, 'web_archive_consent_required')) {
+        setOrgActionError(getFriendlyErrorMessage(err));
+        void collectionQuery.refetch();
+        if (aiTrialEligible && aiPlatformEnabled) setConsentOpen(true);
+        return;
+      }
+      setOrgActionError(getFriendlyErrorMessage(err));
+    },
+  });
+
   const refreshUrlMutation = useMutation({
     mutationFn: () => api.refreshUrlExtraction(id, urlRetryKeyRef.current),
     onSuccess: (ext: Extraction) => {
@@ -747,6 +784,20 @@ export function CollectionDetailPage() {
   });
   const imageArchive = collection.organization.image_archive_status;
   const imageMaterial = collection.organization.image_material_status;
+  const webArchiveStatus = collection.organization.web_archive_status;
+  const isOrgFailedOrBlocked =
+    collection.organization.status === 'failed' || collection.organization.status === 'blocked';
+  const webArchiveBlockedByLedger =
+    isOrgFailedOrBlocked && collection.organization.web_archive_retry_available === false;
+  const hasWebArchiveConsent = Boolean(user?.ai_enabled && allowsWebArchive(user.ai_consent_version));
+  const showWebArchiveAction =
+    !isInTrash &&
+    !collection.ai_excluded &&
+    !isOrganizationActiveStatus(collection.organization.status) &&
+    Boolean(collection.web_archive_available) &&
+    aiPlatformEnabled &&
+    aiTrialEligible &&
+    (!isOrgFailedOrBlocked || collection.organization.web_archive_retry_available === true);
   const hasExtractedImageText = extractionsQuery.data?.items.some(ext =>
     ext.source_kind === 'image' && collection.attachments.some(a => a.id === ext.source_id) &&
     (ext.status === 'succeeded' || ext.status === 'partial') && !!(ext.text?.trim() || ext.image_description?.trim()));
@@ -872,6 +923,7 @@ export function CollectionDetailPage() {
           {collection.updated_at !== collection.created_at && (
             <span>· 编辑于 {formatDateTime(collection.updated_at)}</span>
           )}
+          {collection.capture_source === 'extension' && <span>· 来自浏览器扩展</span>}
         </div>
 
         {!isEditing ? (
@@ -1374,6 +1426,24 @@ export function CollectionDetailPage() {
                     )}
                   </button>
 
+                  {showWebArchiveAction && (
+                    <button
+                      type="button"
+                      className="sp-btn sp-btn--sm"
+                      disabled={archiveWebMutation.isPending}
+                      onClick={() => setWebArchiveConfirmOpen((prev) => !prev)}
+                    >
+                      <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
+                      <span>
+                        {webArchiveConfirmOpen
+                          ? '收起归类确认'
+                          : isOrgFailedOrBlocked
+                            ? '重试网页归类'
+                            : '按网页内容归类'}
+                      </span>
+                    </button>
+                  )}
+
                   {orgDisplay.canTrigger && (
                     <button
                       type="button"
@@ -1410,6 +1480,92 @@ export function CollectionDetailPage() {
 
             {imageMaterial === 'included' && (
               <p className="sp-help">本次整理使用了图片识别结果。</p>
+            )}
+            {!isInTrash &&
+              !collection.ai_excluded &&
+              !isOrganizationActiveStatus(collection.organization.status) &&
+              webArchiveStatus === 'consent_required' &&
+              aiPlatformEnabled &&
+              aiTrialEligible && (
+                <div className="sp-stack sp-stack--tight">
+                  <p className="sp-help">
+                    自动归档网页收藏需要更新整理授权（包含标题、纯文本选文与用途披露）。
+                  </p>
+                  {!hasWebArchiveConsent && (
+                    <div>
+                      <button
+                        type="button"
+                        className="sp-btn sp-btn--sm"
+                        onClick={() => setConsentOpen(true)}
+                      >
+                        更新整理授权以归类网页
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            {!isInTrash &&
+              !collection.ai_excluded &&
+              webArchiveBlockedByLedger && (
+                <p className="sp-help">
+                  上次网页归类已产生计费记录，为防重复计费不再提供直接重试；你可手动选择项目或编辑内容后重新整理。
+                </p>
+              )}
+            {!isInTrash &&
+              !collection.ai_excluded &&
+              !isOrganizationActiveStatus(collection.organization.status) &&
+              Boolean(collection.original_url) &&
+              !collection.web_archive_available &&
+              aiPlatformEnabled &&
+              aiTrialEligible && (
+                <p className="sp-help">
+                  当前网址收藏尚无可用于网页归类的标题、纯文本选文或用途；可点击上方「编辑」补充后触发按网页内容归类。
+                </p>
+              )}
+            {webArchiveConfirmOpen && showWebArchiveAction && (
+              <div className="sp-org-summary-card" role="region" aria-label="确认网页内容归类材料">
+                <div className="sp-org-field-label">即将发送至第三方文字模型的材料</div>
+                <p className="sp-help sp-break-anywhere">
+                  标题：{collection.manual_title?.trim() || '（无）'}
+                </p>
+                <p className="sp-help sp-break-anywhere">
+                  选文/正文：{derivePlainText(collection.document).trim() || '（无）'}
+                </p>
+                <p className="sp-help sp-break-anywhere">
+                  用途：{collection.intent.trim() || '（无）'}
+                </p>
+                <p className="sp-help">
+                  网址与网页抓取正文不发送；如有手选项目，手选项目优先。
+                </p>
+                <div className="sp-row">
+                  {hasWebArchiveConsent ? (
+                    <button
+                      type="button"
+                      className="sp-btn sp-btn--sm sp-btn--primary"
+                      disabled={archiveWebMutation.isPending}
+                      onClick={() => archiveWebMutation.mutate()}
+                    >
+                      {archiveWebMutation.isPending ? '提交中…' : '确认发送并归类'}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="sp-btn sp-btn--sm sp-btn--primary"
+                      onClick={() => setConsentOpen(true)}
+                    >
+                      确认整理授权并继续
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="sp-btn sp-btn--sm"
+                    disabled={archiveWebMutation.isPending}
+                    onClick={() => setWebArchiveConfirmOpen(false)}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
             )}
             {!isInTrash && !collection.ai_excluded && !isOrganizationActiveStatus(collection.organization.status) &&
               (hasExtractedImageText || imageMaterial === 'consent_required' || imageArchive === 'consent_required') && (

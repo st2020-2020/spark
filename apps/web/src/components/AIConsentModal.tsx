@@ -5,10 +5,18 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { Modal } from './Modal';
 
-export const SPARK_AI_CONSENT_VERSION = 'spark-ai-image-notes-v2';
+export const SPARK_AI_CONSENT_VERSION = 'spark-ai-extension-archive-v1';
 
 export function allowsImageFiling(version?: string) {
-  return version === SPARK_AI_CONSENT_VERSION || version === 'spark-ai-image-notes-v1';
+  return (
+    version === SPARK_AI_CONSENT_VERSION ||
+    version === 'spark-ai-image-notes-v2' ||
+    version === 'spark-ai-image-notes-v1'
+  );
+}
+
+export function allowsWebArchive(version?: string) {
+  return version === SPARK_AI_CONSENT_VERSION;
 }
 
 export function AIConsentModal({
@@ -61,6 +69,10 @@ export function AIConsentModal({
           <li>
             <strong>图片识别结果：</strong>
             同时开启图片理解时，第三方文字模型还可使用这条收藏已识别的图中文字和 AI 画面描述，自动归入匹配的进行中项目；没有合适项目且能识别出明确主题时，可新建主题项目并归入。你可以移除或更改归属。文字模型不会收到原图。发送原图给 DeepSeek 识别需要单独开启图片理解。
+          </li>
+          <li>
+            <strong>网页收藏归类：</strong>
+            将已保存并确认的标题、纯文本选文和用途发送给第三方文字模型以匹配或创建主题项目；网址与网页抓取正文不发送，手选项目优先。
           </li>
           <li>
             <strong>处理用途：</strong>

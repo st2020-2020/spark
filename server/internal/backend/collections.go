@@ -32,6 +32,24 @@ type collectionRow struct {
 	GeneratedSummary   *string                `json:"generated_summary"`
 }
 
+const organizationRunJSON = `jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,
+ 'stages',CASE WHEN r.image_waiting AND r.status<>'queued' THEN '[{"name":"extract_images","status":"skipped","attempts":0}]'::jsonb ELSE r.stages END,
+ 'error_code',r.error_code,'updated_at',r.updated_at,
+ 'image_archive_status',CASE WHEN EXISTS(SELECT 1 FROM collection_projects ap
+   WHERE (ap.user_id,ap.collection_id,ap.run_id)=(r.user_id,r.collection_id,r.id) AND ap.decision='auto')
+   THEN r.image_archive_status END,
+ 'web_archive_retry_available',CASE WHEN r.web_archive AND r.status IN ('failed','blocked')
+   AND NOT EXISTS(SELECT 1 FROM usage_reservations u WHERE (u.user_id,u.run_id)=(r.user_id,r.id)) THEN true END,
+ 'web_archive_status',CASE
+  WHEN r.web_archive_status='no_match' AND NOT EXISTS(SELECT 1 FROM collection_projects ap
+   WHERE (ap.user_id,ap.collection_id)=(r.user_id,r.collection_id) AND ap.decision IN ('manual','confirmed','auto')) THEN 'no_match'
+  WHEN r.web_archive_status IN ('linked','created') AND EXISTS(SELECT 1 FROM collection_projects ap
+   WHERE (ap.user_id,ap.collection_id,ap.run_id)=(r.user_id,r.collection_id,r.id) AND ap.decision='auto') THEN r.web_archive_status END,
+ 'image_material_status',CASE
+  WHEN r.status='queued' AND r.image_waiting THEN 'waiting'
+  WHEN r.status IN ('succeeded','partial') AND EXISTS(SELECT 1 FROM organization_current_image_runs ir
+    WHERE (ir.user_id,ir.run_id)=(r.user_id,r.id)) THEN 'included' END))`
+
 const collectionJSON = `to_jsonb(c)||jsonb_build_object(
  'follow_up_count',(SELECT tc.active_count-(c.deleted_at IS NULL)::int FROM collection_thread_counts tc
   WHERE (tc.user_id,tc.thread_id)=(c.user_id,c.thread_id)),
@@ -40,16 +58,7 @@ const collectionJSON = `to_jsonb(c)||jsonb_build_object(
  'user_role',(SELECT role FROM users WHERE id=c.user_id),
  'image_notes',` + imageNotesJSON + `,
  'has_image_material',EXISTS(SELECT 1 FROM organization_image_materials m WHERE (m.user_id,m.collection_id)=(c.user_id,c.id)),
- 'stored_organization',(SELECT jsonb_strip_nulls(jsonb_build_object('run_id',r.id,'content_version',r.content_version,'status',r.status,
- 'stages',CASE WHEN r.image_waiting AND r.status<>'queued' THEN '[{"name":"extract_images","status":"skipped","attempts":0}]'::jsonb ELSE r.stages END,
- 'error_code',r.error_code,'updated_at',r.updated_at,
- 'image_archive_status',CASE WHEN EXISTS(SELECT 1 FROM collection_projects ap
-   WHERE (ap.user_id,ap.collection_id,ap.run_id)=(r.user_id,r.collection_id,r.id) AND ap.decision='auto')
-   THEN r.image_archive_status END,
- 'image_material_status',CASE
-  WHEN r.status='queued' AND r.image_waiting THEN 'waiting'
-  WHEN r.status IN ('succeeded','partial') AND EXISTS(SELECT 1 FROM organization_current_image_runs ir
-    WHERE (ir.user_id,ir.run_id)=(r.user_id,r.id)) THEN 'included' END)) FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
+ 'stored_organization',(SELECT ` + organizationRunJSON + ` FROM organization_runs r WHERE r.user_id=c.user_id AND r.collection_id=c.id AND r.content_version=c.content_version ORDER BY r.created_at DESC,r.id DESC LIMIT 1),
  'generated_title',(SELECT generated_title FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'generated_summary',(SELECT summary FROM organization_current oc WHERE oc.user_id=c.user_id AND oc.collection_id=c.id AND oc.content_version=c.content_version),
  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'filename',a.filename,'mime_type',a.mime_type,
@@ -185,18 +194,18 @@ func checkCollectionTombstone(ctx context.Context, tx pgx.Tx, uid, id string) er
 }
 
 // persistCollection runs under the account change lock inside the create transaction.
-func (s *Server) persistCollection(ctx context.Context, tx pgx.Tx, uid string, req contract.CollectionCreate, plain, originalURL string, activeProjectsOnly bool) error {
+func (s *Server) persistCollection(ctx context.Context, tx pgx.Tx, uid string, req contract.CollectionCreate, plain, originalURL string, extensionCapture bool) error {
 	id := req.Id.String()
 	if len(req.UploadIds) > 0 && s.Assets == nil {
 		return uploadsUnavailable
 	}
 	for _, pid := range req.ProjectIds {
 		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2 AND (NOT $3::boolean OR state='active'))`, uid, pid.String(), activeProjectsOnly).Scan(&exists); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2 AND (NOT $3::boolean OR state='active'))`, uid, pid.String(), extensionCapture).Scan(&exists); err != nil {
 			return err
 		}
 		if !exists {
-			if activeProjectsOnly {
+			if extensionCapture {
 				return problem(404, "project_unavailable", "所选项目已不可用，请重新选择。")
 			}
 			return notFound
@@ -206,13 +215,13 @@ func (s *Server) persistCollection(ctx context.Context, tx pgx.Tx, uid string, r
 		return err
 	}
 	// The account change lock serializes source validation with trash and purge.
-	inserted, err := tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded,thread_id,source_collection_id)
-		SELECT $1,$2,$3,$4,$5,$6,$7,$8,coalesce(source.thread_id,gen_random_uuid()),source.id
+	inserted, err := tx.Exec(ctx, `INSERT INTO collections(id,user_id,document,plain_text,intent,original_url,manual_title,ai_excluded,thread_id,source_collection_id,capture_source)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8,coalesce(source.thread_id,gen_random_uuid()),source.id,CASE WHEN $10::boolean THEN 'extension' END
 		FROM (VALUES ($9::uuid)) requested(id)
 		LEFT JOIN collections source ON (source.user_id,source.id)=($2,requested.id)
 		 AND source.deleted_at IS NULL AND source.purge_requested_at IS NULL
 		WHERE requested.id IS NULL OR source.id IS NOT NULL`,
-		id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded), req.SourceCollectionId)
+		id, uid, jsonBytes(req.Document), plain, req.Intent, originalURL, value(req.ManualTitle), value(req.AiExcluded), req.SourceCollectionId, extensionCapture)
 	if err != nil {
 		return err
 	}
@@ -494,6 +503,7 @@ func summary(row collectionRow) contract.CollectionSummary {
 }
 
 func (s *Server) collectionView(row collectionRow) collectionRow {
+
 	if preview := row.LinkPreview; preview != nil && !s.Config.URLExtractEnabled &&
 		(preview.Status == "queued" || preview.Status == "running") {
 		row.LinkPreview = &contract.LinkPreview{Status: "skipped"}
@@ -505,6 +515,31 @@ func (s *Server) collectionView(row collectionRow) collectionRow {
 		} else if !s.Organizer.Trial.allows(row.UserID) {
 			code := aiTrialUnavailable
 			row.Organization.ErrorCode = &code
+		}
+	}
+	if row.DeletedAt != nil || row.AiExcluded || !s.Organizer.Enabled || !s.Organizer.Trial.allows(row.UserID) ||
+		!row.UserAIEnabled || !allowsWebArchive(row.UserAIConsent) {
+		row.Organization.WebArchiveRetryAvailable = nil
+	}
+	material := webArchiveMaterial{value(row.ManualTitle), row.PlainText, row.Intent}
+	if row.DeletedAt == nil && validURL(value(row.OriginalUrl)) {
+		if material.available() {
+			available := true
+			row.WebArchiveAvailable = &available
+		}
+		if value(row.CaptureSource) == "extension" && s.Organizer.Enabled && s.Organizer.Trial.allows(row.UserID) &&
+			row.UserAIEnabled && !row.AiExcluded {
+			if row.WebArchiveAvailable != nil && !allowsWebArchive(row.UserAIConsent) {
+				status := contract.OrganizationWebArchiveStatus("consent_required")
+				row.Organization.WebArchiveStatus = &status
+				if row.StoredOrganization == nil && value(row.Organization.ErrorCode) == "insufficient_material" {
+					code := "web_archive_consent_required"
+					row.Organization.ErrorCode = &code
+				}
+			} else if row.WebArchiveAvailable == nil && row.StoredOrganization == nil && !row.HasImageMaterial {
+				code := "insufficient_material"
+				row.Organization.ErrorCode = &code
+			}
 		}
 	}
 	if s.Organizer.Enabled && s.Organizer.Trial.allows(row.UserID) && row.UserAIEnabled &&

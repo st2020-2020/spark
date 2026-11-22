@@ -158,6 +158,7 @@ export interface SparkApi {
   updateTagDecisions(id: string, body: TagDecisionUpdate): Promise<Collection>;
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
+  archiveWebCollection(id: string, idempotencyKey: string): Promise<Organization>;
   updateImageNote(attachmentId: string, body: ImageNoteUpdate): Promise<Collection>;
   retryImageAnalysis(attachmentId: string, body: ImageRetryRequest, idempotencyKey: string): Promise<Extraction>;
   getExtractions(id: string): Promise<ExtractionList>;
@@ -600,6 +601,11 @@ export function createRealApiClient(): SparkApi {
       request<Organization>('GET', `/collections/${encodeURIComponent(id)}/organization`),
     restartOrganization: (id, idempotencyKey) =>
       request<Organization>('POST', `/collections/${encodeURIComponent(id)}/organization`, {
+        requiresCsrf: true,
+        idempotencyKey,
+      }),
+    archiveWebCollection: (id, idempotencyKey) =>
+      request<Organization>('POST', `/collections/${encodeURIComponent(id)}/organization/web-archive`, {
         requiresCsrf: true,
         idempotencyKey,
       }),

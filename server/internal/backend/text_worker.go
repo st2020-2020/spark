@@ -65,9 +65,10 @@ type projectInput struct {
 	Version     int64    `json:"version"`
 }
 type textSource struct {
-	ID    string `json:"source_id"`
-	Text  string `json:"text"`
-	image imageSourceRef
+	ID       string `json:"source_id"`
+	Text     string `json:"text"`
+	image    imageSourceRef
+	original string
 }
 
 const textTagConsentVersion = "spark-ai-tags-v1"
@@ -77,6 +78,7 @@ type textInput struct {
 	createTags          bool
 	waitingImages       bool
 	imageArchiveConsent bool
+	webArchive          bool
 	imageKeys           []string
 	decisionVersion     int64
 	Sources             []textSource   `json:"sources"`
@@ -112,6 +114,10 @@ type modelTopic struct {
 	Evidence []modelEvidence `json:"evidence"`
 }
 
+func (i textInput) archivesProject() bool {
+	return i.webArchive || i.archivesImage()
+}
+
 func (i textInput) archivesImage() bool {
 	return i.imageArchiveConsent && len(i.imageKeys) > 0
 }
@@ -122,6 +128,7 @@ type runSnapshot struct {
 	Attempts                     int
 	Created                      time.Time
 	ImageWaiting                 bool
+	WebArchive                   bool
 	ImagePolicyVersion           int64
 }
 
@@ -130,7 +137,7 @@ func lockOrganization(ctx context.Context, tx pgx.Tx, uid, run string) (runSnaps
 	if _, err := store.New(tx).LockUserChanges(ctx, idPG(uid)); err != nil {
 		return r, err
 	}
-	err := tx.QueryRow(ctx, `SELECT collection_id,content_version,user_policy_version,collection_policy_version,status,attempts,created_at,image_waiting FROM organization_runs WHERE user_id=$1 AND id=$2 FOR UPDATE`, uid, run).Scan(&r.CollectionID, &r.CV, &r.UV, &r.PV, &r.State, &r.Attempts, &r.Created, &r.ImageWaiting)
+	err := tx.QueryRow(ctx, `SELECT collection_id,content_version,user_policy_version,collection_policy_version,status,attempts,created_at,image_waiting,web_archive FROM organization_runs WHERE user_id=$1 AND id=$2 FOR UPDATE`, uid, run).Scan(&r.CollectionID, &r.CV, &r.UV, &r.PV, &r.State, &r.Attempts, &r.Created, &r.ImageWaiting, &r.WebArchive)
 	return r, err
 }
 func (w *TextWorker) runValidity(ctx context.Context, tx pgx.Tx, r runSnapshot) (string, error) {
@@ -253,17 +260,31 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		}
 		return r, input, false, tx.Commit(ctx)
 	}
-	var text, intent, consent string
-	if err = tx.QueryRow(ctx, `SELECT c.plain_text,c.intent,coalesce(u.ai_consent_version,''),c.decision_version
+	var material webArchiveMaterial
+	var consent, captureSource, pageURL string
+	if err = tx.QueryRow(ctx, `SELECT c.plain_text,c.intent,coalesce(u.ai_consent_version,''),c.decision_version,
+		c.manual_title,coalesce(c.capture_source,''),c.original_url
 		FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`,
-		r.UID, r.CollectionID).Scan(&text, &intent, &consent, &input.decisionVersion); err != nil {
+		r.UID, r.CollectionID).Scan(&material.text, &material.intent, &consent, &input.decisionVersion,
+		&material.title, &captureSource, &pageURL); err != nil {
 		return r, input, false, err
 	}
+	input.webArchive = r.WebArchive
+	if input.webArchive && (!allowsWebArchive(consent) || !validURL(pageURL) || !material.available()) {
+		code := "insufficient_material"
+		if !allowsWebArchive(consent) {
+			code = "web_archive_consent_required"
+		}
+		if err = setRunState(ctx, tx, r, "skipped", code); err != nil {
+			return r, input, false, err
+		}
+		return r, input, false, tx.Commit(ctx)
+	}
 	input.tagConsent = consent == textTagConsentVersion || allowsTextImageMaterial(consent)
-	input.createTags = consent == textImageTagsConsentVersion
-	input.imageArchiveConsent = allowsImageArchive(consent)
+	input.createTags = consent == textImageTagsConsentVersion || allowsWebArchive(consent)
+	input.imageArchiveConsent = !input.webArchive && allowsImageArchive(consent)
 	var imageSources []textSource
-	if allowsTextImageMaterial(consent) {
+	if !input.webArchive && allowsTextImageMaterial(consent) {
 		var pending bool
 		imageSources, pending, err = w.Organizer.Images.sources(ctx, tx, r.UID, r.CollectionID, input.imageArchiveConsent)
 		if err != nil {
@@ -280,13 +301,22 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		}
 	}
 	input.imageKeys = imageMaterialKeys(imageSources)
-	if !materialAvailable(text, intent) && len(imageSources) == 0 {
+	text, intent := material.text, material.intent
+	if captureSource == "extension" && !input.webArchive {
+		clean := material.filtered()
+		text, intent = clean.text, clean.intent
+	}
+	if !input.webArchive && !materialAvailable(text, intent) && len(imageSources) == 0 {
 		if err = setRunState(ctx, tx, r, "skipped", "insufficient_material"); err != nil {
 			return r, input, false, err
 		}
 		return r, input, false, tx.Commit(ctx)
 	}
-	input.Sources = boundedOrganizationSources(text, intent, imageSources, w.Config.MaxInputChars)
+	if input.webArchive {
+		input.Sources = material.sources(w.Config.MaxInputChars)
+	} else {
+		input.Sources = boundedOrganizationSources(text, intent, imageSources, w.Config.MaxInputChars)
+	}
 	text, intent = input.Sources[0].Text, input.Sources[1].Text
 	var projectMaterial strings.Builder
 	for _, source := range input.Sources {
@@ -312,6 +342,12 @@ func (w *TextWorker) prepare(ctx context.Context, args TextOrganizationArgs) (ru
 		p.Description = shortText(p.Description, 300)
 		if len(p.Focus) > 5 {
 			p.Focus = p.Focus[:5]
+		}
+		if input.webArchive || captureSource == "extension" {
+			p.Name, p.Description = withoutWebURLs(p.Name), withoutWebURLs(p.Description)
+			for i := range p.Focus {
+				p.Focus[i] = withoutWebURLs(p.Focus[i])
+			}
 		}
 		input.Projects = append(input.Projects, p)
 	}
@@ -368,7 +404,7 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 	_ = json.Unmarshal([]byte(organizationResultSchema), &schema)
 	delete(schema, "$schema")
 	properties := schema["properties"].(map[string]any)
-	if input.archivesImage() {
+	if input.archivesProject() {
 		topic := properties["topic_candidate"].(map[string]any)
 		topic["properties"].(map[string]any)["name"].(map[string]any)["maxLength"] = maxAutomaticTopicChars
 	} else {
@@ -376,7 +412,7 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 	}
 	if route.OutputMode == "json_schema" {
 		required := append(schema["required"].([]any), "summary")
-		if input.archivesImage() {
+		if input.archivesProject() {
 			required = append(required, "topic_candidate")
 		}
 		schema["required"] = required
@@ -404,6 +440,12 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 		}
 		if input.archivesImage() {
 			system += " For this image note, choose one relevant existing project if possible. Otherwise suggest one reusable topic_candidate with a concise name, reason and exact image evidence. Never return a topic and a project together. Use image evidence for any project decision. If the image does not establish a topic, leave both options empty."
+		}
+		if input.webArchive {
+			system = strings.Replace(system, "(original_text or intent)", "(page_title, original_text or intent)", 1)
+			system += " For this saved webpage, use only the explicitly saved title, text and intent as evidence. Choose one clearly relevant existing project. If none fits and the evidence establishes a specific reusable subject, provide one topic_candidate with an exact quote. Never return both. If the material is generic or lacks a clear subject, leave both empty."
+		}
+		if input.archivesProject() {
 			system += " Prefer a distinctive umbrella subject in 2–6 Chinese characters when appropriate, at most 12 characters. Avoid vague names, copying an entire note title or truncating it mid-phrase. 值班发布流程与回滚演练记录 → 应用交付 (labels 发布流程, 回滚演练); 花圃滴灌与周日修剪记录 → 园艺养护 (labels 滴灌, 修剪)."
 		}
 		if input.createTags {
@@ -471,17 +513,18 @@ func (w *TextWorker) validateResult(raw string, input textInput) (organizationRe
 	for _, p := range input.Projects {
 		candidates[p.ID] = true
 	}
-	sources := map[string]string{}
+	sources := map[string]textSource{}
 	imageSources := map[string]bool{}
 	for _, src := range input.Sources {
-		sources[src.ID] = src.Text
+		sources[src.ID] = src
 		imageSources[src.ID] = src.image.ExtractionID != ""
 	}
 	validEvidence := func(evidence []modelEvidence, requireImage bool) bool {
 		hasImage := false
 		for _, e := range evidence {
-			text, exists := sources[e.SourceID]
-			if !exists || strings.TrimSpace(e.Quote) == "" || !strings.Contains(text, e.Quote) {
+			source, exists := sources[e.SourceID]
+			if !exists || strings.TrimSpace(e.Quote) == "" || !strings.Contains(source.Text, e.Quote) ||
+				input.webArchive && !strings.Contains(source.original, e.Quote) {
 				return false
 			}
 			hasImage = hasImage || imageSources[e.SourceID]
@@ -498,13 +541,19 @@ func (w *TextWorker) validateResult(raw string, input textInput) (organizationRe
 	if !validTags {
 		return result, errors.New("invalid_model_output")
 	}
+	if input.webArchive && len(result.Projects) != 0 &&
+		(result.Projects[0].Confidence < 0.75 || !substantiveWebEvidence(result.Projects[0].Evidence)) {
+		result.Projects = []modelProject{}
+		topicValue = nil
+	}
 	if topicValue != nil {
 		var topic modelTopic
-		if input.archivesImage() && len(result.Projects) == 0 &&
+		if input.archivesProject() && len(result.Projects) == 0 &&
 			w.Schema.Properties["topic_candidate"].Validate(topicValue) == nil &&
 			json.Unmarshal(jsonBytes(topicValue), &topic) == nil &&
 			strings.TrimSpace(topic.Reason) != "" && !strings.ContainsRune(topic.Reason, 0) &&
-			normalizeModelTopic(topic.Name) != "" && validEvidence(topic.Evidence, true) {
+			normalizeModelTopic(topic.Name) != "" && validEvidence(topic.Evidence, input.archivesImage()) &&
+			(!input.webArchive || substantiveWebEvidence(topic.Evidence)) {
 			result.Topic = &topic
 		} else {
 			result.rejectedTopic = true
@@ -697,9 +746,9 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	}
 	archive := ""
 	staleProject := false
-	if input.archivesImage() {
+	if input.archivesProject() {
 		if out.ErrorCode == "" {
-			archive, staleProject, err = applyImageProject(ctx, tx, r, input, &result)
+			archive, staleProject, err = applyAutomaticProject(ctx, tx, r, input, &result)
 			if err != nil {
 				return false, err
 			}
@@ -735,8 +784,18 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		return false, err
 	}
 	r.ImagePolicyVersion = input.imagePolicyVersion()
-	if _, err = tx.Exec(ctx, `UPDATE organization_runs SET result=$3,applied_at=now(),image_user_policy_version=NULLIF($4::bigint,0),image_archive_status=NULLIF($5,'')
-		WHERE user_id=$1 AND id=$2 AND applied_at IS NULL`, r.UID, r.ID, jsonBytes(result), r.ImagePolicyVersion, archive); err != nil {
+	var imageArchive, webArchive string
+	if input.webArchive {
+		webArchive = archive
+		if webArchive == "" && !staleProject && out.ErrorCode == "" {
+			webArchive = "no_match"
+		}
+	} else {
+		imageArchive = archive
+	}
+	if _, err = tx.Exec(ctx, `UPDATE organization_runs SET result=$3,applied_at=now(),image_user_policy_version=NULLIF($4::bigint,0),
+		image_archive_status=NULLIF($5,''),web_archive_status=NULLIF($6,'')
+		WHERE user_id=$1 AND id=$2 AND applied_at IS NULL`, r.UID, r.ID, jsonBytes(result), r.ImagePolicyVersion, imageArchive, webArchive); err != nil {
 		return false, err
 	}
 	state, code := "succeeded", ""
@@ -761,7 +820,7 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 	if err = record(ctx, tx, r.UID, "collection", r.CollectionID, version); err != nil {
 		return false, err
 	}
-	if staleProject && out.ErrorCode == "" && !input.archivesImage() {
+	if staleProject && out.ErrorCode == "" && !input.archivesProject() {
 		if _, _, err = w.Organizer.Enqueue(ctx, tx, r.UID, r.CollectionID, false); err != nil {
 			return false, err
 		}

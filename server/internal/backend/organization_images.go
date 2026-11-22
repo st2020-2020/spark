@@ -19,7 +19,7 @@ func allowsTextImageMaterial(consent string) bool {
 }
 
 func allowsImageArchive(consent string) bool {
-	return consent == textImageNotesConsentVersion || consent == textImageTagsConsentVersion
+	return consent == textImageNotesConsentVersion || consent == textImageTagsConsentVersion || allowsWebArchive(consent)
 }
 
 type ImageOrganizationScope struct {

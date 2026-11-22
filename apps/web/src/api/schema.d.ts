@@ -762,6 +762,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collections/{id}/organization/web-archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 主动归类当前一条网页收藏
+         * @description 用户明确确认后，仅使用当前收藏的手动标题、已保存纯文本和用途。要求网页归类同意，沿用当前账号的文字 AI 资格、额度与幂等。缺授权返回 403 web_archive_consent_required，无材料返回 422 insufficient_material，已有其他整理正在处理时返回 409 organization_in_progress。
+         */
+        post: operations["archiveWebCollection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections/{id}/extractions": {
         parameters: {
             query?: never;
@@ -1480,6 +1500,13 @@ export interface components {
              * @enum {string}
              */
             image_archive_status?: "consent_required" | "linked" | "created";
+            /**
+             * @description 网页归类待授权、已关联已有项目、已创建项目并归入，或本轮证据不足以归类。
+             * @enum {string}
+             */
+            web_archive_status?: "consent_required" | "linked" | "created" | "no_match";
+            /** @description 本次网页归类失败或因额度阻塞且没有账本记录时为 true。用户可用新幂等键主动重排，仍校验授权与额度；同键只回放原回执。 */
+            web_archive_retry_available?: boolean;
         };
         Collection: {
             /** Format: uuid */
@@ -1525,6 +1552,13 @@ export interface components {
             source_collection_id?: string;
             /** @description 同一线索内除当前收藏外的活跃成员数。 */
             follow_up_count?: number;
+            /**
+             * @description 经创建入口或历史保存回执证明的浏览器扩展来源。没有来源证据时省略。
+             * @enum {string}
+             */
+            capture_source?: "extension";
+            /** @description 当前为可主动处理的活跃网址收藏且有可用标题、正文或用途。实际处理还须满足授权、设置及额度。 */
+            web_archive_available?: boolean;
         };
         CollectionSummary: {
             /** Format: uuid */
@@ -1819,7 +1853,7 @@ export interface components {
             items: components["schemas"]["FailureSummary"][];
         };
         ProjectEvidence: {
-            /** @description 原文字段，或 image_text:/image_description: 加附件 UUID。 */
+            /** @description 原文、用途、网页手动标题，或 image_text:/image_description: 加附件 UUID。 */
             source_id: string;
             quote: string;
         };
@@ -3761,6 +3795,40 @@ export interface operations {
         };
     };
     restartOrganization: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务已持久化，异步处理 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    archiveWebCollection: {
         parameters: {
             query?: never;
             header: {

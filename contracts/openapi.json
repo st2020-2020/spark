@@ -3095,6 +3095,72 @@
         ]
       }
     },
+    "/collections/{id}/organization/web-archive": {
+      "post": {
+        "operationId": "archiveWebCollection",
+        "summary": "主动归类当前一条网页收藏",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "任务已持久化，异步处理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "description": "用户明确确认后，仅使用当前收藏的手动标题、已保存纯文本和用途。要求网页归类同意，沿用当前账号的文字 AI 资格、额度与幂等。缺授权返回 403 web_archive_consent_required，无材料返回 422 insufficient_material，已有其他整理正在处理时返回 409 organization_in_progress。"
+      }
+    },
     "/collections/{id}/extractions": {
       "get": {
         "operationId": "getExtractions",
@@ -5924,6 +5990,20 @@
               "created"
             ],
             "description": "新版文字授权待确认、已关联进行中项目、或已创建并关联主题项目。"
+          },
+          "web_archive_status": {
+            "type": "string",
+            "enum": [
+              "consent_required",
+              "linked",
+              "created",
+              "no_match"
+            ],
+            "description": "网页归类待授权、已关联已有项目、已创建项目并归入，或本轮证据不足以归类。"
+          },
+          "web_archive_retry_available": {
+            "type": "boolean",
+            "description": "本次网页归类失败或因额度阻塞且没有账本记录时为 true。用户可用新幂等键主动重排，仍校验授权与额度；同键只回放原回执。"
           }
         },
         "required": [
@@ -6053,6 +6133,17 @@
             "type": "integer",
             "minimum": 0,
             "description": "同一线索内除当前收藏外的活跃成员数。"
+          },
+          "capture_source": {
+            "type": "string",
+            "enum": [
+              "extension"
+            ],
+            "description": "经创建入口或历史保存回执证明的浏览器扩展来源。没有来源证据时省略。"
+          },
+          "web_archive_available": {
+            "type": "boolean",
+            "description": "当前为可主动处理的活跃网址收藏且有可用标题、正文或用途。实际处理还须满足授权、设置及额度。"
           }
         },
         "required": [
@@ -7176,8 +7267,8 @@
         "properties": {
           "source_id": {
             "type": "string",
-            "pattern": "^(original_text|intent|image_(text|description):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
-            "description": "原文字段，或 image_text:/image_description: 加附件 UUID。"
+            "pattern": "^(original_text|intent|page_title|image_(text|description):[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$",
+            "description": "原文、用途、网页手动标题，或 image_text:/image_description: 加附件 UUID。"
           },
           "quote": {
             "type": "string",

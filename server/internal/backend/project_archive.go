@@ -24,7 +24,7 @@ func normalizeModelTopic(raw string) string {
 
 // The run holds the account change lock. Check the latest human choices and
 // the full account topic index before saving an automatic association.
-func applyImageProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput, result *organizationResult) (string, bool, error) {
+func applyAutomaticProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input textInput, result *organizationResult) (string, bool, error) {
 	if len(result.Projects) == 0 && result.Topic == nil {
 		return "", false, nil
 	}

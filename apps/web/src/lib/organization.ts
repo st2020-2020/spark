@@ -84,7 +84,9 @@ export function evidenceSourceLabel(sourceId: string, attachments?: Collection['
   if (normalized === 'url' || normalized === 'original_url' || normalized.startsWith('url:')) {
     return '来源网址';
   }
-  if (normalized === 'manual_title' || normalized === 'title') return '自定义标题';
+  if (normalized === 'manual_title' || normalized === 'title' || normalized === 'page_title') {
+    return '网页标题';
+  }
   if (
     normalized === 'original_text' ||
     normalized === 'text' ||
@@ -231,6 +233,18 @@ export function classifyOrganizationDisplay(params: {
     };
   }
 
+  if (errCode === 'web_archive_consent_required') {
+    return {
+      kind: 'unconfigured',
+      badgeLabel: '待更新授权',
+      pillTone: 'warning',
+      description: '网页收藏自动归类需要更新 AI 整理授权（需包含标题、纯文本选文与用途披露），原文已完整保留。',
+      canTrigger: false,
+      triggerLabel: '重新整理',
+      noProjectSuggestion: false,
+    };
+  }
+
   if (errCode === 'ai_excluded' || errCode === 'ai_disabled') {
     return {
       kind: 'unconfigured',
@@ -326,14 +340,29 @@ export function classifyOrganizationDisplay(params: {
 
   if (organization.status === 'succeeded') {
     const filed = projects.some(p => p.decision === 'auto');
-    const archive = filed && organization.image_archive_status;
+    const webArchive = organization.web_archive_status;
+    if (!filed && webArchive === 'consent_required') {
+      return {
+        kind: 'unconfigured',
+        badgeLabel: '待更新授权',
+        pillTone: 'warning',
+        description: '本次未执行网页收藏自动归档：需先更新 AI 整理授权。你仍可手动选择项目，或授权后点击「按网页内容归类」。',
+        canTrigger: false,
+        triggerLabel: '重新整理',
+        noProjectSuggestion: !hasSuggestedOrEffective,
+      };
+    }
+    const archive = filed && (webArchive || organization.image_archive_status);
     const filedDescription = archive === 'created' ? '已新建主题项目并自动归入。可在关联项目中更改归属。'
       : archive === 'linked' ? '已自动归入已有项目。可在关联项目中更改归属。' : undefined;
+    const noMatchDesc = webArchive === 'no_match' && !hasSuggestedOrEffective
+      ? '已完成网页收藏分析，证据不足以自动匹配或创建项目；你仍可补充标题/用途或手动选择项目。'
+      : undefined;
     return {
       kind: 'succeeded',
       badgeLabel: '已整理',
       pillTone: 'green',
-      description: filedDescription ?? (projects.some(p => p.decision === 'suggested')
+      description: filedDescription ?? noMatchDesc ?? (projects.some(p => p.decision === 'suggested')
         ? '有项目建议待确认，可查看引文后加入项目或忽略。'
         : projects.length ? '本次整理已完成，当前没有待确认的项目建议。'
         : '已完成整理，暂无匹配的项目建议；你仍可手动将本条加入项目。'),

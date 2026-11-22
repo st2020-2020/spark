@@ -170,6 +170,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.POST("/collections/:id/extractions", s.handle(s.refreshURLExtraction))
 	secured.GET("/collections/:id/organization", s.handle(s.getOrganization))
 	secured.POST("/collections/:id/organization", s.handle(s.restartOrganization))
+	secured.POST("/collections/:id/organization/web-archive", s.handle(s.archiveWebCollection))
 	secured.PUT("/collections/:id/ai-exclusion", s.handle(s.setAIExclusion))
 	secured.GET("/organization/events", s.handle(s.organizationEvents))
 	secured.GET("/search", s.handle(s.search))

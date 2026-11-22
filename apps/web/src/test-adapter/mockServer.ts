@@ -103,6 +103,7 @@ interface StoredCollection extends Collection {
   revisions: Revision[];
   mock_org_step?: number;
   mock_org_attempts?: number;
+  mock_web_archive?: boolean;
 }
 
 interface StoredUpload extends Upload {
@@ -559,9 +560,15 @@ export function createTestAdapter(): TestAdapter {
   }
 
   function toPublicCollection(c: StoredCollection): Collection {
-    const { user_id: _u, extractions: _e, revisions: _r, ...rest } = c;
+    const { user_id: _u, extractions: _e, revisions: _r, mock_web_archive: _mw, ...rest } = c;
+    const hasWebMaterial = Boolean(
+      c.original_url &&
+        !c.deleted_at &&
+        (c.manual_title?.trim() || derivePlainText(c.document).trim() || c.intent.trim()),
+    );
     return {
       ...structuredClone(rest),
+      web_archive_available: hasWebMaterial,
       source_collection_id: resolveLiveSourceCollectionId(c),
       follow_up_count: countThreadActivePeers(c),
       has_suggestion: collectionHasActiveSuggestion(c),
@@ -739,29 +746,47 @@ export function createTestAdapter(): TestAdapter {
       return;
     }
 
+    const titleText = col.manual_title?.trim() ?? '';
     const plain = derivePlainText(col.document).trim();
     const intentText = col.intent.trim();
-    const sourceSnippet = (plain || intentText).slice(0, 60);
-    const evidenceSource: 'original_text' | 'intent' = plain ? 'original_text' : 'intent';
-    const generatedTitle = (plain.split('\n')[0] || intentText || '整理结果').slice(0, 32);
+    const isWebArchive = Boolean(col.mock_web_archive);
+    const sourceSnippet = (plain || titleText || intentText).slice(0, 60);
+    const evidenceSource: 'original_text' | 'intent' | 'page_title' =
+      isWebArchive && titleText && !plain
+        ? 'page_title'
+        : plain
+          ? 'original_text'
+          : intentText
+            ? 'intent'
+            : 'page_title';
+    const generatedTitle = (titleText || plain.split('\n')[0] || intentText || '整理结果').slice(0, 32);
     const summary = plain
       ? `核心内容围绕「${plain.slice(0, 48)}」${intentText ? `，用途为${intentText.slice(0, 36)}` : ''}。`
-      : `用途记录：${intentText.slice(0, 60)}。`;
+      : titleText
+        ? `网页标题「${titleText.slice(0, 48)}」${intentText ? `，用途为${intentText.slice(0, 36)}` : ''}。`
+        : `用途记录：${intentText.slice(0, 60)}。`;
 
     const orgRunId = col.organization.run_id ?? generateUuid();
+    let webArchiveStatus: Organization['web_archive_status'];
 
-    if (mockOrganizationMode !== 'succeed_no_project') {
+    if (mockOrganizationMode === 'succeed_no_project') {
+      if (isWebArchive) webArchiveStatus = 'no_match';
+    } else {
       const activeProjects = projects.filter(
         (p) => p.user_id === user.id && p.state === 'active',
       );
-      const matchedProject =
-        activeProjects.find((p) => {
-          const hay = `${plain}\n${intentText}`.toLowerCase();
-          return (
-            hay.includes(p.name.toLowerCase()) ||
-            p.focus_points.some((fp) => hay.includes(fp.toLowerCase()))
-          );
-        }) ?? activeProjects[0];
+      const hay = `${titleText}\n${plain}\n${intentText}`.toLowerCase();
+      const matchedProject = isWebArchive
+        ? activeProjects.find(
+            (p) =>
+              hay.includes(p.name.toLowerCase()) ||
+              p.focus_points.some((fp) => hay.includes(fp.toLowerCase())),
+          )
+        : activeProjects.find(
+            (p) =>
+              hay.includes(p.name.toLowerCase()) ||
+              p.focus_points.some((fp) => hay.includes(fp.toLowerCase())),
+          ) ?? activeProjects[0];
 
       if (matchedProject) {
         const existingIdx = col.projects.findIndex(
@@ -771,7 +796,7 @@ export function createTestAdapter(): TestAdapter {
           col.projects.push({
             project_id: matchedProject.id,
             name: matchedProject.name,
-            decision: 'suggested',
+            decision: isWebArchive ? 'auto' : 'suggested',
             reason: `内容与项目「${matchedProject.name}」的关注方向相符`,
             project_version: matchedProject.version,
             suggestion_run_id: orgRunId,
@@ -784,9 +809,45 @@ export function createTestAdapter(): TestAdapter {
           });
           col.decision_version += 1;
         }
+        if (isWebArchive) webArchiveStatus = 'linked';
+      } else if (isWebArchive && (titleText || plain)) {
+        const topicName = (titleText || plain).slice(0, 16);
+        const nowIso = new Date().toISOString();
+        const createdProj: Project & { user_id: string } = {
+          id: generateUuid(),
+          user_id: user.id,
+          name: topicName,
+          description: '由网页收藏自动归纳创建',
+          focus_points: [topicName],
+          state: 'active',
+          version: 1,
+          collection_count: 1,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+        projects.unshift(createdProj);
+        col.projects.push({
+          project_id: createdProj.id,
+          name: createdProj.name,
+          decision: 'auto',
+          reason: `根据网页标题与内容新建主题项目「${createdProj.name}」`,
+          project_version: createdProj.version,
+          suggestion_run_id: orgRunId,
+          evidence: [
+            {
+              source_id: evidenceSource,
+              quote: sourceSnippet,
+            },
+          ],
+        });
+        col.decision_version += 1;
+        webArchiveStatus = 'created';
+      } else if (isWebArchive) {
+        webArchiveStatus = 'no_match';
       }
     }
 
+    col.mock_web_archive = false;
     col.organization = {
       run_id: orgRunId,
       content_version: col.content_version,
@@ -798,6 +859,7 @@ export function createTestAdapter(): TestAdapter {
       ],
       generated_title: generatedTitle,
       summary,
+      ...(webArchiveStatus ? { web_archive_status: webArchiveStatus } : {}),
       updated_at: now,
     };
     col.display_title = computeDisplayTitle(col);
@@ -2479,7 +2541,86 @@ export function createTestAdapter(): TestAdapter {
       col.organization = nextOrg;
       col.mock_org_step = 0;
       col.mock_org_attempts = nextAttempts;
+      col.mock_web_archive = false;
       saveIdempotency(user.id, 'restartOrganization', idempotencyKey, { id }, nextOrg);
+      scheduleMockOrganization(col, user);
+      return nextOrg;
+    },
+
+    async archiveWebCollection(id, idempotencyKey) {
+      const user = requireUser(true);
+      const replay = checkIdempotency<Organization>(user.id, 'archiveWebCollection', idempotencyKey, {
+        id,
+      });
+      if (replay) return replay;
+
+      const col = collections.find((c) => c.id === id && c.user_id === user.id);
+      if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，请先恢复后再整理',
+        });
+      }
+      if (col.ai_excluded) {
+        throw new ApiError({ status: 403, code: 'ai_excluded', message: '该条收藏已设置不参与 AI 整理' });
+      }
+      if (col.organization.status === 'queued' || col.organization.status === 'running') {
+        throw new ApiError({
+          status: 409,
+          code: 'organization_in_progress',
+          message: '已有其他整理正在处理中，请稍候完成。',
+        });
+      }
+      if (!user.ai_enabled || user.ai_consent_version !== 'spark-ai-extension-archive-v1') {
+        throw new ApiError({
+          status: 403,
+          code: 'web_archive_consent_required',
+          message: '网页收藏归类需要确认最新 AI 整理授权（需包含标题、纯文本选文与用途披露）。',
+        });
+      }
+      if (
+        !col.original_url ||
+        (!col.manual_title?.trim() && !derivePlainText(col.document).trim() && !col.intent.trim())
+      ) {
+        throw new ApiError({
+          status: 422,
+          code: 'insufficient_material',
+          message: '当前收藏缺少可用于网页归类的标题、纯文本或用途。',
+        });
+      }
+      if (mockOrganizationMode === 'integration_not_configured') {
+        throw new ApiError({
+          status: 503,
+          code: 'integration_not_configured',
+          message: '当前平台尚未配置模型服务凭证，已完整保存你的原文。',
+        });
+      }
+      if (mockOrganizationMode === 'quota_exceeded') {
+        throw new ApiError({
+          status: 429,
+          code: 'quota_exceeded',
+          message: '今日 AI 额度已达上限，收藏仍可正常保存。',
+        });
+      }
+      const now = new Date().toISOString();
+      const nextOrg: Organization = {
+        run_id: generateUuid(),
+        content_version: col.content_version,
+        status: 'queued',
+        stages: [
+          { name: 'generate', status: 'queued', attempts: 0 },
+          { name: 'match_projects', status: 'queued', attempts: 0 },
+          { name: 'apply', status: 'queued', attempts: 0 },
+        ],
+        updated_at: now,
+      };
+      col.organization = nextOrg;
+      col.mock_org_step = 0;
+      col.mock_org_attempts = (col.mock_org_attempts ?? 0) + 1;
+      col.mock_web_archive = true;
+      saveIdempotency(user.id, 'archiveWebCollection', idempotencyKey, { id }, nextOrg);
       scheduleMockOrganization(col, user);
       return nextOrg;
     },
