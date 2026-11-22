@@ -3161,6 +3161,82 @@
         "description": "用户明确确认后，仅使用当前收藏的手动标题、已保存纯文本和用途。要求网页归类同意，沿用当前账号的文字 AI 资格、额度与幂等。缺授权返回 403 web_archive_consent_required，无材料返回 422 insufficient_material，已有其他整理正在处理时返回 409 organization_in_progress。"
       }
     },
+    "/collections/{id}/organization/web-archive/apply": {
+      "post": {
+        "operationId": "applyWebArchiveProject",
+        "summary": "复用已结算网页结果归入项目",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "任务已持久化，异步处理",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Collection"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "description": "Web 会话按当前决策版本应用已有的具体标签及可复核引文。此操作同步完成，既不入队也不调用模型。跨账号返回 404。权限或授权不足返回 403。决策版本冲突（decision_conflict）或状态、材料不再适用（project_backfill_unavailable）返回 409。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectBackfillRequest"
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{id}/extractions": {
       "get": {
         "operationId": "getExtractions",
@@ -6004,6 +6080,10 @@
           "web_archive_retry_available": {
             "type": "boolean",
             "description": "本次网页归类失败或因额度阻塞且没有账本记录时为 true。用户可用新幂等键主动重排，仍校验授权与额度；同键只回放原回执。"
+          },
+          "project_backfill_available": {
+            "type": "boolean",
+            "description": "这次已结算的网页整理仍可使用有据标签归入项目。读取状态不会写入，成功归类后省略。"
           }
         },
         "required": [
@@ -7668,6 +7748,19 @@
         },
         "required": [
           "id"
+        ]
+      },
+      "ProjectBackfillRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "base_decision_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "base_decision_version"
         ]
       }
     }

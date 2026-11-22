@@ -127,11 +127,11 @@ func (s *Server) loadCollection(ctx context.Context, q querier, uid, id string) 
 	return s.collectionView(row), err
 }
 func (s *Server) getCollection(c *gin.Context) (any, error) {
-	row, err := s.loadCollection(c.Request.Context(), s.Pool, current(c).User.ID, c.Param("id"))
+	row, err := s.collectionWithProjectBackfill(c)
 	return row.Collection, err
 }
 func (s *Server) getOrganization(c *gin.Context) (any, error) {
-	row, err := s.loadCollection(c.Request.Context(), s.Pool, current(c).User.ID, c.Param("id"))
+	row, err := s.collectionWithProjectBackfill(c)
 	return row.Organization, err
 }
 func snapshot(ctx context.Context, tx pgx.Tx, uid, id string) error {
