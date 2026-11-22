@@ -7,6 +7,7 @@ import { AppShell } from './components/AppShell';
 import { LoadingState } from './components/StateBlocks';
 import { ApiProvider } from './context/ApiContext';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { FollowUpProvider } from './context/FollowUpContext';
 import { OrganizationEventsProvider } from './context/OrganizationEventsContext';
 import { ToastProvider } from './context/ToastContext';
 import { AdminPage } from './pages/AdminPage';
@@ -42,9 +43,11 @@ function AuthenticatedShell() {
   const wide = location.pathname.startsWith('/admin');
   return (
     <OrganizationEventsProvider>
-      <AppShell key={user.id} wide={wide}>
-        <Outlet />
-      </AppShell>
+      <FollowUpProvider key={user.id}>
+        <AppShell key={user.id} wide={wide}>
+          <Outlet />
+        </AppShell>
+      </FollowUpProvider>
     </OrganizationEventsProvider>
   );
 }

@@ -94,6 +94,8 @@ export function TrashPage() {
       );
       pushToast({ message: '已恢复到收件箱' });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection', col.id] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -129,6 +131,8 @@ export function TrashPage() {
         message: accepted.status === 'completed' ? '已永久删除收藏' : '已受理永久删除，正在清理',
       });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection', col.id] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });

@@ -47,6 +47,8 @@ export type DownloadGrant = components['schemas']['DownloadGrant'];
 
 export type CollectionCreate = components['schemas']['CollectionCreate'];
 export type CollectionUpdate = components['schemas']['CollectionUpdate'];
+export type CollectionThread = components['schemas']['CollectionThread'];
+export type CollectionThreadItem = components['schemas']['CollectionThreadItem'];
 export type ProjectEvidence = components['schemas']['ProjectEvidence'];
 export type ExpectedProjectSuggestion = components['schemas']['ExpectedProjectSuggestion'];
 export type ProjectAssociation = components['schemas']['ProjectAssociation'];
@@ -99,6 +101,7 @@ export type ListProjectsQuery = operations['listProjects']['parameters']['query'
 export type ListCollectionsQuery = operations['listCollections']['parameters']['query'];
 export type SearchCollectionsQuery = operations['searchCollections']['parameters']['query'];
 export type ListTagsQuery = operations['listTags']['parameters']['query'];
+export type GetCollectionThreadQuery = operations['getCollectionThread']['parameters']['query'];
 export type ExportFormat = operations['exportMyData']['parameters']['query']['format'];
 export interface ExportDownloadResult {
   blob: Blob;

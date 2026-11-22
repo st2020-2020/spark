@@ -11,6 +11,7 @@ import {
   Loader2,
   Mail,
   MailOpen,
+  PenLine,
   Pencil,
   RefreshCw,
   RotateCcw,
@@ -43,10 +44,12 @@ import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks
 import { UploadQueueTray } from '../components/UploadQueueTray';
 import { MentionPicker, type MentionChoice } from '../components/MentionPicker';
 import { CollectionTags } from '../components/Tags';
+import { CollectionThreadTimeline } from '../components/CollectionThreadTimeline';
 import { ImageNotes } from '../components/ImageNotes';
 import { ShareCard } from '../components/ShareCard';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
+import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
 import {
   MAX_TEXT_AND_INTENT_CHARS,
@@ -56,6 +59,7 @@ import {
   isValidHttpUrl,
 } from '../lib/document';
 import { confirmLeavingImageDraft, loadDraft, removeDraft, saveDraft, useBeforeUnloadWarning } from '../lib/drafts';
+import { toFollowUpSourceFromCollection } from '../lib/followUp';
 import { formatDateTime, formatRemainingTrashDays } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { projectToneClass } from '../lib/projectTone';
@@ -101,6 +105,7 @@ export function CollectionDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
   const api = useApi();
   const { user, aiTrialEligible, aiPlatformEnabled, purgeEnabled, urlExtractionEnabled } = useAuth();
+  const { openFollowUp } = useFollowUp();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -151,8 +156,13 @@ export function CollectionDetailPage() {
 
   const hasCollection = !!collectionQuery.data;
   useEffect(() => {
-    if (hasCollection && location.hash === '#projects') {
+    if (!hasCollection) return;
+    if (location.hash === '#projects') {
       document.getElementById('collection-projects')?.focus();
+    } else if (location.hash === '#follow-up-thread') {
+      const el = document.getElementById('follow-up-thread');
+      el?.scrollIntoView?.({ block: 'start' });
+      el?.focus();
     }
   }, [hasCollection, id, location.key, location.hash]);
 
@@ -468,6 +478,7 @@ export function CollectionDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       pushToast({
         message: '已移入回收站',
         actionLabel: '撤销',
@@ -475,6 +486,7 @@ export function CollectionDetailPage() {
           await api.restoreCollection(id, { base_resource_version: trashed.resource_version });
           void queryClient.invalidateQueries({ queryKey: ['collections'] });
           void queryClient.invalidateQueries({ queryKey: ['collection', id] });
+          void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
           void queryClient.invalidateQueries({ queryKey: ['projects'] });
           void queryClient.invalidateQueries({ queryKey: ['project'] });
           void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -497,6 +509,7 @@ export function CollectionDetailPage() {
       setPurgeError(null);
       queryClient.setQueryData(['collection', id], restored);
       void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
@@ -535,6 +548,7 @@ export function CollectionDetailPage() {
       setAcceptedPurge(accepted);
       queryClient.setQueryData(['collection-purge', id], accepted);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
@@ -775,6 +789,16 @@ export function CollectionDetailPage() {
                 {displayedRead ? '标为未读' : '标为已读'}
               </span>
             </button>
+            {!isEditing && (
+              <button
+                type="button"
+                className="sp-btn--quiet"
+                onClick={() => openFollowUp(toFollowUpSourceFromCollection(collection))}
+              >
+                <PenLine size={16} strokeWidth={2} aria-hidden="true" />
+                <span className="sp-collapse-label">续写</span>
+              </button>
+            )}
             {!isEditing && (
               <button type="button" className="sp-btn--quiet" onClick={() => startEditing(collection)}>
                 <Pencil size={16} strokeWidth={2} aria-hidden="true" />
@@ -1449,6 +1473,8 @@ export function CollectionDetailPage() {
             )}
           </div>
         </section>
+
+        <CollectionThreadTimeline collection={collection} />
 
         {/* Secondary / collapsed extractions and revisions */}
         <section className="sp-section sp-section--quiet">
