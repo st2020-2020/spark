@@ -782,6 +782,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/collections/{id}/organization/web-archive/recover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 明确确认一次网页归类恢复
+         * @description 仅当前版本、授权、材料及决策仍有效的已结算旧失败或截断可恢复一次。恢复使用同一额度并独立记账。额度竞争导致零派发和零预留时可明确重新排队同一恢复运行。GET 和旧整理入口不触发恢复。
+         */
+        post: operations["recoverWebArchive"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/collections/{id}/organization/web-archive/apply": {
         parameters: {
             query?: never;
@@ -1602,8 +1622,10 @@ export interface components {
              * @enum {string}
              */
             web_archive_status?: "consent_required" | "linked" | "created" | "no_match";
-            /** @description 本次网页归类失败或因额度阻塞且没有账本记录时为 true。用户可用新幂等键主动重排，仍校验授权与额度；同键只回放原回执。 */
+            /** @description 已知网页归类的 failed 或 blocked 返回显式布尔值。普通未入账失败仍可主动重排时为 true；已入账、已登记恢复或当前授权不可用时为 false。非网页整理省略。 */
             web_archive_retry_available?: boolean;
+            /** @description 仅当当前失败可由用户显式确认恢复一次时为 true。已登记恢复仅在被额度阻塞且确认未派发、未预留时可以同一运行重新排队。 */
+            web_archive_recovery_available?: boolean;
             /** @description 这次已结算的网页整理仍可使用有据标签归入项目。读取状态不会写入，成功归类后省略。 */
             project_backfill_available?: boolean;
         };
@@ -2058,6 +2080,11 @@ export interface components {
         ExtensionCollectionReceipt: {
             /** Format: uuid */
             id: string;
+        };
+        WebArchiveRecoveryRequest: {
+            /** Format: uuid */
+            run_id: string;
+            base_decision_version: number;
         };
         ProjectBackfillRequest: {
             base_decision_version: number;
@@ -3983,6 +4010,80 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    recoverWebArchive: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebArchiveRecoveryRequest"];
+            };
+        };
+        responses: {
+            /** @description 恢复已持久化，返回异步运行。 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Organization"];
+                };
+            };
+            /** @description 账号资格不足、未授权或已排除。 */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 收藏不存在或不属于当前账号。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description decision_conflict、web_archive_recovery_unavailable 或 collection_in_trash；重读详情。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description quota_exceeded：剩余 AI 额度不足。 */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

@@ -63,6 +63,10 @@ SessionResult 的可选 `purge_enabled` 字段表示是否开放登记新的永�
 
 已结算的网页归类结果可以用已有具体标签及当前可复核引文补归类。`GET /collections/{id}` 和 `GET /collections/{id}/organization` 只读，满足条件时返回 `Organization.project_backfill_available: true`。详情可在用户打开后发出独立的 `POST /collections/{id}/organization/web-archive/apply`，使用 Web 会话、CSRF、幂等键和 `{base_decision_version}`。同步返回更新后的 Collection。成功时返回实际 `auto` 项目及 `web_archive_status` 的 `linked` 或 `created`，并省略可补归类标记。应用零入队、零模型调用。不同键争用旧版本返回 `409 decision_conflict`，材料、已结算结果或人工决定已发生变化返回 `409 project_backfill_unavailable`，客户端重读详情。同键回放在当前权限下返回当前收藏。
 
+对应页面的归类结果若返回 `web_archive_recovery_available: true`，用户明确确认后可用 Web 会话、CSRF、幂等键和 `{run_id,base_decision_version}` 调用 `POST /collections/{id}/organization/web-archive/recover`。202 返回恢复运行的 Organization，同键回放原回执。只有已结算的旧版格式失败或新报告的 `model_output_truncated`、且材料和授权仍有效时才开放一次恢复，旧费用保留，本次独立结算。额度竞争使恢复运行以 `blocked/quota_exceeded` 结束且确定零派发、零预留时，可确认后以同一运行 ID 和新请求键重排。版本冲突返回 `409 decision_conflict`，其他资格变化返回 `409 web_archive_recovery_unavailable`，额度不足返回 `429 quota_exceeded`。读取、旧整理入口和零成本补录均不登记这种付费恢复。
+
+已知网页运行的 `failed` 或 `blocked` 带有显式 `web_archive_retry_available`。只有普通的未入账失败且当前材料与权限有效时为 true；已登记的恢复行及已入账运行返回 false。其他整理类型省略这一字段。
+
 ## macOS 桌面设备会话
 
 桌面生成 32 字节随机数作为无填充 base64url 的 `verifier`。配对摘要为 UTF-8 字符串 `spark-desktop-pair-v1:` 后接 `verifier` 的 SHA-256，再做无填充 base64url 编码。系统浏览器只收到 `/desktop/pair#challenge=...`。两端显示摘要的前八位供确认，桌面与浏览器扩展各自使用不同的证明域和会话类型。

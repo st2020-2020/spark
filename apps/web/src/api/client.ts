@@ -74,6 +74,7 @@ import type {
   UserStatus,
   VerificationRequest,
   VerificationResult,
+  WebArchiveRecoveryRequest,
 } from './types';
 
 export interface OrganizationEventsHandlers {
@@ -162,6 +163,11 @@ export interface SparkApi {
   getOrganization(id: string): Promise<Organization>;
   restartOrganization(id: string, idempotencyKey: string): Promise<Organization>;
   archiveWebCollection(id: string, idempotencyKey: string): Promise<Organization>;
+  recoverWebArchive(
+    id: string,
+    body: WebArchiveRecoveryRequest,
+    idempotencyKey: string,
+  ): Promise<Organization>;
   applyWebArchiveProject(
     id: string,
     body: ProjectBackfillRequest,
@@ -619,6 +625,16 @@ export function createRealApiClient(): SparkApi {
         requiresCsrf: true,
         idempotencyKey,
       }),
+    recoverWebArchive: (id, body, idempotencyKey) =>
+      request<Organization>(
+        'POST',
+        `/collections/${encodeURIComponent(id)}/organization/web-archive/recover`,
+        {
+          body,
+          requiresCsrf: true,
+          idempotencyKey,
+        },
+      ),
     applyWebArchiveProject: (id, body, idempotencyKey) =>
       request<Collection>(
         'POST',

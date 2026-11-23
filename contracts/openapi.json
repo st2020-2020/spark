@@ -3194,6 +3194,122 @@
         "description": "用户明确确认后，仅使用当前收藏的手动标题、已保存纯文本和用途。要求网页归类同意，沿用当前账号的文字 AI 资格、额度与幂等。缺授权返回 403 web_archive_consent_required，无材料返回 422 insufficient_material，已有其他整理正在处理时返回 409 organization_in_progress。"
       }
     },
+    "/collections/{id}/organization/web-archive/recover": {
+      "post": {
+        "operationId": "recoverWebArchive",
+        "summary": "明确确认一次网页归类恢复",
+        "tags": [
+          "collections"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "恢复已持久化，返回异步运行。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Organization"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "账号资格不足、未授权或已排除。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "收藏不存在或不属于当前账号。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "decision_conflict、web_archive_recovery_unavailable 或 collection_in_trash；重读详情。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "quota_exceeded：剩余 AI 额度不足。",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          }
+        ],
+        "description": "仅当前版本、授权、材料及决策仍有效的已结算旧失败或截断可恢复一次。恢复使用同一额度并独立记账。额度竞争导致零派发和零预留时可明确重新排队同一恢复运行。GET 和旧整理入口不触发恢复。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebArchiveRecoveryRequest"
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{id}/organization/web-archive/apply": {
       "post": {
         "operationId": "applyWebArchiveProject",
@@ -6474,7 +6590,11 @@
           },
           "web_archive_retry_available": {
             "type": "boolean",
-            "description": "本次网页归类失败或因额度阻塞且没有账本记录时为 true。用户可用新幂等键主动重排，仍校验授权与额度；同键只回放原回执。"
+            "description": "已知网页归类的 failed 或 blocked 返回显式布尔值。普通未入账失败仍可主动重排时为 true；已入账、已登记恢复或当前授权不可用时为 false。非网页整理省略。"
+          },
+          "web_archive_recovery_available": {
+            "type": "boolean",
+            "description": "仅当当前失败可由用户显式确认恢复一次时为 true。已登记恢复仅在被额度阻塞且确认未派发、未预留时可以同一运行重新排队。"
           },
           "project_backfill_available": {
             "type": "boolean",
@@ -8143,6 +8263,24 @@
         },
         "required": [
           "id"
+        ]
+      },
+      "WebArchiveRecoveryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "base_decision_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "run_id",
+          "base_decision_version"
         ]
       },
       "ProjectBackfillRequest": {

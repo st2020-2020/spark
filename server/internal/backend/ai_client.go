@@ -97,6 +97,8 @@ func LoadAIConfig(path, env string) (AIConfig, error) {
 	return cfg, nil
 }
 
+const modelOutputTruncated = "model_output_truncated"
+
 type TokenUsage struct{ Input, Output int64 }
 type ModelOutput struct {
 	Content                      string
@@ -188,11 +190,20 @@ func (c *CompatibleTextClient) Generate(ctx context.Context, route AIRoute, cfg 
 	if response.Usage != nil && response.Usage.Input != nil && response.Usage.Output != nil && *response.Usage.Input >= 0 && *response.Usage.Output >= 0 && *response.Usage.Input <= inputUpper && *response.Usage.Output <= int64(route.MaxOutputTokens) {
 		out.Usage = &TokenUsage{Input: *response.Usage.Input, Output: *response.Usage.Output}
 	}
-	if len(response.Choices) != 1 || len(response.Choices[0].Message.ToolCalls) > 0 || response.Choices[0].Finish != "stop" {
+	if len(response.Choices) != 1 || len(response.Choices[0].Message.ToolCalls) > 0 {
 		out.ErrorCode = "invalid_model_output"
 		return out
 	}
-	out.Content = response.Choices[0].Message.Content
+	choice := response.Choices[0]
+	if choice.Finish == "length" {
+		out.ErrorCode = modelOutputTruncated
+		return out
+	}
+	if choice.Finish != "stop" {
+		out.ErrorCode = "invalid_model_output"
+		return out
+	}
+	out.Content = choice.Message.Content
 	if out.Usage == nil {
 		out.ErrorCode = "usage_uncertain"
 	}

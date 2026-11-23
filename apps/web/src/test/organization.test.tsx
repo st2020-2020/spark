@@ -2,10 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Link } from 'react-router-dom';
 import { QueryClient } from '@tanstack/react-query';
 import { AppProviders, AppRoutes } from '../App';
-import type { Organization } from '../api/types';
+import type { Collection, Organization } from '../api/types';
 import { classifyOrganizationDisplay, evidenceSourceLabel } from '../lib/organization';
 import { createTestAdapter } from '../test-adapter/mockServer';
 
@@ -1461,5 +1461,462 @@ describe('organization display helpers', () => {
       await Promise.resolve();
     });
     expect(screen.getByRole('heading', { name: '刚编辑保存的新标题' })).toBeInTheDocument();
+  });
+
+  it('recovers eligible settled invalid_model_output / model_output_truncated once with explicit confirmation, resends same key on network error, blocks double-click, and supports blocked quota requeue', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+
+    const targetProj = await adapter.createProject(
+      { name: 'AI工程实践', description: '工程实践资料', focus_points: ['代理工作流'] },
+      'proj-recover-target-1',
+    );
+
+    const created = await adapter.createCollection(
+      {
+        id: 'aaaaaaaa-1111-4111-8111-111111111111',
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '代理工作流截断恢复实测' }] }],
+          },
+        },
+        intent: '归入AI工程实践',
+        manual_title: '代理工作流实践',
+        original_url: 'https://example.org/agent-workflow',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-recover-setup-1',
+    );
+    const baseCol = await adapter.setReadState(created.id, { read: true });
+    const legacyRunId = 'aaaaaaaa-2222-4222-8222-222222222222';
+    const quotaBlockedRunId = 'aaaaaaaa-3333-4333-8333-333333333333';
+
+    let serverState: Collection = {
+      ...baseCol,
+      ai_excluded: false,
+      web_archive_available: true,
+      organization: {
+        ...baseCol.organization,
+        run_id: legacyRunId,
+        status: 'failed',
+        error_code: 'invalid_model_output',
+        web_archive_retry_available: false,
+        web_archive_recovery_available: true,
+      },
+    };
+
+    const origGet = adapter.getCollection.bind(adapter);
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === baseCol.id) return structuredClone(serverState);
+      return origGet(id, signal);
+    });
+    const restartSpy = vi.spyOn(adapter, 'restartOrganization');
+    const archiveSpy = vi.spyOn(adapter, 'archiveWebCollection');
+
+    let resolveRecover!: (org: Organization) => void;
+    const recoverSpy = vi.spyOn(adapter, 'recoverWebArchive');
+
+    // 1. Settled legacy invalid_model_output with recovery available: single explicit CTA, zero drawer generic retry, no truncation claim on legacy error
+    const view1 = renderApp([`/collections/${baseCol.id}`], adapter);
+    const region1 = await screen.findByRole('region', { name: '归类结果' });
+    expect(within(region1).getByText(/上次网页归类已产生计费记录并保留/)).toBeInTheDocument();
+    expect(within(region1).queryByText(/截断/)).not.toBeInTheDocument();
+    expect(within(region1).getByRole('button', { name: '重试网页归类' })).toBeInTheDocument();
+    await user.click(within(region1).getByText('更多管理与整理详情'));
+    expect(within(region1).queryByRole('button', { name: /重试整理|重新整理|按网页内容归类|确认重新归类/ })).not.toBeInTheDocument();
+    expect(recoverSpy).not.toHaveBeenCalled();
+
+    // Open explicit confirmation panel -> unknown network error -> resend with EXACT same Idempotency-Key
+    await user.click(within(region1).getByRole('button', { name: '重试网页归类' }));
+    const confirmRegion1 = within(region1).getByRole('region', { name: '确认重试网页归类' });
+    expect(within(confirmRegion1).getByText(/发送时会再次使用 AI 额度/)).toBeInTheDocument();
+
+    recoverSpy.mockRejectedValueOnce(new Error('网络断开'));
+    await user.click(within(confirmRegion1).getByRole('button', { name: '确认重新归类' }));
+    await within(region1).findByText(/尚未确认恢复提交结果/);
+
+    // Next click simulates in-flight promise to also verify synchronous double-click guard
+    recoverSpy.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          resolveRecover = res;
+        }),
+    );
+    const confirmBtn = within(confirmRegion1).getByRole('button', { name: '确认重新归类' });
+    await act(async () => {
+      confirmBtn.click();
+      confirmBtn.click();
+    });
+    expect(recoverSpy).toHaveBeenCalledTimes(2);
+    expect(recoverSpy.mock.calls[0][1]).toEqual({
+      run_id: legacyRunId,
+      base_decision_version: baseCol.decision_version,
+    });
+    expect(recoverSpy.mock.calls[1][1]).toEqual(recoverSpy.mock.calls[0][1]);
+    expect(recoverSpy.mock.calls[1][2]).toBe(recoverSpy.mock.calls[0][2]);
+
+    // Worker enters blocked quota_exceeded with zero dispatch -> keeps web_archive_recovery_available=true with quotaBlockedRunId
+    const queuedOrg: Organization = {
+      ...serverState.organization,
+      run_id: quotaBlockedRunId,
+      status: 'queued',
+      error_code: undefined,
+      web_archive_recovery_available: undefined,
+    };
+    serverState = {
+      ...serverState,
+      organization: {
+        ...queuedOrg,
+        status: 'blocked',
+        error_code: 'quota_exceeded',
+        web_archive_recovery_available: true,
+      },
+    };
+    await act(async () => {
+      resolveRecover(queuedOrg);
+      await Promise.resolve();
+    });
+
+    // Re-confirming blocked quota recovery MUST send current quotaBlockedRunId + NEW Idempotency-Key
+    const requeueTrigger = await within(region1).findByRole('button', { name: '重试网页归类' });
+    await user.click(requeueTrigger);
+    const requeueConfirm = within(region1).getByRole('region', { name: '确认重试网页归类' });
+    recoverSpy.mockImplementationOnce(async () => {
+      const linkedOrg = {
+        ...serverState.organization,
+        run_id: quotaBlockedRunId,
+        status: 'succeeded' as const,
+        error_code: undefined,
+        web_archive_status: 'linked' as const,
+        web_archive_recovery_available: undefined,
+      };
+      serverState = {
+        ...serverState,
+        decision_version: serverState.decision_version + 1,
+        projects: [
+          {
+            project_id: targetProj.id,
+            name: targetProj.name,
+            decision: 'auto',
+            reason: '匹配 AI工程实践',
+            evidence: [{ source_id: 'page_title', quote: '代理工作流实践' }],
+          },
+        ],
+        organization: linkedOrg,
+      };
+      return { ...linkedOrg, status: 'queued' as const };
+    });
+
+    await user.click(within(requeueConfirm).getByRole('button', { name: '确认重新排队' }));
+    expect(recoverSpy).toHaveBeenCalledTimes(3);
+    expect(recoverSpy.mock.calls[2][1]).toEqual({
+      run_id: quotaBlockedRunId,
+      base_decision_version: baseCol.decision_version,
+    });
+    expect(recoverSpy.mock.calls[2][2]).not.toBe(recoverSpy.mock.calls[0][2]);
+
+    expect((await within(region1).findAllByRole('link', { name: targetProj.name })).length).toBeGreaterThan(0);
+    expect(within(region1).queryByRole('button', { name: /重新整理|重试整理|重试网页归类|确认重新归类|确认重新排队/ })).not.toBeInTheDocument();
+    expect(restartSpy).not.toHaveBeenCalled();
+    expect(archiveSpy).not.toHaveBeenCalled();
+    view1.unmount();
+
+    // 2. New model_output_truncated failure shows readable truncation copy and single explicit recovery action
+    serverState = {
+      ...baseCol,
+      ai_excluded: false,
+      web_archive_available: true,
+      projects: [],
+      organization: {
+        ...baseCol.organization,
+        run_id: 'aaaaaaaa-4444-4444-8444-444444444444',
+        status: 'failed',
+        error_code: 'model_output_truncated',
+        web_archive_retry_available: false,
+        web_archive_recovery_available: true,
+      },
+    };
+    renderApp([`/collections/${baseCol.id}`], adapter);
+    const region2 = await screen.findByRole('region', { name: '归类结果' });
+    expect(within(region2).getByText('生成结果被截断')).toBeInTheDocument();
+    expect(within(region2).getByText(/模型输出内容过长而被截断/)).toBeInTheDocument();
+    expect(within(region2).getByRole('button', { name: '重试网页归类' })).toBeInTheDocument();
+  });
+
+  it('never renders fake retry or generic restart buttons for existing results, usage_uncertain, second failures, or ineligible states', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+
+    const proj = await adapter.createProject(
+      { name: '归档已定项目', description: '测试', focus_points: ['归档'] },
+      'proj-no-fake-retry-1',
+    );
+    const created = await adapter.createCollection(
+      {
+        id: 'bbbbbbbb-1111-4111-8111-111111111111',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: '校验禁止假重试',
+        manual_title: '禁假重试样本',
+        original_url: 'https://example.org/no-fake-retry',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-no-fake-retry-1',
+    );
+    const baseCol = await adapter.setReadState(created.id, { read: true });
+    let activeSnapshot = structuredClone(baseCol);
+    const origGet = adapter.getCollection.bind(adapter);
+    vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === baseCol.id) return structuredClone(activeSnapshot);
+      return origGet(id, signal);
+    });
+
+    const cases = [
+      {
+        name: 'already has auto project result',
+        patch: {
+          ai_excluded: false,
+          web_archive_available: true,
+          projects: [{ project_id: proj.id, name: proj.name, decision: 'auto' as const }],
+          organization: {
+            ...baseCol.organization,
+            run_id: 'bbbbbbbb-2222-4222-8222-222222222222',
+            status: 'succeeded' as const,
+            web_archive_status: 'linked' as const,
+            web_archive_recovery_available: true,
+          },
+        },
+      },
+      {
+        name: 'failed usage_uncertain',
+        patch: {
+          ai_excluded: false,
+          web_archive_available: true,
+          projects: [],
+          organization: {
+            ...baseCol.organization,
+            run_id: 'bbbbbbbb-3333-4333-8333-333333333333',
+            status: 'failed' as const,
+            error_code: 'usage_uncertain',
+            web_archive_retry_available: true,
+            web_archive_recovery_available: true,
+          },
+        },
+      },
+      {
+        name: 'second failure without recovery eligibility',
+        patch: {
+          ai_excluded: false,
+          web_archive_available: true,
+          projects: [],
+          organization: {
+            ...baseCol.organization,
+            run_id: 'bbbbbbbb-4444-4444-8444-444444444444',
+            status: 'failed' as const,
+            error_code: 'model_output_truncated',
+            web_archive_retry_available: false,
+            web_archive_recovery_available: false,
+          },
+        },
+      },
+      {
+        name: 'succeeded no_match without consent/recovery',
+        patch: {
+          ai_excluded: false,
+          web_archive_available: true,
+          projects: [],
+          organization: {
+            ...baseCol.organization,
+            run_id: 'bbbbbbbb-5555-4555-8555-555555555555',
+            status: 'succeeded' as const,
+            error_code: undefined,
+            web_archive_status: 'no_match' as const,
+          },
+        },
+      },
+      {
+        name: 'ineligible trial account even if recovery flag present',
+        trialIneligible: true,
+        patch: {
+          ai_excluded: false,
+          web_archive_available: true,
+          projects: [],
+          organization: {
+            ...baseCol.organization,
+            run_id: 'bbbbbbbb-6666-4666-8666-666666666666',
+            status: 'failed' as const,
+            error_code: 'invalid_model_output',
+            web_archive_retry_available: false,
+            web_archive_recovery_available: true,
+          },
+        },
+      },
+    ];
+
+    for (const c of cases) {
+      adapter.setMockTrialEligibility({
+        ai_platform_enabled: true,
+        ai_trial_eligible: !c.trialIneligible,
+      });
+      activeSnapshot = { ...baseCol, ...c.patch };
+      const view = renderApp([`/collections/${baseCol.id}`], adapter);
+      const region = await screen.findByRole('region', { name: '归类结果' });
+      await user.click(within(region).getByText('更多管理与整理详情'));
+      expect(
+        within(region).queryByRole('button', {
+          name: /重新整理|重试整理|按网页内容归类|重试网页归类|确认重新归类|确认重新排队/,
+        }),
+        `unexpected retry trigger for case: ${c.name}`,
+      ).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it('retains idempotency key on 409 operation_in_progress, rotates after explicit 409 rejection, and isolates late recovery callbacks across navigation', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+
+    const colA = await adapter.createCollection(
+      {
+        id: 'cccccccc-1111-4111-8111-111111111111',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: 'A恢复延迟',
+        manual_title: '收藏A',
+        original_url: 'https://example.org/col-a',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-recover-guard-a',
+    );
+    const colB = await adapter.createCollection(
+      {
+        id: 'cccccccc-2222-4222-8222-222222222222',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: 'B独立确认',
+        manual_title: '收藏B',
+        original_url: 'https://example.org/col-b',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-recover-guard-b',
+    );
+    const readA = await adapter.setReadState(colA.id, { read: true });
+    const readB = await adapter.setReadState(colB.id, { read: true });
+
+    const snapA: Collection = {
+      ...readA,
+      ai_excluded: false,
+      web_archive_available: true,
+      organization: {
+        ...readA.organization,
+        run_id: 'cccccccc-3333-4333-8333-333333333333',
+        status: 'failed',
+        error_code: 'invalid_model_output',
+        web_archive_retry_available: false,
+        web_archive_recovery_available: true,
+      },
+    };
+    const snapB: Collection = {
+      ...readB,
+      ai_excluded: false,
+      web_archive_available: true,
+      organization: {
+        ...readB.organization,
+        run_id: 'cccccccc-4444-4444-8444-444444444444',
+        status: 'failed',
+        error_code: 'model_output_truncated',
+        web_archive_retry_available: false,
+        web_archive_recovery_available: true,
+      },
+    };
+
+    const origGet = adapter.getCollection.bind(adapter);
+    const getSpy = vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === colA.id) return structuredClone(snapA);
+      if (id === colB.id) return structuredClone(snapB);
+      return origGet(id, signal);
+    });
+
+    const { ApiError } = await import('../api/errors');
+    let resolveLateA!: (org: Organization) => void;
+    const recoverSpy = vi
+      .spyOn(adapter, 'recoverWebArchive')
+      .mockRejectedValueOnce(new ApiError({ status: 409, code: 'operation_in_progress', message: '请求仍在处理' }))
+      .mockRejectedValueOnce(new ApiError({ status: 409, code: 'web_archive_recovery_unavailable', message: '恢复资格已消费' }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((res) => {
+            resolveLateA = res;
+          }),
+      );
+
+    // Part 1: 409 operation_in_progress preserves key; explicit 409 rotates key
+    const vNav = render(
+      <MemoryRouter initialEntries={[`/collections/${colA.id}`]}>
+        <AppProviders api={adapter}>
+          <Link to={`/collections/${colB.id}`}>切换到B</Link>
+          <AppRoutes />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByRole('button', { name: '重试网页归类' }));
+    await user.click(screen.getByRole('button', { name: '确认重新归类' }));
+    await screen.findByText(/沿用原请求标识/);
+
+    // Next click after 409 operation_in_progress MUST reuse the exact same key; hits explicit 409 -> clears key
+    await user.click(screen.getByRole('button', { name: '确认重新归类' }));
+    expect(recoverSpy).toHaveBeenCalledTimes(2);
+    expect(recoverSpy.mock.calls[1][2]).toBe(recoverSpy.mock.calls[0][2]);
+    await screen.findByText('恢复资格已消费');
+
+    // Opening & submitting again MUST generate a NEW key after explicit 409 rejection, then switch A -> B while inflight
+    await user.click(await screen.findByRole('button', { name: '重试网页归类' }));
+    await user.click(screen.getByRole('button', { name: '确认重新归类' }));
+    expect(recoverSpy).toHaveBeenCalledTimes(3);
+    expect(recoverSpy.mock.calls[2][2]).not.toBe(recoverSpy.mock.calls[1][2]);
+
+    // Navigate in the same mounted CollectionDetailPage from A -> B and open B's confirmation panel before A's late 202 resolves
+    getSpy.mockClear();
+    await user.click(screen.getByRole('link', { name: '切换到B' }));
+    await user.click(await screen.findByRole('button', { name: '重试网页归类' }));
+    const confirmB = screen.getByRole('region', { name: '确认重试网页归类' });
+    const getBCountBefore = getSpy.mock.calls.filter(([id]) => id === colB.id).length;
+
+    await act(async () => {
+      resolveLateA({ ...snapA.organization, status: 'queued' });
+      await Promise.resolve();
+    });
+
+    // Late A response MUST NOT close B's confirmation, show A's toast on B, or refetch B
+    expect(confirmB).toBeInTheDocument();
+    expect(screen.queryByText('已提交网页恢复归类请求')).not.toBeInTheDocument();
+    expect(getSpy.mock.calls.filter(([id]) => id === colB.id).length).toBe(getBCountBefore);
+    vNav.unmount();
   });
 });

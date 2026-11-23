@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -129,7 +130,16 @@ type runSnapshot struct {
 	Created                      time.Time
 	ImageWaiting                 bool
 	WebArchive                   bool
+	WebArchiveRecovery           bool
+	WebArchiveDecisionVersion    int64
 	ImagePolicyVersion           int64
+}
+
+func (r runSnapshot) attemptLimit(configured int) int {
+	if r.WebArchiveRecovery {
+		return 1
+	}
+	return configured
 }
 
 func lockOrganization(ctx context.Context, tx pgx.Tx, uid, run string) (runSnapshot, error) {
@@ -137,7 +147,12 @@ func lockOrganization(ctx context.Context, tx pgx.Tx, uid, run string) (runSnaps
 	if _, err := store.New(tx).LockUserChanges(ctx, idPG(uid)); err != nil {
 		return r, err
 	}
-	err := tx.QueryRow(ctx, `SELECT collection_id,content_version,user_policy_version,collection_policy_version,status,attempts,created_at,image_waiting,web_archive FROM organization_runs WHERE user_id=$1 AND id=$2 FOR UPDATE`, uid, run).Scan(&r.CollectionID, &r.CV, &r.UV, &r.PV, &r.State, &r.Attempts, &r.Created, &r.ImageWaiting, &r.WebArchive)
+	err := tx.QueryRow(ctx, `SELECT collection_id,content_version,user_policy_version,collection_policy_version,status,attempts,
+		CASE WHEN web_archive_recovery_of IS NOT NULL THEN COALESCE(started_at,updated_at) ELSE created_at END,
+		image_waiting,web_archive,web_archive_recovery_of IS NOT NULL,coalesce(web_archive_decision_version,0)
+		FROM organization_runs WHERE user_id=$1 AND id=$2 FOR UPDATE`, uid, run).
+		Scan(&r.CollectionID, &r.CV, &r.UV, &r.PV, &r.State, &r.Attempts, &r.Created, &r.ImageWaiting, &r.WebArchive,
+			&r.WebArchiveRecovery, &r.WebArchiveDecisionVersion)
 	return r, err
 }
 func (w *TextWorker) runValidity(ctx context.Context, tx pgx.Tx, r runSnapshot) (string, error) {
@@ -146,16 +161,18 @@ func (w *TextWorker) runValidity(ctx context.Context, tx pgx.Tx, r runSnapshot) 
 	}
 	var enabled, excluded bool
 	var status string
-	var cv, uv, pv int64
+	var cv, uv, pv, decision int64
 	var deleted *time.Time
-	err := tx.QueryRow(ctx, `SELECT u.ai_enabled,u.status,u.ai_policy_version,c.content_version,c.ai_policy_version,c.ai_excluded,c.deleted_at FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, r.UID, r.CollectionID).Scan(&enabled, &status, &uv, &cv, &pv, &excluded, &deleted)
+	err := tx.QueryRow(ctx, `SELECT u.ai_enabled,u.status,u.ai_policy_version,c.content_version,c.ai_policy_version,c.ai_excluded,c.deleted_at,c.decision_version
+		FROM collections c JOIN users u ON u.id=c.user_id WHERE c.user_id=$1 AND c.id=$2`, r.UID, r.CollectionID).
+		Scan(&enabled, &status, &uv, &cv, &pv, &excluded, &deleted, &decision)
 	if err != nil {
 		return "", err
 	}
 	if deleted != nil {
 		return "collection_in_trash", nil
 	}
-	if cv != r.CV || uv != r.UV || pv != r.PV {
+	if cv != r.CV || uv != r.UV || pv != r.PV || r.WebArchiveRecovery && decision != r.WebArchiveDecisionVersion {
 		return "input_changed", nil
 	}
 	if !enabled || status != "active" {
@@ -418,6 +435,16 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 		schema["required"] = required
 	}
 	properties["project_candidates"].(map[string]any)["maxItems"] = 1
+	if input.webArchive {
+		evidence := schema["definitions"].(map[string]any)["Evidence"].(map[string]any)
+		evidence["maxItems"] = 1
+		evidence["items"].(map[string]any)["properties"].(map[string]any)["quote"].(map[string]any)["maxLength"] = 48
+		properties["summary"].(map[string]any)["maxLength"] = 96
+		project := properties["project_candidates"].(map[string]any)["items"].(map[string]any)
+		project["properties"].(map[string]any)["reason"].(map[string]any)["maxLength"] = 80
+		topic := properties["topic_candidate"].(map[string]any)
+		topic["properties"].(map[string]any)["reason"].(map[string]any)["maxLength"] = 80
+	}
 	tagSchema := properties["tag_candidates"].(map[string]any)
 	tagItem := tagSchema["items"].(map[string]any)
 	if !input.createTags {
@@ -444,6 +471,7 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 		if input.webArchive {
 			system = strings.Replace(system, "(original_text or intent)", "(page_title, original_text or intent)", 1)
 			system += " For this saved webpage, use only the explicitly saved title, text and intent as evidence. Choose one clearly relevant existing project. If none fits and the evidence establishes a specific reusable subject, provide one topic_candidate with an exact quote. Never return both. If the material is generic or lacks a clear subject, leave both empty."
+			system += ` Emit one compact JSON object without markdown or analysis. Use one short exact quote per item and a short reason. Omit summary when optional and redundant (use null if required). No-match example: {"title":"Saved reference","summary":null,"tag_candidates":[],"project_candidates":[],"topic_candidate":null}.`
 		}
 		if input.archivesProject() {
 			system += " Prefer a distinctive umbrella subject in 2–6 Chinese characters when appropriate, at most 12 characters. Avoid vague names, copying an entire note title or truncating it mid-phrase. 值班发布流程与回滚演练记录 → 应用交付 (labels 发布流程, 回滚演练); 花圃滴灌与周日修剪记录 → 园艺养护 (labels 滴灌, 修剪)."
@@ -454,6 +482,12 @@ func modelPayload(route AIRoute, cfg AIConfig, input textInput) ([]byte, int64, 
 			system = strings.Replace(system, emptyTags, "tag_candidates may select up to three relevant entries from tags. Copy tag_id and name exactly without duplicates", 1)
 		}
 		body := map[string]any{"model": route.Model, "stream": false, "max_tokens": route.MaxOutputTokens, "messages": []any{map[string]any{"role": "system", "content": system}, map[string]any{"role": "user", "content": string(jsonBytes(input))}}}
+		if input.webArchive && route.Model == "deepseek-flash" {
+			endpoint, err := url.Parse(route.Endpoint)
+			if err == nil && endpoint.Scheme == "https" && endpoint.Host == "api.deepseek.com" {
+				body["thinking"] = map[string]string{"type": "disabled"}
+			}
+		}
 		switch route.OutputMode {
 		case "json_object":
 			body["response_format"] = map[string]any{"type": "json_object"}
@@ -620,7 +654,7 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 		}
 		return "", "usage_uncertain", tx.Commit(ctx)
 	}
-	if r.Attempts >= w.Config.MaxAttempts {
+	if r.Attempts >= r.attemptLimit(w.Config.MaxAttempts) {
 		if err = setRunState(ctx, tx, r, "failed", "attempts_exhausted"); err != nil {
 			return "", "", err
 		}
@@ -659,7 +693,9 @@ func (w *TextWorker) reserve(ctx context.Context, r runSnapshot, route AIRoute, 
 			return "", "", err
 		}
 	} else {
-		if _, err = tx.Exec(ctx, `UPDATE organization_runs SET project_snapshot=$3,image_extraction_ids=$4 WHERE user_id=$1 AND id=$2`, r.UID, r.ID, jsonBytes(input.Projects), input.imageKeys); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE organization_runs SET project_snapshot=$3,image_extraction_ids=$4,
+			web_archive_decision_version=CASE WHEN web_archive THEN COALESCE(web_archive_decision_version,$5) END
+			WHERE user_id=$1 AND id=$2`, r.UID, r.ID, jsonBytes(input.Projects), input.imageKeys, input.decisionVersion); err != nil {
 			return "", "", err
 		}
 	}
@@ -721,7 +757,7 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 		}
 		return false, tx.Commit(ctx)
 	}
-	if out.Retryable && (out.SafeFailure || !out.Sent) && r.Attempts < w.Config.MaxAttempts {
+	if out.Retryable && (out.SafeFailure || !out.Sent) && r.Attempts < r.attemptLimit(w.Config.MaxAttempts) {
 		if err = tx.Commit(ctx); err != nil {
 			return false, err
 		}
@@ -878,11 +914,12 @@ func (w *TextWorker) Work(ctx context.Context, job *river.Job[TextOrganizationAr
 	}
 	// A recovered run may already have consumed its last configured attempt.
 	// Reconcile its durable reservation before the retry loop can be skipped.
-	if r.Attempts >= w.Config.MaxAttempts {
+	maxAttempts := r.attemptLimit(w.Config.MaxAttempts)
+	if r.Attempts >= maxAttempts {
 		_, _, err = w.reserve(ctx, r, w.Config.Routes[0], input, 0)
 		return err
 	}
-	for attempt := r.Attempts; attempt < w.Config.MaxAttempts; attempt++ {
+	for attempt := r.Attempts; attempt < maxAttempts; attempt++ {
 		routeIndex := min(attempt, len(w.Config.Routes)-1)
 		var route AIRoute
 		found := false

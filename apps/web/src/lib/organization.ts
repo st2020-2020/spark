@@ -132,9 +132,11 @@ export function organizationErrorMessage(errorCode?: string): string {
     case 'invalid_model_output':
     case 'invalid_output':
     case 'schema_validation_failed':
-      return '本次生成结果未通过内容与引用校验，已自动舍弃并保留原文，可点击重试整理。';
+      return '本次生成结果未通过内容与引用校验，已自动舍弃并保留原文。';
+    case 'model_output_truncated':
+      return '模型输出内容过长而被截断，未能生成完整归类结果；原文与已确认的项目关联均未受影响。';
     case 'usage_uncertain':
-      return '本次整理计费确认超时，原文已安全保存，请稍后刷新或重试整理。';
+      return '本次整理计费确认超时，原文已安全保存，当前用量待核对。';
     case 'image_material_timeout':
       return '等待图片识别超时，本次整理未使用图片材料。识别完成后可重新整理。';
     case 'queue_expired':
@@ -160,6 +162,12 @@ export function classifyOrganizationDisplay(params: {
 }): OrganizationDisplayModel {
   const { organization, aiEnabled, aiExcluded, projects } = params;
   const errCode = organization.error_code;
+  const isWebArchiveLedgerBlocked = organization.web_archive_retry_available === false;
+  const hasRecoveryAction = organization.web_archive_recovery_available === true;
+  const webArchiveSettled =
+    organization.web_archive_status === 'linked' ||
+    organization.web_archive_status === 'created' ||
+    organization.web_archive_status === 'no_match';
   const hasSuggestedOrEffective = projects.some(
     (p) =>
       p.decision === 'suggested' ||
@@ -209,13 +217,25 @@ export function classifyOrganizationDisplay(params: {
     };
   }
 
+  if (errCode === 'usage_uncertain' && (organization.status === 'failed' || organization.status === 'blocked')) {
+    return {
+      kind: organization.status === 'blocked' ? 'quota_exceeded' : 'failed',
+      badgeLabel: organization.status === 'blocked' ? '额度待核对' : '用量待核对',
+      pillTone: 'warning',
+      description: organizationErrorMessage('usage_uncertain'),
+      canTrigger: false,
+      triggerLabel: '重新整理',
+      noProjectSuggestion: false,
+    };
+  }
+
   if (organization.status === 'blocked' || errCode === 'quota_exceeded') {
     return {
       kind: 'quota_exceeded',
       badgeLabel: '额度不足暂停',
       pillTone: 'warning',
       description: organizationErrorMessage('quota_exceeded'),
-      canTrigger: aiEnabled,
+      canTrigger: aiEnabled && !isWebArchiveLedgerBlocked && !hasRecoveryAction,
       triggerLabel: '重试整理',
       noProjectSuggestion: false,
     };
@@ -282,7 +302,7 @@ export function classifyOrganizationDisplay(params: {
       badgeLabel: '整理失败',
       pillTone: 'danger',
       description: organizationErrorMessage(errCode),
-      canTrigger: true,
+      canTrigger: !isWebArchiveLedgerBlocked && !hasRecoveryAction,
       triggerLabel: '重试整理',
       noProjectSuggestion: false,
     };
@@ -309,7 +329,7 @@ export function classifyOrganizationDisplay(params: {
         description: errCode === 'project_changed'
           ? '项目已更新，本次项目建议未应用，可重新整理'
           : '已保留整理结果。本次未能确定合适的项目名称，你可以手动选择项目。',
-        canTrigger: true,
+        canTrigger: !isWebArchiveLedgerBlocked && !hasRecoveryAction,
         triggerLabel: '重新整理',
         noProjectSuggestion: false,
       };
@@ -332,7 +352,7 @@ export function classifyOrganizationDisplay(params: {
       badgeLabel: '部分完成',
       pillTone: 'warning',
       description: '部分整理阶段未完成。可查看各阶段的状态，或重新整理。',
-      canTrigger: true,
+      canTrigger: !isWebArchiveLedgerBlocked && !hasRecoveryAction,
       triggerLabel: '重试整理',
       noProjectSuggestion: false,
     };
@@ -366,7 +386,7 @@ export function classifyOrganizationDisplay(params: {
         ? '有项目建议待确认，可查看引文后加入项目或忽略。'
         : projects.length ? '本次整理已完成，当前没有待确认的项目建议。'
         : '已完成整理，暂无匹配的项目建议；你仍可手动将本条加入项目。'),
-      canTrigger: true,
+      canTrigger: !webArchiveSettled && !isWebArchiveLedgerBlocked && !hasRecoveryAction,
       triggerLabel: '重新整理',
       noProjectSuggestion: !hasSuggestedOrEffective,
     };
@@ -381,7 +401,7 @@ export function classifyOrganizationDisplay(params: {
       errCode
         ? organizationErrorMessage(errCode)
         : '该条保存时尚未执行自动整理，可点击「重新整理」按最新内容加入队列。',
-    canTrigger: true,
+    canTrigger: !isWebArchiveLedgerBlocked && !hasRecoveryAction,
     triggerLabel: '重新整理',
     noProjectSuggestion: false,
   };
@@ -400,6 +420,7 @@ export type CollectionFilingNextStepKind =
   | 'enable_item_ai'
   | 'open_consent'
   | 'open_web_archive'
+  | 'recover_web_archive'
   | 'restart_org'
   | 'edit_collection'
   | 'manual_select'
@@ -474,10 +495,28 @@ export function classifyCollectionFiling(params: {
   const webArchiveBlockedByLedger =
     isOrgFailedOrBlocked && organization.web_archive_retry_available === false;
   const webArchiveAvailable = Boolean(collection.web_archive_available);
+  const isRecoveryAvailable =
+    isOrgFailedOrBlocked && organization.web_archive_recovery_available === true && Boolean(organization.run_id);
+  const canShowWebArchiveRecovery =
+    !isInTrash &&
+    !aiExcluded &&
+    !isActive &&
+    effectiveProjects.length === 0 &&
+    suggestedProjects.length === 0 &&
+    errCode !== 'usage_uncertain' &&
+    isRecoveryAvailable &&
+    aiEnabled &&
+    hasWebArchiveConsent &&
+    aiPlatformEnabled &&
+    aiTrialEligible;
   const canShowWebArchive =
     !isInTrash &&
     !aiExcluded &&
     !isActive &&
+    effectiveProjects.length === 0 &&
+    suggestedProjects.length === 0 &&
+    errCode !== 'usage_uncertain' &&
+    !isRecoveryAvailable &&
     webArchiveAvailable &&
     aiPlatformEnabled &&
     aiTrialEligible &&
@@ -663,7 +702,9 @@ export function classifyCollectionFiling(params: {
   }
 
   if (
-    (webArchiveStatus === 'consent_required' || errCode === 'web_archive_consent_required') &&
+    (webArchiveStatus === 'consent_required' ||
+      errCode === 'web_archive_consent_required' ||
+      isRecoveryAvailable) &&
     !hasWebArchiveConsent &&
     aiPlatformEnabled &&
     aiTrialEligible
@@ -716,8 +757,56 @@ export function classifyCollectionFiling(params: {
       };
     }
 
+    if (errCode === 'usage_uncertain') {
+      return {
+        outcome: 'pending_action',
+        badgeLabel: '仍待归类',
+        pillTone: 'warning',
+        headline: '整理用量待核对',
+        reason: organizationErrorMessage('usage_uncertain'),
+        effectiveProjects,
+        suggestedProjects,
+        rejectedProjects,
+        nextStep: manualStep,
+      };
+    }
+
     const isQuota = organization.status === 'blocked' || errCode === 'quota_exceeded';
-    const headline = isQuota ? '额度不足暂停' : '整理失败';
+    if (canShowWebArchiveRecovery) {
+      if (isQuota) {
+        return {
+          outcome: 'pending_action',
+          badgeLabel: '仍待归类',
+          pillTone: 'warning',
+          headline: '额度不足暂停',
+          reason:
+            '上次恢复任务在发送给模型前因今日 AI 额度不足而暂停，尚未产生新的模型调用；额度恢复后可再次确认重新排队。',
+          effectiveProjects,
+          suggestedProjects,
+          rejectedProjects,
+          nextStep: { kind: 'recover_web_archive', label: '重试网页归类' },
+        };
+      }
+      return {
+        outcome: 'pending_action',
+        badgeLabel: '仍待归类',
+        pillTone: 'danger',
+        headline: errCode === 'model_output_truncated' ? '生成结果被截断' : '整理失败',
+        reason: organizationErrorMessage(errCode),
+        effectiveProjects,
+        suggestedProjects,
+        rejectedProjects,
+        nextStep: { kind: 'recover_web_archive', label: '重试网页归类' },
+        ledgerBlockedNote:
+          '上次网页归类已产生计费记录并保留。如仍需自动归类，可确认重新发起一次（发送时会再次使用 AI 额度）。',
+      };
+    }
+
+    const headline = isQuota
+      ? '额度不足暂停'
+      : errCode === 'model_output_truncated'
+        ? '生成结果被截断'
+        : '整理失败';
     const reason = organizationErrorMessage(isQuota ? 'quota_exceeded' : errCode);
     const ledgerBlockedNote = webArchiveBlockedByLedger
       ? '上次网页归类已产生计费记录，为防重复计费不再提供直接重试；你可手动选择项目或编辑内容后重新整理。'
@@ -725,7 +814,7 @@ export function classifyCollectionFiling(params: {
     const nextStep: CollectionFilingNextStep =
       canShowWebArchive && organization.web_archive_retry_available === true
         ? { kind: 'open_web_archive', label: '重试网页归类' }
-        : webArchiveBlockedByLedger
+        : webArchiveBlockedByLedger || !aiPlatformEnabled || !aiTrialEligible
           ? manualStep
           : { kind: 'restart_org', label: '重试整理' };
 
@@ -790,7 +879,10 @@ export function classifyCollectionFiling(params: {
       effectiveProjects,
       suggestedProjects,
       rejectedProjects,
-      nextStep: usageUncertain ? manualStep : { kind: 'restart_org', label: orgDisplay.triggerLabel },
+      nextStep:
+        usageUncertain || !orgDisplay.canTrigger || !aiPlatformEnabled || !aiTrialEligible
+          ? manualStep
+          : { kind: 'restart_org', label: orgDisplay.triggerLabel },
     };
   }
 
@@ -884,7 +976,10 @@ export function classifyCollectionFiling(params: {
     effectiveProjects,
     suggestedProjects,
     rejectedProjects,
-    nextStep: { kind: 'restart_org', label: '重新整理' },
+    nextStep:
+      orgDisplay.canTrigger && aiPlatformEnabled && aiTrialEligible
+        ? { kind: 'restart_org', label: '重新整理' }
+        : manualStep,
   };
 }
 

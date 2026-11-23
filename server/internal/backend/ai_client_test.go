@@ -1,10 +1,25 @@
 package backend
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestCompatibleTextClientDiagnosesLengthAndPreservesUsage(t *testing.T) {
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":"synthetic reasoning"}}],"usage":{"prompt_tokens":2048,"completion_tokens":2048}}`))
+	}))
+	defer provider.Close()
+	client := NewTextClient()
+	defer client.Close()
+	out := client.Generate(t.Context(), AIRoute{Endpoint: provider.URL, MaxOutputTokens: 2048}, AIConfig{TimeoutSeconds: 2}, []byte("{}"), 4096)
+	if out.ErrorCode != modelOutputTruncated || out.Usage == nil || *out.Usage != (TokenUsage{2048, 2048}) || out.Content != "" || out.Retryable {
+		t.Fatalf("unexpected length diagnosis and usage: %+v", out)
+	}
+}
 
 func TestAIRouteConfigurationHasOneSourceForBudgets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "routes.json")
