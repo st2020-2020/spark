@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Link } from 'react-router-dom';
 import { QueryClient } from '@tanstack/react-query';
 import { AppProviders, AppRoutes } from '../App';
 import type { Collection, Organization } from '../api/types';
@@ -1787,5 +1787,136 @@ describe('organization display helpers', () => {
       ).not.toBeInTheDocument();
       view.unmount();
     }
+  });
+
+  it('retains idempotency key on 409 operation_in_progress, rotates after explicit 409 rejection, and isolates late recovery callbacks across navigation', async () => {
+    const user = userEvent.setup();
+    const adapter = createTestAdapter();
+    await adapter.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+    await adapter.updatePreferences({
+      ai_enabled: true,
+      consent_version: 'spark-ai-extension-archive-v1',
+    });
+
+    const colA = await adapter.createCollection(
+      {
+        id: 'cccccccc-1111-4111-8111-111111111111',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: 'A恢复延迟',
+        manual_title: '收藏A',
+        original_url: 'https://example.org/col-a',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-recover-guard-a',
+    );
+    const colB = await adapter.createCollection(
+      {
+        id: 'cccccccc-2222-4222-8222-222222222222',
+        document: { schema_version: 1, content: { type: 'doc', content: [] } },
+        intent: 'B独立确认',
+        manual_title: '收藏B',
+        original_url: 'https://example.org/col-b',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+        ai_excluded: true,
+      },
+      'col-recover-guard-b',
+    );
+    const readA = await adapter.setReadState(colA.id, { read: true });
+    const readB = await adapter.setReadState(colB.id, { read: true });
+
+    const snapA: Collection = {
+      ...readA,
+      ai_excluded: false,
+      web_archive_available: true,
+      organization: {
+        ...readA.organization,
+        run_id: 'cccccccc-3333-4333-8333-333333333333',
+        status: 'failed',
+        error_code: 'invalid_model_output',
+        web_archive_retry_available: false,
+        web_archive_recovery_available: true,
+      },
+    };
+    const snapB: Collection = {
+      ...readB,
+      ai_excluded: false,
+      web_archive_available: true,
+      organization: {
+        ...readB.organization,
+        run_id: 'cccccccc-4444-4444-8444-444444444444',
+        status: 'failed',
+        error_code: 'model_output_truncated',
+        web_archive_retry_available: false,
+        web_archive_recovery_available: true,
+      },
+    };
+
+    const origGet = adapter.getCollection.bind(adapter);
+    const getSpy = vi.spyOn(adapter, 'getCollection').mockImplementation(async (id, signal) => {
+      if (id === colA.id) return structuredClone(snapA);
+      if (id === colB.id) return structuredClone(snapB);
+      return origGet(id, signal);
+    });
+
+    const { ApiError } = await import('../api/errors');
+    let resolveLateA!: (org: Organization) => void;
+    const recoverSpy = vi
+      .spyOn(adapter, 'recoverWebArchive')
+      .mockRejectedValueOnce(new ApiError({ status: 409, code: 'operation_in_progress', message: '请求仍在处理' }))
+      .mockRejectedValueOnce(new ApiError({ status: 409, code: 'web_archive_recovery_unavailable', message: '恢复资格已消费' }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((res) => {
+            resolveLateA = res;
+          }),
+      );
+
+    // Part 1: 409 operation_in_progress preserves key; explicit 409 rotates key
+    const vNav = render(
+      <MemoryRouter initialEntries={[`/collections/${colA.id}`]}>
+        <AppProviders api={adapter}>
+          <Link to={`/collections/${colB.id}`}>切换到B</Link>
+          <AppRoutes />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+    await user.click(await screen.findByRole('button', { name: '重试网页归类' }));
+    await user.click(screen.getByRole('button', { name: '确认重新归类' }));
+    await screen.findByText(/沿用原请求标识/);
+
+    // Next click after 409 operation_in_progress MUST reuse the exact same key; hits explicit 409 -> clears key
+    await user.click(screen.getByRole('button', { name: '确认重新归类' }));
+    expect(recoverSpy).toHaveBeenCalledTimes(2);
+    expect(recoverSpy.mock.calls[1][2]).toBe(recoverSpy.mock.calls[0][2]);
+    await screen.findByText('恢复资格已消费');
+
+    // Opening & submitting again MUST generate a NEW key after explicit 409 rejection, then switch A -> B while inflight
+    await user.click(await screen.findByRole('button', { name: '重试网页归类' }));
+    await user.click(screen.getByRole('button', { name: '确认重新归类' }));
+    expect(recoverSpy).toHaveBeenCalledTimes(3);
+    expect(recoverSpy.mock.calls[2][2]).not.toBe(recoverSpy.mock.calls[1][2]);
+
+    // Navigate in the same mounted CollectionDetailPage from A -> B and open B's confirmation panel before A's late 202 resolves
+    getSpy.mockClear();
+    await user.click(screen.getByRole('link', { name: '切换到B' }));
+    await user.click(await screen.findByRole('button', { name: '重试网页归类' }));
+    const confirmB = screen.getByRole('region', { name: '确认重试网页归类' });
+    const getBCountBefore = getSpy.mock.calls.filter(([id]) => id === colB.id).length;
+
+    await act(async () => {
+      resolveLateA({ ...snapA.organization, status: 'queued' });
+      await Promise.resolve();
+    });
+
+    // Late A response MUST NOT close B's confirmation, show A's toast on B, or refetch B
+    expect(confirmB).toBeInTheDocument();
+    expect(screen.queryByText('已提交网页恢复归类请求')).not.toBeInTheDocument();
+    expect(getSpy.mock.calls.filter(([id]) => id === colB.id).length).toBe(getBCountBefore);
+    vNav.unmount();
   });
 });

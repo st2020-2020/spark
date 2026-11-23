@@ -223,6 +223,7 @@ export function CollectionDetailPage() {
   const webArchiveKeyRef = useRef<string>(generateIdempotencyKey());
   const recoverySubmittingRef = useRef(false);
   const recoveryAttemptRef = useRef<{
+    userId: string;
     collectionId: string;
     runId: string;
     decisionVersion: number;
@@ -334,6 +335,7 @@ export function CollectionDetailPage() {
     webArchiveKeyRef.current = generateIdempotencyKey();
     setWebArchiveConfirmOpen(false);
     setWebArchiveRecoveryConfirmOpen(false);
+    recoverySubmittingRef.current = false;
     recoveryAttemptRef.current = null;
   }, [
     id,
@@ -947,6 +949,7 @@ export function CollectionDetailPage() {
     retry: false,
     networkMode: 'always',
     mutationFn: (vars: {
+      userId: string;
       collectionId: string;
       runId: string;
       baseDecisionVersion: number;
@@ -957,52 +960,122 @@ export function CollectionDetailPage() {
         { run_id: vars.runId, base_decision_version: vars.baseDecisionVersion },
         vars.key,
       ),
-    onSuccess: async (org) => {
-      recoveryAttemptRef.current = null;
+    onSuccess: async (org, vars) => {
+      if (
+        recoveryAttemptRef.current?.userId === vars.userId &&
+        recoveryAttemptRef.current?.collectionId === vars.collectionId &&
+        recoveryAttemptRef.current?.runId === vars.runId &&
+        recoveryAttemptRef.current?.key === vars.key
+      ) {
+        recoveryAttemptRef.current = null;
+      }
+      const isSameUser =
+        mountedRef.current &&
+        Boolean(activeUserIdRef.current) &&
+        activeUserIdRef.current === vars.userId;
+      if (!isSameUser) return;
+
+      const isCurrentTarget = activeCollectionIdRef.current === vars.collectionId;
+      void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      void queryClient.invalidateQueries({ queryKey: ['projects'] });
+      void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
+
+      if (!isCurrentTarget) {
+        void queryClient.invalidateQueries({
+          queryKey: ['collection', vars.collectionId],
+          exact: true,
+        });
+        return;
+      }
+
       setOrgActionError(null);
       setWebArchiveRecoveryConfirmOpen(false);
       if (isOrganizationActiveStatus(org.status)) {
         pushToast({ message: '已提交网页恢复归类请求' });
       }
       await collectionQuery.refetch();
-      void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['projects'] });
-      void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
     },
-    onError: (err) => {
+    onError: (err, vars) => {
+      const isSameUser =
+        mountedRef.current &&
+        Boolean(activeUserIdRef.current) &&
+        activeUserIdRef.current === vars.userId;
+      const isCurrentTarget = isSameUser && activeCollectionIdRef.current === vars.collectionId;
+      const matchesAttempt =
+        recoveryAttemptRef.current?.userId === vars.userId &&
+        recoveryAttemptRef.current?.collectionId === vars.collectionId &&
+        recoveryAttemptRef.current?.runId === vars.runId &&
+        recoveryAttemptRef.current?.key === vars.key;
+
       if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
-        recoveryAttemptRef.current = null;
+        if (isApiErrorCode(err, 'operation_in_progress')) {
+          if (isCurrentTarget) {
+            setOrgActionError('恢复请求正在处理中，请稍候；再次确认将沿用原请求标识。');
+          }
+          return;
+        }
+        if (matchesAttempt) {
+          recoveryAttemptRef.current = null;
+        }
+        if (!isSameUser) return;
+
         if (isApiErrorCode(err, 'web_archive_consent_required')) {
-          setOrgActionError(getFriendlyErrorMessage(err));
-          setWebArchiveRecoveryConfirmOpen(false);
-          void collectionQuery.refetch();
-          if (aiTrialEligible && aiPlatformEnabled) setConsentOpen(true);
+          if (isCurrentTarget) {
+            setOrgActionError(getFriendlyErrorMessage(err));
+            setWebArchiveRecoveryConfirmOpen(false);
+            void collectionQuery.refetch();
+            if (aiTrialEligible && aiPlatformEnabled) setConsentOpen(true);
+          } else {
+            void queryClient.invalidateQueries({
+              queryKey: ['collection', vars.collectionId],
+              exact: true,
+            });
+          }
           return;
         }
         if (
           isApiErrorCode(err, 'decision_conflict') ||
           isApiErrorCode(err, 'web_archive_recovery_unavailable') ||
           isApiErrorCode(err, 'collection_in_trash') ||
+          isApiErrorCode(err, 'organization_in_progress') ||
           isApiErrorCode(err, 'ai_excluded') ||
           isApiErrorCode(err, 'not_found') ||
           isApiErrorCode(err, 'quota_exceeded')
         ) {
-          setWebArchiveRecoveryConfirmOpen(false);
-          void collectionQuery.refetch();
           if (isApiErrorCode(err, 'quota_exceeded')) {
             void queryClient.invalidateQueries({ queryKey: ['me', 'usage'] });
           }
+          if (isCurrentTarget) {
+            setWebArchiveRecoveryConfirmOpen(false);
+            void collectionQuery.refetch();
+          } else {
+            void queryClient.invalidateQueries({
+              queryKey: ['collection', vars.collectionId],
+              exact: true,
+            });
+          }
         }
-        setOrgActionError(getFriendlyErrorMessage(err));
+        if (isCurrentTarget) {
+          setOrgActionError(getFriendlyErrorMessage(err));
+        }
         return;
       }
-      setOrgActionError(
-        '尚未确认恢复提交结果，请保持当前状态重试；再次提交将沿用原请求标识，不会重复排队或扣费。',
-      );
+
+      if (isCurrentTarget) {
+        setOrgActionError(
+          '尚未确认恢复提交结果，请保持当前状态重试；再次提交将沿用原请求标识，不会重复排队或扣费。',
+        );
+      }
     },
-    onSettled: () => {
-      recoverySubmittingRef.current = false;
+    onSettled: (_data, _err, vars) => {
+      if (
+        mountedRef.current &&
+        activeUserIdRef.current === vars.userId &&
+        activeCollectionIdRef.current === vars.collectionId
+      ) {
+        recoverySubmittingRef.current = false;
+      }
     },
   });
 
@@ -1214,9 +1287,14 @@ export function CollectionDetailPage() {
   };
 
   const handleRecoverWebSubmit = () => {
+    const isPendingForCurrent =
+      recoverWebMutation.isPending &&
+      recoverWebMutation.variables?.userId === userId &&
+      recoverWebMutation.variables?.collectionId === collection?.id;
     if (
       recoverySubmittingRef.current ||
-      recoverWebMutation.isPending ||
+      isPendingForCurrent ||
+      !userId ||
       !collection ||
       !collection.organization.run_id
     ) {
@@ -1228,12 +1306,14 @@ export function CollectionDetailPage() {
     const existing = recoveryAttemptRef.current;
     const key =
       existing &&
+      existing.userId === userId &&
       existing.collectionId === collection.id &&
       existing.runId === runId &&
       existing.decisionVersion === decisionVersion
         ? existing.key
         : generateIdempotencyKey();
     recoveryAttemptRef.current = {
+      userId,
       collectionId: collection.id,
       runId,
       decisionVersion,
@@ -1241,6 +1321,7 @@ export function CollectionDetailPage() {
     };
     setOrgActionError(null);
     recoverWebMutation.mutate({
+      userId,
       collectionId: collection.id,
       runId,
       baseDecisionVersion: decisionVersion,
@@ -1248,11 +1329,16 @@ export function CollectionDetailPage() {
     });
   };
 
+  const isRecoverPendingForCurrent =
+    recoverWebMutation.isPending &&
+    recoverWebMutation.variables?.userId === userId &&
+    recoverWebMutation.variables?.collectionId === collection.id;
+
   const nextStepPending =
     (filing.nextStep.kind === 'enable_item_ai' && aiExclusionMutation.isPending) ||
     (filing.nextStep.kind === 'restart_org' && restartOrgMutation.isPending) ||
     (filing.nextStep.kind === 'open_web_archive' && archiveWebMutation.isPending) ||
-    (filing.nextStep.kind === 'recover_web_archive' && recoverWebMutation.isPending) ||
+    (filing.nextStep.kind === 'recover_web_archive' && isRecoverPendingForCurrent) ||
     ((filing.nextStep.kind === 'retry_backfill' || filing.nextStep.kind === 'apply_backfill') &&
       backfillState === 'applying');
 
@@ -1946,10 +2032,10 @@ export function CollectionDetailPage() {
                   <button
                     type="button"
                     className="sp-btn sp-btn--sm sp-btn--primary"
-                    disabled={recoverWebMutation.isPending}
+                    disabled={isRecoverPendingForCurrent}
                     onClick={handleRecoverWebSubmit}
                   >
-                    {recoverWebMutation.isPending
+                    {isRecoverPendingForCurrent
                       ? '提交中…'
                       : collection.organization.status === 'blocked' &&
                           collection.organization.error_code === 'quota_exceeded'
@@ -1959,7 +2045,7 @@ export function CollectionDetailPage() {
                   <button
                     type="button"
                     className="sp-btn sp-btn--sm"
-                    disabled={recoverWebMutation.isPending}
+                    disabled={isRecoverPendingForCurrent}
                     onClick={() => setWebArchiveRecoveryConfirmOpen(false)}
                   >
                     取消
