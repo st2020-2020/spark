@@ -2718,6 +2718,127 @@ export function createTestAdapter(): TestAdapter {
       return nextOrg;
     },
 
+    async recoverWebArchive(id, body, idempotencyKey) {
+      const user = requireUser(true);
+      const replay = checkIdempotency<Organization>(user.id, 'recoverWebArchive', idempotencyKey, {
+        id,
+        run_id: body.run_id,
+        base_decision_version: body.base_decision_version,
+      });
+      if (replay) return replay;
+
+      const col = collections.find((c) => c.id === id && c.user_id === user.id);
+      if (!col) throw new ApiError({ status: 404, code: 'not_found', message: '收藏不存在' });
+      if (col.deleted_at) {
+        throw new ApiError({
+          status: 409,
+          code: 'collection_in_trash',
+          message: '收藏位于回收站，请先恢复后再整理',
+        });
+      }
+      if (col.ai_excluded) {
+        throw new ApiError({ status: 403, code: 'ai_excluded', message: '该条收藏已设置不参与 AI 整理' });
+      }
+      if (!mockAiPlatformEnabled || !mockAiTrialEligible) {
+        throw new ApiError({ status: 403, code: 'forbidden', message: '当前账号暂不支持网页恢复归类' });
+      }
+      if (col.organization.status === 'queued' || col.organization.status === 'running') {
+        throw new ApiError({
+          status: 409,
+          code: 'organization_in_progress',
+          message: '已有其他整理正在处理中，请稍候完成。',
+        });
+      }
+      if (!user.ai_enabled || user.ai_consent_version !== 'spark-ai-extension-archive-v1') {
+        throw new ApiError({
+          status: 403,
+          code: 'web_archive_consent_required',
+          message: '网页收藏归类需要确认最新 AI 整理授权（需包含标题、纯文本选文与用途披露）。',
+        });
+      }
+      if (
+        !col.original_url ||
+        (!col.manual_title?.trim() && !derivePlainText(col.document).trim() && !col.intent.trim())
+      ) {
+        throw new ApiError({
+          status: 422,
+          code: 'insufficient_material',
+          message: '当前收藏缺少可用于网页归类的标题、纯文本或用途。',
+        });
+      }
+      if (body.base_decision_version !== col.decision_version) {
+        throw new ApiError({
+          status: 409,
+          code: 'decision_conflict',
+          message: '收藏决定已变更，请刷新后重试',
+        });
+      }
+      const hasAnyResult = col.projects.some(
+        (p) =>
+          p.decision === 'auto' ||
+          p.decision === 'confirmed' ||
+          p.decision === 'manual' ||
+          p.decision === 'suggested',
+      );
+      if (
+        hasAnyResult ||
+        col.organization.error_code === 'usage_uncertain' ||
+        col.organization.web_archive_recovery_available !== true ||
+        col.organization.run_id !== body.run_id
+      ) {
+        throw new ApiError({
+          status: 409,
+          code: 'web_archive_recovery_unavailable',
+          message: '当前网页归类结果或资格已变化，请刷新后再查看是否支持恢复。',
+        });
+      }
+      if (mockOrganizationMode === 'integration_not_configured') {
+        throw new ApiError({
+          status: 503,
+          code: 'integration_not_configured',
+          message: '当前平台尚未配置模型服务凭证，已完整保存你的原文。',
+        });
+      }
+      if (mockOrganizationMode === 'quota_exceeded') {
+        throw new ApiError({
+          status: 429,
+          code: 'quota_exceeded',
+          message: '今日 AI 额度已达上限，收藏仍可正常保存。',
+        });
+      }
+      const now = new Date().toISOString();
+      const isRequeueBlocked =
+        col.organization.status === 'blocked' && col.organization.error_code === 'quota_exceeded';
+      const nextOrg: Organization = {
+        run_id: isRequeueBlocked ? col.organization.run_id : generateUuid(),
+        content_version: col.content_version,
+        status: 'queued',
+        stages: [
+          { name: 'generate', status: 'queued', attempts: 0 },
+          { name: 'match_projects', status: 'queued', attempts: 0 },
+          { name: 'apply', status: 'queued', attempts: 0 },
+        ],
+        updated_at: now,
+      };
+      col.organization = nextOrg;
+      col.mock_org_step = 0;
+      col.mock_org_attempts = (col.mock_org_attempts ?? 0) + 1;
+      col.mock_web_archive = true;
+      saveIdempotency(
+        user.id,
+        'recoverWebArchive',
+        idempotencyKey,
+        {
+          id,
+          run_id: body.run_id,
+          base_decision_version: body.base_decision_version,
+        },
+        nextOrg,
+      );
+      scheduleMockOrganization(col, user);
+      return nextOrg;
+    },
+
     async applyWebArchiveProject(id, body, idempotencyKey) {
       const user = requireUser(true);
       const replay = checkIdempotency<Collection>(user.id, 'applyWebArchiveProject', idempotencyKey, {

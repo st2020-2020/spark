@@ -65,6 +65,7 @@ export type TagAssociation = components['schemas']['TagAssociation'];
 export type AssociationUpdate = components['schemas']['AssociationUpdate'];
 export type Stage = components['schemas']['Stage'];
 export type Organization = components['schemas']['Organization'];
+export type WebArchiveRecoveryRequest = components['schemas']['WebArchiveRecoveryRequest'];
 export type ProjectBackfillRequest = components['schemas']['ProjectBackfillRequest'];
 export type OrganizationEvent = components['schemas']['OrganizationEvent'];
 export type Collection = components['schemas']['Collection'];
