@@ -15,7 +15,7 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-const Version = 19
+const Version = 20
 
 var migrationNames = [...]string{
 	"001_initial.sql",
@@ -37,6 +37,7 @@ var migrationNames = [...]string{
 	"017_extension_sessions.sql",
 	"018_extension_archive.sql",
 	"019_desktop_sessions.sql",
+	"020_web_archive_recovery.sql",
 }
 
 func RiverSchema(pool *pgxpool.Pool) string {

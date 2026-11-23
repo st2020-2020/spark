@@ -39,7 +39,8 @@ const organizationRunJSON = `jsonb_strip_nulls(jsonb_build_object('run_id',r.id,
    WHERE (ap.user_id,ap.collection_id,ap.run_id)=(r.user_id,r.collection_id,r.id) AND ap.decision='auto')
    THEN r.image_archive_status END,
  'web_archive_retry_available',CASE WHEN r.web_archive AND r.status IN ('failed','blocked')
-   AND NOT EXISTS(SELECT 1 FROM usage_reservations u WHERE (u.user_id,u.run_id)=(r.user_id,r.id)) THEN true END,
+   THEN r.web_archive_recovery_of IS NULL
+    AND NOT EXISTS(SELECT 1 FROM usage_reservations u WHERE (u.user_id,u.run_id)=(r.user_id,r.id)) END,
  'web_archive_status',CASE
   WHEN r.web_archive_status='no_match' AND NOT EXISTS(SELECT 1 FROM collection_projects ap
    WHERE (ap.user_id,ap.collection_id)=(r.user_id,r.collection_id) AND ap.decision IN ('manual','confirmed','auto')) THEN 'no_match'
@@ -127,11 +128,11 @@ func (s *Server) loadCollection(ctx context.Context, q querier, uid, id string) 
 	return s.collectionView(row), err
 }
 func (s *Server) getCollection(c *gin.Context) (any, error) {
-	row, err := s.collectionWithProjectBackfill(c)
+	row, err := s.collectionWithWebArchiveActions(c)
 	return row.Collection, err
 }
 func (s *Server) getOrganization(c *gin.Context) (any, error) {
-	row, err := s.collectionWithProjectBackfill(c)
+	row, err := s.collectionWithWebArchiveActions(c)
 	return row.Organization, err
 }
 func snapshot(ctx context.Context, tx pgx.Tx, uid, id string) error {
@@ -517,9 +518,10 @@ func (s *Server) collectionView(row collectionRow) collectionRow {
 			row.Organization.ErrorCode = &code
 		}
 	}
-	if row.DeletedAt != nil || row.AiExcluded || !s.Organizer.Enabled || !s.Organizer.Trial.allows(row.UserID) ||
-		!row.UserAIEnabled || !allowsWebArchive(row.UserAIConsent) {
-		row.Organization.WebArchiveRetryAvailable = nil
+	if value(row.Organization.WebArchiveRetryAvailable) && (row.DeletedAt != nil || row.AiExcluded || !s.Organizer.Enabled ||
+		!s.Organizer.Trial.allows(row.UserID) || !row.UserAIEnabled || !allowsWebArchive(row.UserAIConsent)) {
+		available := false
+		row.Organization.WebArchiveRetryAvailable = &available
 	}
 	material := webArchiveMaterial{value(row.ManualTitle), row.PlainText, row.Intent}
 	if row.DeletedAt == nil && validURL(value(row.OriginalUrl)) {

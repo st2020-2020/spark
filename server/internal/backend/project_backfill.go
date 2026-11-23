@@ -10,7 +10,7 @@ import (
 	"spark/server/internal/contract"
 )
 
-func (s *Server) checkWebProjectBackfill(row collectionRow) error {
+func (s *Server) checkWebArchiveAccess(row collectionRow) error {
 	if err := checkActive(row); err != nil {
 		return err
 	}
@@ -73,10 +73,14 @@ func loadWebProjectBackfill(ctx context.Context, q querier, row collectionRow) (
 	return run, topic, err
 }
 
-func (s *Server) collectionWithProjectBackfill(c *gin.Context) (collectionRow, error) {
+func (s *Server) collectionWithWebArchiveActions(c *gin.Context) (collectionRow, error) {
 	ctx := c.Request.Context()
 	row, err := s.loadCollection(ctx, s.Pool, current(c).User.ID, c.Param("id"))
-	if err != nil || value(row.Organization.WebArchiveStatus) != "no_match" || s.checkWebProjectBackfill(row) != nil {
+	if err != nil || s.checkWebArchiveAccess(row) != nil {
+		return row, err
+	}
+	if value(row.Organization.WebArchiveStatus) != "no_match" {
+		err = addWebArchiveRecoveryAvailability(ctx, s.Pool, &row)
 		return row, err
 	}
 	_, topic, err := loadWebProjectBackfill(ctx, s.Pool, row)
@@ -98,7 +102,7 @@ func (s *Server) applyWebArchiveProject(c *gin.Context) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := s.checkWebProjectBackfill(row); err != nil {
+		if err := s.checkWebArchiveAccess(row); err != nil {
 			return nil, err
 		}
 		if row.DecisionVersion != req.BaseDecisionVersion {
@@ -131,7 +135,7 @@ func (s *Server) applyWebArchiveProject(c *gin.Context) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := s.checkWebProjectBackfill(row); err != nil {
+		if err := s.checkWebArchiveAccess(row); err != nil {
 			return nil, err
 		}
 		return row.Collection, nil

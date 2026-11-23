@@ -87,6 +87,21 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 		return "", "web_archive_consent_required", nil
 	}
 	webArchive := !imageEvent && (requestWebArchive || captureSource == "extension" && allowsWebArchive(consent) && validURL(pageURL))
+	if explicit && !webArchive {
+		// A generic retry on a webpage previously classified by explicit Web
+		// opt-in must not bypass the paid-recovery confirmation.
+		var previous string
+		err = tx.QueryRow(ctx, `SELECT id FROM (
+			SELECT r.id,r.web_archive,r.web_archive_recovery_of,r.status FROM organization_runs r
+			WHERE (r.user_id,r.collection_id,r.content_version)=($1,$2,$3)
+			ORDER BY r.created_at DESC,r.id DESC LIMIT 1
+		) latest WHERE web_archive AND (web_archive_recovery_of IS NOT NULL OR
+			(status IN ('failed','blocked') AND EXISTS (SELECT 1 FROM usage_reservations u WHERE (u.user_id,u.run_id)=($1,latest.id))))`,
+			uid, id, cv).Scan(&previous)
+		if err == nil || !errors.Is(err, pgx.ErrNoRows) {
+			return previous, "", err
+		}
+	}
 	if webArchive && (!validURL(pageURL) || !material.available()) {
 		return "", "insufficient_material", nil
 	}
@@ -138,6 +153,7 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 			  AND r.web_archive AND (
 				((r.user_policy_version,r.collection_policy_version)=($4,$5) AND
 				  (r.status IN ('succeeded','partial') OR (r.status='failed' AND NOT $6::boolean)))
+				OR r.web_archive_recovery_of IS NOT NULL
 				OR EXISTS(SELECT 1 FROM usage_reservations u WHERE (u.user_id,u.run_id)=(r.user_id,r.id)))
 			ORDER BY r.created_at DESC,r.id DESC LIMIT 1`, uid, id, cv, uv, pv, explicit).Scan(&active)
 		if err == nil || !errors.Is(err, pgx.ErrNoRows) {
@@ -179,10 +195,12 @@ func (o *Organizer) enqueue(ctx context.Context, tx pgx.Tx, uid, id string, expl
 			ELSE '[{"name":"generate","status":"queued","attempts":0}]'::jsonb END,$7,$8)`, run, uid, id, cv, uv, pv, waitImages, webArchive); err != nil {
 		return "", "", err
 	}
-	if _, err = o.Queue.InsertTx(ctx, tx, TextOrganizationArgs{UserID: uid, RunID: run}, &river.InsertOpts{MaxAttempts: 5, Queue: "text_organization"}); err != nil {
-		return "", "", err
-	}
-	return run, "", nil
+	return run, "", o.insertTextJob(ctx, tx, uid, run)
+}
+
+func (o *Organizer) insertTextJob(ctx context.Context, tx pgx.Tx, uid, run string) error {
+	_, err := o.Queue.InsertTx(ctx, tx, TextOrganizationArgs{UserID: uid, RunID: run}, &river.InsertOpts{MaxAttempts: 5, Queue: "text_organization"})
+	return err
 }
 func (s *Server) updatePreferences(c *gin.Context) (any, error) {
 	req, err := bind[contract.Preferences](s, c)
