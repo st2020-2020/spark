@@ -496,7 +496,7 @@ export function classifyCollectionFiling(params: {
     isOrgFailedOrBlocked && organization.web_archive_retry_available === false;
   const webArchiveAvailable = Boolean(collection.web_archive_available);
   const isRecoveryAvailable =
-    organization.web_archive_recovery_available === true && Boolean(organization.run_id);
+    isOrgFailedOrBlocked && organization.web_archive_recovery_available === true && Boolean(organization.run_id);
   const canShowWebArchiveRecovery =
     !isInTrash &&
     !aiExcluded &&
@@ -829,22 +829,6 @@ export function classifyCollectionFiling(params: {
       rejectedProjects,
       nextStep,
       ledgerBlockedNote,
-    };
-  }
-
-  if (canShowWebArchiveRecovery) {
-    return {
-      outcome: 'pending_action',
-      badgeLabel: '仍待归类',
-      pillTone: 'danger',
-      headline: errCode === 'model_output_truncated' ? '生成结果被截断' : '整理失败',
-      reason: organizationErrorMessage(errCode),
-      effectiveProjects,
-      suggestedProjects,
-      rejectedProjects,
-      nextStep: { kind: 'recover_web_archive', label: '重试网页归类' },
-      ledgerBlockedNote:
-        '上次网页归类已产生计费记录并保留。如仍需自动归类，可确认重新发起一次（发送时会再次使用 AI 额度）。',
     };
   }
 
