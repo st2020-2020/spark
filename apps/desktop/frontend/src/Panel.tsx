@@ -66,6 +66,7 @@ export function Capture({
       image?: string;
       text?: string;
       available: boolean;
+      change_count?: number;
     }>(),
     [err, bad] = useState(''),
     [busy, saving] = useState(false),
@@ -89,6 +90,8 @@ export function Capture({
     pending = useRef(false),
     ime = useRef(false);
   const url = detectURL(text);
+  const edits = useRef(0);
+  const dismissed = useRef<number | undefined>(undefined);
   const linked = url !== removed ? url : '';
   const availableProjects = inline?.projects ?? projects;
   const availableTags = inline?.tags ?? tags;
@@ -114,6 +117,8 @@ export function Capture({
     )
     .slice(0, 6);
   function changed(v: string, pos: number) {
+    edits.current++;
+    if (clip?.available) dismiss();
     write(v);
     const m = /(?:^|\s)([@#])([^\s@#]*)$/u.exec(v.slice(0, pos));
     suggest(
@@ -159,9 +164,13 @@ export function Capture({
     write((v) => (v ? v + '\n' : '') + value);
     editor.current?.focus();
   };
-  function dismiss() {
+  function dismiss(sample = clip) {
     setClip(undefined);
-    void req('clipboard/dismiss', 'POST').catch((e) => bad(message(e)));
+    if (sample?.change_count === undefined) return;
+    dismissed.current = sample.change_count;
+    void req('clipboard/dismiss', 'POST', {
+      change_count: sample.change_count,
+    }).catch((e) => bad(message(e)));
   }
   function takeClip() {
     if (clip?.image)
@@ -183,7 +192,7 @@ export function Capture({
     const el = root.current;
     if (!floating || !el) return;
     const resize = () => {
-      // The layout box already includes the CSS height cap. Animated children
+      // Measure natural content independently of the screen-constrained viewport. Children
       // can temporarily extend scrollHeight beyond the actual paper edge.
       const height = el.offsetHeight;
       if (!height || height === requestedHeight.current) return;
@@ -201,7 +210,8 @@ export function Capture({
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(el);
-    if (err && el.scrollHeight > el.clientHeight) {
+    const viewport = el.parentElement;
+    if (err && viewport && el.offsetHeight > viewport.clientHeight) {
       el.querySelector('.notice')?.scrollIntoView({ block: 'nearest' });
     }
     return () => observer.disconnect();
@@ -223,11 +233,25 @@ export function Capture({
         if (live) bad(message(e));
       }
     }
+    let latestSample = 0;
     function refresh() {
       if (document.visibilityState === 'hidden') return;
+      const request = ++latestSample;
+      const before = edits.current;
       req<typeof clip>('clipboard')
         .then((v) => {
-          if (live) setClip(v);
+          if (!live || request !== latestSample) return;
+          if (v?.available && before !== edits.current) {
+            dismiss(v);
+            return;
+          }
+          if (
+            v?.available &&
+            v.change_count !== undefined &&
+            v.change_count === dismissed.current
+          )
+            return;
+          setClip(v);
         })
         .catch(() => {});
     }
@@ -317,10 +341,10 @@ export function Capture({
     find(false);
     requestAnimationFrame(() => editor.current?.focus());
   }
-  return (
+  const content = (
     <div
       ref={root}
-      className={floating ? 'panel' : 'inline-capture'}
+      className={floating ? 'panel-content' : 'inline-capture'}
       data-expanded={expanded}
       onFocus={() => setEditing(true)}
       onBlur={(e) => {
@@ -386,7 +410,11 @@ export function Capture({
           </button>
         </>
       ) : search ? (
-        <Search req={req} back={leaveSearch} />
+        <Search
+          req={req}
+          back={leaveSearch}
+          localOnly={state.session.expired}
+        />
       ) : (
         <fieldset
           className="capture-sheet"
@@ -463,7 +491,7 @@ export function Capture({
                 <span>{clip.image ? '刚复制的图片' : clip.text}</span>
                 <kbd>Tab</kbd>
               </button>
-              <Tool label="忽略剪贴板建议" onClick={dismiss}>
+              <Tool label="忽略剪贴板建议" onClick={() => dismiss()}>
                 <X />
               </Tool>
             </div>
@@ -655,4 +683,5 @@ export function Capture({
       )}
     </div>
   );
+  return floating ? <div className="panel">{content}</div> : content;
 }

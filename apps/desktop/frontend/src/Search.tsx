@@ -12,7 +12,12 @@ import {
   detailText,
 } from './bridge';
 import { Tool, Notice, Preview } from './shared';
-export function useSearch(req: Request, q: string, enabled = true) {
+export function useSearch(
+  req: Request,
+  q: string,
+  enabled = true,
+  localOnly = false,
+) {
   const [local, setLocal] = useState<Hit[]>([]),
     [remote, setRemote] = useState<Hit[]>([]),
     [offline, off] = useState(false),
@@ -21,7 +26,7 @@ export function useSearch(req: Request, q: string, enabled = true) {
     const c = new AbortController();
     setLocal([]);
     setRemote([]);
-    off(false);
+    off(localOnly);
     bad('');
     if (!enabled) return;
     req<Hit[]>(
@@ -35,7 +40,7 @@ export function useSearch(req: Request, q: string, enabled = true) {
         if (!c.signal.aborted) bad(message(e));
       });
     const timer = setTimeout(() => {
-      if (q.trim())
+      if (!localOnly && q.trim())
         req<{ items: { collection: Summary; snippets: { text: string }[] }[] }>(
           'search/remote?q=' + encodeURIComponent(q),
           'GET',
@@ -64,7 +69,7 @@ export function useSearch(req: Request, q: string, enabled = true) {
       clearTimeout(timer);
       c.abort();
     };
-  }, [q, req, enabled]);
+  }, [q, req, enabled, localOnly]);
   return {
     hits: [
       ...local,
@@ -152,13 +157,21 @@ export function SearchResults({
   );
 }
 
-export function Search({ req, back }: { req: Request; back: () => void }) {
+export function Search({
+  req,
+  back,
+  localOnly = false,
+}: {
+  req: Request;
+  back: () => void;
+  localOnly?: boolean;
+}) {
   const [q, query] = useState(''),
     [committed, commit] = useState(''),
     [selected, pick] = useState(''),
     [preview, show] = useState(false),
     [feedback, say] = useState('');
-  const { hits, offline, error } = useSearch(req, committed),
+  const { hits, offline, error } = useSearch(req, committed, true, localOnly),
     focus = useRef<HTMLInputElement>(null),
     ime = useRef(false);
   const index = Math.max(
@@ -280,7 +293,9 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
             show(true);
           }}
         />
-        {preview && hit && <Preview key={hit.id} req={req} id={hit.id} />}
+        {preview && hit && (
+          <Preview key={hit.id} req={req} id={hit.id} localOnly={localOnly} />
+        )}
       </div>
       <footer>
         <button disabled={!hit} onClick={() => show(!preview)}>

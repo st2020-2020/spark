@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"spark/apps/desktop/internal/auth"
 	"spark/apps/desktop/internal/config"
 )
 
@@ -85,11 +86,19 @@ func NewClient(baseURL string, allowLoopbackHTTP bool) (*Client, error) {
 
 func (c *Client) BaseURL() string { return c.baseURL }
 
+func (c *Client) authorize(req *http.Request, session auth.StoredSession) error {
+	target := url.URL{Scheme: req.URL.Scheme, Host: req.URL.Host}
+	if session.Origin != c.baseURL || target.String() != c.baseURL || session.Token == "" {
+		return errors.New("设备凭据与当前服务地址不匹配，请重新登录")
+	}
+	req.Header.Set("Authorization", "Bearer "+session.Token)
+	return nil
+}
 func (c *Client) doJSON(
 	ctx context.Context,
 	method string,
 	path string,
-	bearerToken string,
+	session *auth.StoredSession,
 	idempotencyKey string,
 	reqBody any,
 	respTarget any,
@@ -119,8 +128,10 @@ func (c *Client) doJSON(
 	if reqBody != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if bearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+bearerToken)
+	if session != nil {
+		if err := c.authorize(req, *session); err != nil {
+			return 0, nil, err
+		}
 	}
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
@@ -146,8 +157,8 @@ func (c *Client) doJSON(
 		return resp.StatusCode, resp.Header, fmt.Errorf("read response body: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusUnauthorized && bearerToken != "" && c.OnUnauthorized != nil {
-		if err := c.OnUnauthorized(bearerToken); err != nil {
+	if resp.StatusCode == http.StatusUnauthorized && session != nil && c.OnUnauthorized != nil {
+		if err := c.OnUnauthorized(session.Token); err != nil {
 			return resp.StatusCode, resp.Header, err
 		}
 	}
@@ -198,30 +209,30 @@ func parseAPIError(status int, headers http.Header, raw []byte) *APIError {
 
 func (c *Client) Login(ctx context.Context, input LoginRequest) (DesktopTokenResult, error) {
 	var out DesktopTokenResult
-	status, _, err := c.doJSON(ctx, http.MethodPost, "/desktop/login", "", "", input, &out)
+	status, _, err := c.doJSON(ctx, http.MethodPost, "/desktop/login", nil, "", input, &out)
 	if status >= 200 && status < 300 && (status != 200 || err != nil || out.Token == "") {
 		return DesktopTokenResult{}, &APIError{Status: 502, Code: "invalid_login_response"}
 	}
 	return out, err
 }
 
-func (c *Client) GetDesktopSession(ctx context.Context, token string) (DesktopSession, error) {
+func (c *Client) GetDesktopSession(ctx context.Context, session auth.StoredSession) (DesktopSession, error) {
 	var out DesktopSession
-	_, _, err := c.doJSON(ctx, http.MethodGet, "/desktop/session", token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, "/desktop/session", &session, "", nil, &out)
 	return out, err
 }
 
-func (c *Client) RevokeDesktopSession(ctx context.Context, token string) error {
-	_, _, err := c.doJSON(ctx, http.MethodDelete, "/desktop/session", token, "", nil, nil)
+func (c *Client) RevokeDesktopSession(ctx context.Context, session auth.StoredSession) error {
+	_, _, err := c.doJSON(ctx, http.MethodDelete, "/desktop/session", &session, "", nil, nil)
 	return err
 }
 
 // --- Collections (Whitelisted for desktopBearer) ---
 
 // CreateCollectionRaw posts a pre-frozen CollectionCreate JSON payload with its frozen Idempotency-Key.
-func (c *Client) CreateCollectionRaw(ctx context.Context, token string, idempotencyKey string, frozenJSON []byte) (Collection, bool, error) {
+func (c *Client) CreateCollectionRaw(ctx context.Context, session auth.StoredSession, idempotencyKey string, frozenJSON []byte) (Collection, bool, error) {
 	var out Collection
-	status, headers, err := c.doJSON(ctx, http.MethodPost, "/collections", token, idempotencyKey, json.RawMessage(frozenJSON), &out)
+	status, headers, err := c.doJSON(ctx, http.MethodPost, "/collections", &session, idempotencyKey, json.RawMessage(frozenJSON), &out)
 	if err == nil && (status != http.StatusCreated || out.ID == "") {
 		return out, false, errors.New("收藏回执不完整")
 	}
@@ -229,7 +240,7 @@ func (c *Client) CreateCollectionRaw(ctx context.Context, token string, idempote
 	return out, replayed, err
 }
 
-func (c *Client) ListCollections(ctx context.Context, token string, scope string, projectID string, tagID string, cursor string, limit int) (CollectionPage, error) {
+func (c *Client) ListCollections(ctx context.Context, session auth.StoredSession, scope string, projectID string, tagID string, cursor string, limit int) (CollectionPage, error) {
 	q := url.Values{}
 	if scope != "" {
 		q.Set("scope", scope)
@@ -251,19 +262,19 @@ func (c *Client) ListCollections(ctx context.Context, token string, scope string
 		path += "?" + enc
 	}
 	var out CollectionPage
-	_, _, err := c.doJSON(ctx, http.MethodGet, path, token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, path, &session, "", nil, &out)
 	return out, err
 }
 
-func (c *Client) GetCollection(ctx context.Context, token string, id string) (Collection, error) {
+func (c *Client) GetCollection(ctx context.Context, session auth.StoredSession, id string) (Collection, error) {
 	var out Collection
-	_, _, err := c.doJSON(ctx, http.MethodGet, "/collections/"+url.PathEscape(id), token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, "/collections/"+url.PathEscape(id), &session, "", nil, &out)
 	return out, err
 }
 
 // --- Projects & Tags & Search (Whitelisted for desktopBearer) ---
 
-func (c *Client) ListProjects(ctx context.Context, token string, state string, query string, cursor string, limit int) (ProjectPage, error) {
+func (c *Client) ListProjects(ctx context.Context, session auth.StoredSession, state string, query string, cursor string, limit int) (ProjectPage, error) {
 	q := url.Values{}
 	if state != "" {
 		q.Set("state", state)
@@ -282,11 +293,11 @@ func (c *Client) ListProjects(ctx context.Context, token string, state string, q
 		path += "?" + enc
 	}
 	var out ProjectPage
-	_, _, err := c.doJSON(ctx, http.MethodGet, path, token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, path, &session, "", nil, &out)
 	return out, err
 }
 
-func (c *Client) ListTags(ctx context.Context, token string, query string, cursor string, limit int) (TagPage, error) {
+func (c *Client) ListTags(ctx context.Context, session auth.StoredSession, query string, cursor string, limit int) (TagPage, error) {
 	q := url.Values{}
 	if query != "" {
 		q.Set("q", query)
@@ -302,11 +313,11 @@ func (c *Client) ListTags(ctx context.Context, token string, query string, curso
 		path += "?" + enc
 	}
 	var out TagPage
-	_, _, err := c.doJSON(ctx, http.MethodGet, path, token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, path, &session, "", nil, &out)
 	return out, err
 }
 
-func (c *Client) SearchCollections(ctx context.Context, token string, query string, projectID string, tagID string, cursor string, limit int) (SearchPage, error) {
+func (c *Client) SearchCollections(ctx context.Context, session auth.StoredSession, query string, projectID string, tagID string, cursor string, limit int) (SearchPage, error) {
 	q := url.Values{}
 	if query != "" {
 		q.Set("q", query)
@@ -328,27 +339,27 @@ func (c *Client) SearchCollections(ctx context.Context, token string, query stri
 		path += "?" + enc
 	}
 	var out SearchPage
-	_, _, err := c.doJSON(ctx, http.MethodGet, path, token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, path, &session, "", nil, &out)
 	return out, err
 }
 
 // --- Uploads & Attachments (Whitelisted for desktopBearer) ---
 
-func (c *Client) CreateUpload(ctx context.Context, token string, idempotencyKey string, req UploadRequest) (UploadGrant, error) {
+func (c *Client) CreateUpload(ctx context.Context, session auth.StoredSession, idempotencyKey string, req UploadRequest) (UploadGrant, error) {
 	var out UploadGrant
-	_, _, err := c.doJSON(ctx, http.MethodPost, "/uploads", token, idempotencyKey, req, &out)
+	_, _, err := c.doJSON(ctx, http.MethodPost, "/uploads", &session, idempotencyKey, req, &out)
 	return out, err
 }
 
-func (c *Client) GetUpload(ctx context.Context, token string, uploadID string) (Upload, error) {
+func (c *Client) GetUpload(ctx context.Context, session auth.StoredSession, uploadID string) (Upload, error) {
 	var out Upload
-	_, _, err := c.doJSON(ctx, http.MethodGet, "/uploads/"+url.PathEscape(uploadID), token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, "/uploads/"+url.PathEscape(uploadID), &session, "", nil, &out)
 	return out, err
 }
 
-func (c *Client) CompleteUpload(ctx context.Context, token string, uploadID string) (Upload, error) {
+func (c *Client) CompleteUpload(ctx context.Context, session auth.StoredSession, uploadID string) (Upload, error) {
 	var out Upload
-	_, _, err := c.doJSON(ctx, http.MethodPost, "/uploads/"+url.PathEscape(uploadID)+"/complete", token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodPost, "/uploads/"+url.PathEscape(uploadID)+"/complete", &session, "", nil, &out)
 	return out, err
 }
 
@@ -432,18 +443,20 @@ func (c *Client) validateOSSURL(raw string) error {
 	return errors.New("OSS upload URL must use HTTPS")
 }
 
-func (c *Client) GetAttachmentDownload(ctx context.Context, token string, attachmentID string) (DownloadGrant, error) {
+func (c *Client) GetAttachmentDownload(ctx context.Context, session auth.StoredSession, attachmentID string) (DownloadGrant, error) {
 	var out DownloadGrant
-	_, _, err := c.doJSON(ctx, http.MethodGet, "/attachments/"+url.PathEscape(attachmentID)+"/download", token, "", nil, &out)
+	_, _, err := c.doJSON(ctx, http.MethodGet, "/attachments/"+url.PathEscape(attachmentID)+"/download", &session, "", nil, &out)
 	return out, err
 }
 
-func (c *Client) GetAttachmentThumbnail(ctx context.Context, token string, attachmentID string) ([]byte, string, error) {
+func (c *Client) GetAttachmentThumbnail(ctx context.Context, session auth.StoredSession, attachmentID string) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/v1/attachments/"+url.PathEscape(attachmentID)+"/thumbnail", nil)
 	if err != nil {
 		return nil, "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if err := c.authorize(req, session); err != nil {
+		return nil, "", err
+	}
 	req.Header.Set("User-Agent", "SparkDesktop/0.8 (macOS)")
 
 	resp, err := c.apiHTTP.Do(req)
@@ -456,7 +469,7 @@ func (c *Client) GetAttachmentThumbnail(ctx context.Context, token string, attac
 		return nil, "", &APIError{Status: resp.StatusCode, Code: "unexpected_redirect", Message: "缩略图请求拒绝重定向。"}
 	}
 	if resp.StatusCode == http.StatusUnauthorized && c.OnUnauthorized != nil {
-		if err := c.OnUnauthorized(token); err != nil {
+		if err := c.OnUnauthorized(session.Token); err != nil {
 			return nil, "", err
 		}
 	}
@@ -478,8 +491,8 @@ func (c *Client) GetAttachmentThumbnail(ctx context.Context, token string, attac
 }
 
 // OriginalImage redeems a short-lived download grant without sending Spark credentials to storage.
-func (c *Client) OriginalImage(ctx context.Context, token, id string) ([]byte, error) {
-	grant, err := c.GetAttachmentDownload(ctx, token, id)
+func (c *Client) OriginalImage(ctx context.Context, session auth.StoredSession, id string) ([]byte, error) {
+	grant, err := c.GetAttachmentDownload(ctx, session, id)
 	if err != nil {
 		return nil, err
 	}

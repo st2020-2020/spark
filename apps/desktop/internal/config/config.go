@@ -1,17 +1,23 @@
 package config
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
+const ProductionOrigin = "https://spark.stwqy.cloud"
+
 // DefaultAPIBaseURL can be overridden at build time via:
 // -ldflags "-X spark/apps/desktop/internal/config.DefaultAPIBaseURL=https://spark.example.com"
-var DefaultAPIBaseURL = "https://spark.stwqy.cloud"
+var DefaultAPIBaseURL = ProductionOrigin
 
 const (
 	AppBundleID     = "com.spark.desktop"
@@ -54,9 +60,19 @@ func Load() (Config, error) {
 
 	return Config{
 		APIBaseURL:        normalized,
-		DataDir:           dataDir,
+		DataDir:           filepath.Join(dataDir, "origins", originKey(normalized)),
 		AllowLoopbackHTTP: allowLoopback,
 	}, nil
+}
+
+// The digest keeps the complete origin in a bounded, filesystem-safe namespace.
+func originKey(origin string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(origin))) }
+
+func (c Config) CredentialService() string {
+	if c.APIBaseURL == ProductionOrigin {
+		return KeychainService
+	}
+	return KeychainService + ".origin." + originKey(c.APIBaseURL)
 }
 
 // ResolveDataDir determines where the new macOS desktop client stores its own SQLite cache
@@ -86,23 +102,34 @@ func ValidateAPIBaseURL(raw string, allowLoopbackHTTP bool) (string, error) {
 	if u.User != nil {
 		return "", errors.New("API base URL must not contain credentials")
 	}
-	if u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+	if u.Path != "" || u.ForceQuery || u.RawQuery != "" || strings.Contains(trimmed, "#") {
 		return "", errors.New("API base URL must not contain query or fragment")
 	}
 	scheme := strings.ToLower(u.Scheme)
-	host := strings.ToLower(u.Hostname())
+	host := u.Hostname()
+	if addr, err := netip.ParseAddr(host); err == nil {
+		host = addr.String()
+	} else {
+		host = strings.TrimSuffix(strings.ToLower(host), ".")
+	}
 	if host == "" {
 		return "", errors.New("API base URL missing host")
 	}
-	switch scheme {
-	case "https":
-		return u.Scheme + "://" + u.Host + strings.TrimRight(u.Path, "/"), nil
-	case "http":
-		if allowLoopbackHTTP && (host == "127.0.0.1" || host == "localhost" || host == "::1") {
-			return u.Scheme + "://" + u.Host + strings.TrimRight(u.Path, "/"), nil
-		}
+	if scheme != "https" && !(scheme == "http" && allowLoopbackHTTP && (host == "127.0.0.1" || host == "localhost" || host == "::1")) {
 		return "", errors.New("API base URL must use HTTPS")
-	default:
-		return "", fmt.Errorf("unsupported API scheme %q", u.Scheme)
 	}
+	port := u.Port()
+	if port != "" {
+		n, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || n == 0 {
+			return "", errors.New("invalid API port")
+		}
+		port = strconv.FormatUint(n, 10)
+	}
+	if port != "" && !(scheme == "https" && port == "443" || scheme == "http" && port == "80") {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return (&url.URL{Scheme: scheme, Host: host}).String(), nil
 }

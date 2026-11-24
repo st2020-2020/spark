@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -22,15 +23,15 @@ const (
 
 // BackendClient is the minimal strict whitelist interface needed by Engine.
 type BackendClient interface {
-	CreateCollectionRaw(ctx context.Context, token string, idempotencyKey string, frozenJSON []byte) (api.Collection, bool, error)
-	GetCollection(ctx context.Context, token string, id string) (api.Collection, error)
-	ListCollections(ctx context.Context, token string, scope, projectID, tagID, cursor string, limit int) (api.CollectionPage, error)
-	ListProjects(ctx context.Context, token string, state, query, cursor string, limit int) (api.ProjectPage, error)
-	ListTags(ctx context.Context, token string, query, cursor string, limit int) (api.TagPage, error)
-	SearchCollections(ctx context.Context, token string, query, projectID, tagID, cursor string, limit int) (api.SearchPage, error)
-	CreateUpload(ctx context.Context, token string, idempotencyKey string, req api.UploadRequest) (api.UploadGrant, error)
-	GetUpload(ctx context.Context, token string, uploadID string) (api.Upload, error)
-	CompleteUpload(ctx context.Context, token string, uploadID string) (api.Upload, error)
+	CreateCollectionRaw(ctx context.Context, session auth.StoredSession, idempotencyKey string, frozenJSON []byte) (api.Collection, bool, error)
+	GetCollection(ctx context.Context, session auth.StoredSession, id string) (api.Collection, error)
+	ListCollections(ctx context.Context, session auth.StoredSession, scope, projectID, tagID, cursor string, limit int) (api.CollectionPage, error)
+	ListProjects(ctx context.Context, session auth.StoredSession, state, query, cursor string, limit int) (api.ProjectPage, error)
+	ListTags(ctx context.Context, session auth.StoredSession, query, cursor string, limit int) (api.TagPage, error)
+	SearchCollections(ctx context.Context, session auth.StoredSession, query, projectID, tagID, cursor string, limit int) (api.SearchPage, error)
+	CreateUpload(ctx context.Context, session auth.StoredSession, idempotencyKey string, req api.UploadRequest) (api.UploadGrant, error)
+	GetUpload(ctx context.Context, session auth.StoredSession, uploadID string) (api.Upload, error)
+	CompleteUpload(ctx context.Context, session auth.StoredSession, uploadID string) (api.Upload, error)
 	UploadObjectToOSS(ctx context.Context, grant api.UploadGrant, data []byte) error
 }
 
@@ -41,18 +42,23 @@ type Engine struct {
 	client BackendClient
 	nowFn  func() time.Time
 
-	mu       sync.Mutex
-	onChange func()
-	wakeCh   chan struct{}
+	mu           sync.Mutex
+	onChange     func()
+	wakeCh       chan struct{}
+	catalogCh    chan struct{}
+	catalogMu    sync.Mutex
+	catalogToken string
+	catalogNext  time.Time
 }
 
 func New(st *store.Store, creds auth.CredentialStore, client BackendClient) *Engine {
 	return &Engine{
-		store:  st,
-		creds:  creds,
-		client: client,
-		nowFn:  time.Now,
-		wakeCh: make(chan struct{}, 1),
+		store:     st,
+		creds:     creds,
+		client:    client,
+		nowFn:     time.Now,
+		wakeCh:    make(chan struct{}, 1),
+		catalogCh: make(chan struct{}, 1),
 	}
 }
 
@@ -95,6 +101,14 @@ func (e *Engine) Trigger() {
 	}
 }
 
+// RequestCatalog coalesces login and panel-open events without blocking UI callbacks.
+func (e *Engine) RequestCatalog() {
+	select {
+	case e.catalogCh <- struct{}{}:
+	default:
+	}
+}
+
 // Run starts the background outbox + cache refresh loop until ctx is cancelled.
 func (e *Engine) Run(ctx context.Context) {
 	if sess, err := e.creds.Load(); err == nil && sess.AccountID != "" {
@@ -102,6 +116,25 @@ func (e *Engine) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(8 * time.Second)
 	defer ticker.Stop()
+	// Directory pagination may be slow. It must not hold up the offline outbox.
+	catalogDone := make(chan struct{})
+	go func() {
+		defer close(catalogDone)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-e.catalogCh:
+				if s, err := e.creds.Load(); err == nil && s.Public(e.now()).Connected {
+					if err := e.refreshCatalog(ctx, s, false); err != nil && ctx.Err() == nil {
+						slog.Warn("桌面目录刷新失败，保留本机缓存")
+					}
+				}
+			}
+		}
+	}()
+	defer func() { <-catalogDone }()
+	e.RequestCatalog()
 	var lastToken string
 	for {
 		// A renewed token must resume only its own account, after any previous
@@ -133,8 +166,10 @@ func (e *Engine) SyncOnce(ctx context.Context) {
 	}
 	now := e.now()
 	if !sess.ExpiresAt.IsZero() && !sess.ExpiresAt.After(now) {
-		_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已到期，请重新登录后再同步。", now)
-		e.notifyChange()
+		changed, _ := e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已到期，请重新登录后再同步。", now)
+		if changed {
+			e.notifyChange()
+		}
 		return
 	}
 
@@ -149,7 +184,7 @@ func (e *Engine) SyncOnce(ctx context.Context) {
 		}
 		// Re-check active session before every item so an account switch mid-tick never crosses queues.
 		curSess, err := e.creds.Load()
-		if err != nil || curSess.AccountID != sess.AccountID || curSess.Token == "" {
+		if err != nil || curSess.Token != sess.Token || !curSess.Public(e.now()).Connected {
 			return
 		}
 		if stop := e.processItem(ctx, curSess, item); stop {
@@ -174,10 +209,12 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 		return &api.APIError{Status: http.StatusUnauthorized, Code: "desktop_session_expired", Message: "桌面会话已到期，请重新登录。"}
 	}
 
-	if page, err := e.client.ListCollections(ctx, sess.Token, "active", "", "", "", 50); err != nil {
+	if page, err := e.client.ListCollections(ctx, sess, "active", "", "", "", 50); err != nil {
 		if isUnauthorized(err) {
-			_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
-			e.notifyChange()
+			changed, _ := e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
+			if changed {
+				e.notifyChange()
+			}
 		}
 		return err
 	} else {
@@ -186,9 +223,26 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 		}
 	}
 
+	return e.refreshCatalog(ctx, sess, true)
+}
+
+func (e *Engine) refreshCatalog(ctx context.Context, sess auth.StoredSession, force bool) error {
+	e.catalogMu.Lock()
+	defer e.catalogMu.Unlock()
+	now := e.now()
+	if e.client == nil || (!force && e.catalogToken == sess.Token && now.Before(e.catalogNext)) {
+		return nil
+	}
+	current, err := e.creds.Load()
+	if err != nil || current.Token != sess.Token || current.AccountID != sess.AccountID || !current.Public(now).Connected {
+		return nil
+	}
+	e.catalogToken = sess.Token
+	// A repeated menu click while offline should use the existing directory immediately.
+	e.catalogNext = now.Add(15 * time.Second)
 	projects := []api.Project{}
 	for cursor := ""; ; {
-		page, err := e.client.ListProjects(ctx, sess.Token, "active", "", cursor, 100)
+		page, err := e.client.ListProjects(ctx, sess, "active", "", cursor, 100)
 		if err != nil {
 			return err
 		}
@@ -201,12 +255,9 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 		}
 		cursor = page.NextCursor
 	}
-	if err := e.store.ReplaceCachedProjects(sess.AccountID, projects); err != nil {
-		return err
-	}
 	tags := []api.Tag{}
 	for cursor := ""; ; {
-		page, err := e.client.ListTags(ctx, sess.Token, "", cursor, 100)
+		page, err := e.client.ListTags(ctx, sess, "", cursor, 100)
 		if err != nil {
 			return err
 		}
@@ -219,9 +270,13 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 		}
 		cursor = page.NextCursor
 	}
+	if err := e.store.ReplaceCachedProjects(sess.AccountID, projects); err != nil {
+		return err
+	}
 	if err := e.store.ReplaceCachedTags(sess.AccountID, tags); err != nil {
 		return err
 	}
+	e.catalogNext = e.now().Add(5 * time.Minute)
 	e.notifyChange()
 	return nil
 }
@@ -238,6 +293,10 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 		uploadIDs := make([]string, 0, len(item.Attachments))
 		for _, att := range item.Attachments {
 			upID, stopQueue, waitRetry, terminalErr := e.ensureAttachmentReady(ctx, sess, att)
+			if ctx.Err() != nil {
+				// Startup requeues syncing items using their already-persisted attachment stage.
+				return true
+			}
 			if stopQueue {
 				return true
 			}
@@ -288,17 +347,23 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 	// - Previously-sent items (item.EverSent) whose FirstSentAt is >= 7 days ago MUST verify by GET /collections/{id} first;
 	//   never automatically swap UUID, overwrite, or resurrect.
 	if item.EverSent && !item.FirstSentAt.IsZero() && e.now().Sub(item.FirstSentAt) >= IdempotencyWindow {
-		col, err := e.client.GetCollection(ctx, sess.Token, item.ID)
+		col, err := e.client.GetCollection(ctx, sess, item.ID)
 		if err == nil {
 			e.acceptReceipt(sess.AccountID, item, col)
 			return false
 		}
 		if isUnauthorized(err) {
-			_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", e.now())
+			_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", e.now())
 			return true
 		}
 		if ae, ok := api.AsAPIError(err); ok {
 			if ae.Status == http.StatusNotFound || ae.Status == http.StatusConflict || ae.Status == http.StatusForbidden {
+				if ae.Status == http.StatusNotFound {
+					if _, err := e.store.RemoveCachedCollection(sess.AccountID, item.ID); err != nil {
+						_ = e.store.MarkOutboxRetry(sess.AccountID, item.ID, "local_db_error", "无法更新本机缓存，稍后重新核对。", e.now().Add(backoffDuration(item.AttemptCount)), e.now())
+						return false
+					}
+				}
 				_ = e.store.MarkOutboxNeedsReview(
 					sess.AccountID,
 					item.ID,
@@ -319,14 +384,14 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 		return false
 	}
 
-	col, _, err := e.client.CreateCollectionRaw(ctx, sess.Token, item.IdempotencyKey, []byte(item.FrozenRequestJSON))
+	col, _, err := e.client.CreateCollectionRaw(ctx, sess, item.IdempotencyKey, []byte(item.FrozenRequestJSON))
 	if err == nil {
 		e.acceptReceipt(sess.AccountID, item, col)
 		return false
 	}
 
 	if isUnauthorized(err) {
-		_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，已暂停上传，请重新登录。", e.now())
+		_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，已暂停上传，请重新登录。", e.now())
 		return true
 	}
 
@@ -370,6 +435,12 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 // Keep the original and its staged files until the matching live receipt has been cached.
 func (e *Engine) acceptReceipt(account string, item store.OutboxItem, col api.Collection) {
 	now := e.now()
+	if col.ID == item.ID && col.DeletedAt != nil {
+		if _, err := e.store.RemoveCachedCollection(account, item.ID); err != nil {
+			_ = e.store.MarkOutboxRetry(account, item.ID, "local_db_error", "无法更新本机缓存，稍后重新核对。", now.Add(backoffDuration(item.AttemptCount)), now)
+			return
+		}
+	}
 	if col.ID != item.ID || col.DeletedAt != nil {
 		_ = e.store.MarkOutboxNeedsReview(account, item.ID, "receipt_mismatch", "云端记录已删除或回执编号不符，原稿留在本机供核对。", now)
 		return
@@ -399,10 +470,10 @@ func (e *Engine) ensureAttachmentReady(
 
 	// Already submitted complete (202): poll GET /uploads/{id} until ready.
 	if att.Stage == store.StageVerifying && att.UploadID != "" {
-		up, err := e.client.GetUpload(ctx, sess.Token, att.UploadID)
+		up, err := e.client.GetUpload(ctx, sess, att.UploadID)
 		if err != nil {
 			if isUnauthorized(err) {
-				_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
+				_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 				return "", true, 0, nil
 			}
 			if isTransientError(err) {
@@ -457,14 +528,14 @@ func (e *Engine) ensureAttachmentReady(
 		var grant api.UploadGrant
 		if needGrant {
 			var err error
-			grant, err = e.client.CreateUpload(ctx, sess.Token, att.UploadIdempotencyKey, api.UploadRequest{
+			grant, err = e.client.CreateUpload(ctx, sess, att.UploadIdempotencyKey, api.UploadRequest{
 				Filename:  att.Filename,
 				MimeType:  att.MimeType,
 				SizeBytes: att.SizeBytes,
 			})
 			if err != nil {
 				if isUnauthorized(err) {
-					_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
+					_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 					return "", true, 0, nil
 				}
 				if ae, ok := api.AsAPIError(err); ok {
@@ -533,10 +604,10 @@ func (e *Engine) ensureAttachmentReady(
 
 	// Step C: Complete upload (202) and persist stage=verifying (or ready).
 	if att.Stage == store.StageUploadedOSS {
-		up, err := e.client.CompleteUpload(ctx, sess.Token, att.UploadID)
+		up, err := e.client.CompleteUpload(ctx, sess, att.UploadID)
 		if err != nil {
 			if isUnauthorized(err) {
-				_ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
+				_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 				return "", true, 0, nil
 			}
 			if ae, ok := api.AsAPIError(err); ok && ae.Status == http.StatusConflict && ae.Code == "upload_not_pending" {
@@ -555,7 +626,7 @@ func (e *Engine) ensureAttachmentReady(
 		}
 		_ = e.store.UpdateAttachmentStage(sess.AccountID, att.ID, store.StageVerifying, up.ExpiresAt, "")
 		// Poll once right away in case verification completed synchronously in fast/synthetic backends.
-		checked, err := e.client.GetUpload(ctx, sess.Token, att.UploadID)
+		checked, err := e.client.GetUpload(ctx, sess, att.UploadID)
 		if err == nil && (checked.Status == "ready" || checked.Status == "attached") {
 			_ = e.store.UpdateAttachmentStage(sess.AccountID, att.ID, store.StageReady, checked.ExpiresAt, "")
 			return checked.ID, false, 0, nil
@@ -575,9 +646,7 @@ func isTransientError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, context.Canceled) {
-		return false
-	}
+
 	if ae, ok := api.AsAPIError(err); ok {
 		return ae.Status == http.StatusTooManyRequests || ae.Status >= 500
 	}

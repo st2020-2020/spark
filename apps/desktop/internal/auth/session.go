@@ -11,15 +11,22 @@ import (
 type Sessions struct {
 	mu      sync.RWMutex
 	backing CredentialStore
+	origin  string
 	current StoredSession
 }
 
-func OpenSessions(backing CredentialStore) (*Sessions, error) {
+func OpenSessions(backing CredentialStore, origin string) (*Sessions, error) {
 	s, err := backing.Load()
 	if err != nil && !errors.Is(err, ErrNoSession) {
 		return nil, err
 	}
-	return &Sessions{backing: backing, current: s}, nil
+	if origin == "" {
+		return nil, errors.New("missing session origin")
+	}
+	if s.Origin != origin {
+		s = StoredSession{}
+	}
+	return &Sessions{backing: backing, current: s, origin: origin}, nil
 }
 func (s *Sessions) Load() (StoredSession, error) {
 	s.mu.RLock()
@@ -32,6 +39,9 @@ func (s *Sessions) Load() (StoredSession, error) {
 func (s *Sessions) Save(next StoredSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if next.Origin != s.origin {
+		return errors.New("session origin mismatch")
+	}
 	if err := s.backing.Save(next); err != nil {
 		return err
 	}
@@ -49,12 +59,17 @@ func (s *Sessions) Clear() error {
 }
 
 // An old request may return after the user has already paired a new device session.
-func (s *Sessions) Expire(token string) error {
+func (s *Sessions) Expire(token string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if token == "" || s.current.Token != token || !s.current.ExpiresAt.After(time.Now()) {
-		return nil
+	if token == "" || s.current.Token != token || (!s.current.ExpiresAt.IsZero() && !s.current.ExpiresAt.After(time.Now())) {
+		return false, nil
 	}
-	s.current.ExpiresAt = time.Now().UTC()
-	return s.backing.Save(s.current)
+	next := s.current
+	next.ExpiresAt = time.Now().UTC()
+	if err := s.backing.Save(next); err != nil {
+		return false, err
+	}
+	s.current = next
+	return true, nil
 }

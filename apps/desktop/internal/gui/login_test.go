@@ -40,7 +40,7 @@ func TestLoginThroughLocalForm(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(api.DesktopTokenResult{Token: token, AccountID: account, AccountLabel: input.Email, ExpiresAt: time.Now().Add(time.Hour)})
 	}))
 	defer upstream.Close()
-	sessions, err := auth.OpenSessions(auth.NewMemoryStore())
+	sessions, err := auth.OpenSessions(auth.NewMemoryStore(), upstream.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestLoginThroughLocalForm(t *testing.T) {
 	if login("").Code != 409 || hits != before {
 		t.Fatal("stale form switched the account")
 	}
-	if err := sessions.Expire(token); err != nil {
+	if _, err := sessions.Expire(token); err != nil {
 		t.Fatal(err)
 	}
 	upstream.Close()

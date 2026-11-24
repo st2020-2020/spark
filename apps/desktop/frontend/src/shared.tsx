@@ -299,7 +299,15 @@ function CopyAction({
     </button>
   );
 }
-export function Preview({ req, id }: { req: Request; id: string }) {
+export function Preview({
+  req,
+  id,
+  localOnly = false,
+}: {
+  req: Request;
+  id: string;
+  localOnly?: boolean;
+}) {
   const [d, set] = useState<Detail>(),
     [err, bad] = useState(''),
     [actionError, setActionError] = useState(''),
@@ -308,13 +316,18 @@ export function Preview({ req, id }: { req: Request; id: string }) {
     const c = new AbortController();
     set(undefined);
     bad('');
-    req<Detail>('collections/' + id, 'GET', undefined, c.signal)
+    req<Detail>(
+      'collections/' + id + (localOnly ? '?local=1' : ''),
+      'GET',
+      undefined,
+      c.signal,
+    )
       .then(set)
       .catch((e) => {
         if (!c.signal.aborted) bad(message(e));
       });
     return () => c.abort();
-  }, [id, req, version]);
+  }, [id, req, version, localOnly]);
   if (err)
     return (
       <div>

@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -48,12 +49,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	service := config.KeychainService
-	if cfg.AllowLoopbackHTTP {
-		origin, _ := url.Parse(cfg.APIBaseURL)
-		service += ".test." + origin.Host
-	}
-	sessions, err := auth.OpenSessions(auth.NewKeychainStore(service))
+	service := cfg.CredentialService()
+	sessions, err := auth.OpenSessions(auth.NewKeychainStore(service), cfg.APIBaseURL)
 	if err != nil {
 		return err
 	}
@@ -68,9 +65,10 @@ func run() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
-	defer func() { cancel(); workers.Wait() }()
+
 	engine := syncer.New(db, sessions, client)
-	host := &gui.Host{Store: db, API: client, Engine: engine, Sessions: sessions, Clipboard: native.NewClipboardTracker(), OpenURL: native.OpenSystemBrowser}
+	host := &gui.Host{Store: db, API: client, Engine: engine, Sessions: sessions, Clipboard: native.NewClipboardTracker(), CopyText: native.CopyTextToClipboard, OpenURL: native.OpenSystemBrowser}
+	defer func() { host.Captures.Shutdown(cancel); workers.Wait() }()
 	static, err := fs.Sub(frontend, "frontend/dist")
 	if err != nil {
 		return err
@@ -81,7 +79,7 @@ func run() error {
 	var app *application.App
 	var panel, book *application.WebviewWindow
 	var openBook func(string)
-	app = application.New(application.Options{Name: "Spark", Description: "灵光手帐", LogLevel: slog.LevelWarn, OnShutdown: cancel,
+	app = application.New(application.Options{Name: "Spark", Description: "灵光手帐", LogLevel: slog.LevelWarn, OnShutdown: func() { host.Captures.Shutdown(cancel) },
 		Assets:         application.AssetOptions{Handler: mux, DisableLogging: true},
 		Mac:            application.MacOptions{ActivationPolicy: application.ActivationPolicyAccessory},
 		SingleInstance: &application.SingleInstanceOptions{UniqueID: service, OnSecondInstanceLaunch: func(application.SecondInstanceData) { application.InvokeAsync(func() { openBook("") }) }},
@@ -107,23 +105,34 @@ func run() error {
 			}
 		})
 	}
-	client.OnUnauthorized = func(token string) error { err := sessions.Expire(token); host.Change(); return err }
+	client.OnUnauthorized = func(token string) error {
+		changed, err := sessions.Expire(token)
+		if changed {
+			host.Change()
+		}
+		return err
+	}
 	engine.SetOnChange(host.Change)
 	first, _ := sessions.Load()
 	panel = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "随手记", Title: "Spark · 随手记", URL: "/?mode=panel", Width: 460, Height: 260, Hidden: first.AccountID != "", Frameless: true, DisableResize: true, BackgroundType: application.BackgroundTypeTransparent,
 		Mac: application.MacWindow{WindowClass: application.MacWindowClassPanel, PanelPreferences: application.MacPanelPreferences{NonActivating: true, FloatingPanel: true}, Backdrop: application.MacBackdropTransparent, WindowLevel: application.MacWindowLevelFloating, CollectionBehavior: application.MacWindowCollectionBehaviorCanJoinAllSpaces | application.MacWindowCollectionBehaviorFullScreenAuxiliary}})
 	host.PanelVisible = func() bool { return application.InvokeSyncWithResult(panel.IsVisible) }
 	hide := func() { panel.Hide(); native.RestoreFrontApp() }
+	panelHeight := 260
 	show := func() {
+		if ctx.Err() != nil {
+			return
+		}
+		engine.RequestCatalog()
 		if !panel.IsVisible() {
 			native.RememberFrontApp()
 		}
-		native.PositionPanel(panel.NativeWindow())
+		native.PositionPanel(panel.NativeWindow(), panelHeight)
 		panel.Show()
 		panel.Focus()
 		signal(panel, "spark-show", nil)
 	}
-	panel.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { e.Cancel(); panel.Hide() })
+	panel.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) { e.Cancel(); hide() })
 	panel.OnWindowEvent(events.Common.WindowLostFocus, func(e *application.WindowEvent) {
 		application.InvokeAsync(func() {
 			if panel.IsVisible() && !panel.IsFocused() {
@@ -187,7 +196,9 @@ func run() error {
 			}
 			show()
 			if err := tray.PositionWindow(panel, 6); err != nil {
-				native.PositionPanel(panel.NativeWindow())
+				native.PositionPanel(panel.NativeWindow(), panelHeight)
+			} else {
+				native.ResizePanel(panel.NativeWindow(), panelHeight)
 			}
 		})
 	})
@@ -200,34 +211,51 @@ func run() error {
 	tray.OnRightClick(tray.OpenMenu)
 	var taking atomic.Bool
 	screenshot := func() {
-		if !taking.CompareAndSwap(false, true) {
-			return
-		}
-		go func() {
-			defer taking.Store(false)
-			was := application.InvokeSyncWithResult(func() bool { vis := panel.IsVisible(); panel.Hide(); return vis })
-			owner, _ := sessions.Load()
-			if owner.AccountID == "" {
-				application.InvokeAsync(show)
+		application.InvokeAsync(func() {
+			if ctx.Err() != nil || !taking.CompareAndSwap(false, true) {
 				return
 			}
-			data, err := native.CaptureInteractiveScreenshot(ctx)
-			application.InvokeAsync(func() {
-				current, _ := sessions.Load()
-				if current.AccountID != owner.AccountID {
+			if !host.Captures.Begin() {
+				taking.Store(false)
+				return
+			}
+			was := panel.IsVisible()
+			owner, _ := sessions.Load()
+			if owner.AccountID == "" {
+				host.Captures.Done()
+				taking.Store(false)
+				show()
+				return
+			}
+			panel.Hide()
+			go func() {
+				defer host.Captures.Done()
+				defer taking.Store(false)
+				data, err := native.CaptureInteractiveScreenshot(ctx)
+				if ctx.Err() != nil {
 					return
 				}
-				if was || len(data) > 0 || err != nil {
-					show()
-				}
-				if err != nil {
-					signal(panel, "spark-error", err.Error())
-				} else if len(data) > 0 {
-					signal(panel, "spark-image", map[string]any{"account": owner.AccountID, "data": data, "filename": "选区截图.png"})
-				}
-			})
-		}()
+				application.InvokeAsync(func() {
+					if ctx.Err() != nil {
+						return
+					}
+					current, _ := sessions.Load()
+					if current.AccountID != owner.AccountID {
+						return
+					}
+					if was || len(data) > 0 || err != nil {
+						show()
+					}
+					if err != nil {
+						signal(panel, "spark-error", err.Error())
+					} else if len(data) > 0 {
+						signal(panel, "spark-image", map[string]any{"account": owner.AccountID, "data": data, "filename": "选区截图.png"})
+					}
+				})
+			}()
+		})
 	}
+
 	var shortcutMu sync.Mutex
 	host.Rebind = func(kind, value string) error {
 		shortcutMu.Lock()
@@ -271,45 +299,66 @@ func run() error {
 			if e != nil {
 				return e
 			}
-			application.InvokeAsync(func() { native.ResizePanel(panel.NativeWindow(), min(560, max(n, 80))) })
+			application.InvokeAsync(func() {
+				panelHeight = min(560, max(n, 80))
+				native.ResizePanel(panel.NativeWindow(), panelHeight)
+			})
 		}
 		return nil
 	}
-	drop := func(text string, paths []string, png []byte) {
+	drop := func(text string, paths []string, png []byte) bool {
+		if !host.Captures.Begin() {
+			return false
+		}
 		owner, err := sessions.Load()
 		if err != nil {
+			host.Captures.Done()
 			application.InvokeAsync(show)
-			return
+			return false
 		}
-		in := store.EnqueueInput{AccountID: owner.AccountID, RawText: text}
-		if len(png) > 0 {
-			in.Attachments = []store.PendingAttachmentInput{{Filename: "拖入图片.png", Data: png}}
-		}
-		if len(paths) > api.MaxImagesPerCol {
-			err = errors.New("单条收藏最多附带 9 张图片。")
-		}
-		for _, path := range paths {
-			if err != nil {
-				break
+		go func() {
+			defer host.Captures.Done()
+			in := store.EnqueueInput{AccountID: owner.AccountID, RawText: text}
+			if len(png) > 0 {
+				in.Attachments = []store.PendingAttachmentInput{{Filename: "拖入图片.png", Data: png}}
 			}
-			var raw []byte
-			raw, err = readImage(path)
+			if len(paths) > api.MaxImagesPerCol {
+				err = errors.New("单条收藏最多附带 9 张图片。")
+			}
+			for _, path := range paths {
+				if err != nil {
+					break
+				}
+				var raw []byte
+				raw, err = readImage(path)
+				if err == nil {
+					in.Attachments = append(in.Attachments, store.PendingAttachmentInput{Filename: filepath.Base(path), Data: raw})
+				}
+			}
 			if err == nil {
-				in.Attachments = append(in.Attachments, store.PendingAttachmentInput{Filename: filepath.Base(path), Data: raw})
+				_, err = host.Capture(in)
 			}
-		}
-		if err == nil {
-			_, err = host.Capture(in)
-		}
-		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			application.InvokeAsync(func() {
-				show()
-				signal(panel, "spark-error", "无法收下拖入的内容，请检查图片格式、大小和数量。")
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					show()
+					signal(panel, "spark-error", "无法收下拖入的内容，请检查图片格式、大小和数量。")
+					return
+				}
+				tray.SetLabel("✓")
+				time.AfterFunc(450*time.Millisecond, func() {
+					if ctx.Err() == nil {
+						tray.SetLabel("")
+					}
+				})
 			})
-			return
-		}
-		tray.SetLabel("✓")
-		time.AfterFunc(450*time.Millisecond, func() { tray.SetLabel("") })
+		}()
+		return true
 	}
 	app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 		workers.Add(2)
@@ -333,7 +382,7 @@ func run() error {
 				}
 			}
 		}()
-		native.RegisterTrayDropHandlers(func(t string) { drop(t, nil, nil) }, func(p []string) { drop("", p, nil) }, func(data []byte) { drop("", nil, data) }, func() { application.InvokeAsync(show) })
+		native.RegisterTrayDropHandlers(func(t string) bool { return drop(t, nil, nil) }, func(p []string) bool { return drop("", p, nil) }, func(data []byte) bool { return drop("", nil, data) }, func() { application.InvokeAsync(show) })
 		for _, binding := range []struct {
 			key string
 			fn  func()
@@ -353,7 +402,8 @@ func signal(w *application.WebviewWindow, name string, data any) {
 	}
 }
 func readImage(path string) ([]byte, error) {
-	f, e := os.Open(path)
+	// Inspect special files without waiting for a FIFO writer during shutdown.
+	f, e := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if e != nil {
 		return nil, e
 	}

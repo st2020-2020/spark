@@ -367,12 +367,16 @@ func (s *Store) ResumeAuthPaused(accountID string, now time.Time) error {
 }
 
 // PauseAccountQueueOn401 marks all in-flight/local_saved items for accountID as auth_paused.
-func (s *Store) PauseAccountQueueOn401(accountID string, code, msg string, now time.Time) error {
-	_, err := s.db.Exec(`
+func (s *Store) PauseAccountQueueOn401(accountID string, code, msg string, now time.Time) (bool, error) {
+	result, err := s.db.Exec(`
 		UPDATE outbox_items SET state='auth_paused', last_error_code=?, last_error_message=?, updated_at=?
 		WHERE account_id=? AND state IN ('local_saved', 'syncing')`,
 		code, msg, now.UTC().Format(time.RFC3339Nano), accountID)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n > 0, err
 }
 
 func (s *Store) MarkOutboxSyncing(accountID, id string, now time.Time) error {

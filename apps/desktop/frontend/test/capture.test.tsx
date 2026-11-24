@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -11,6 +12,7 @@ import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { Book } from '../src/Book';
 import { Login, Preview } from '../src/shared';
 import { Capture } from '../src/Panel';
+import { Search } from '../src/Search';
 import type { Request, State } from '../src/bridge';
 
 const state: State = {
@@ -278,7 +280,7 @@ it('截屏权限提示随浮窗扩高，提示内可以打开系统设置，重�
   const camera = screen.getByRole('button', { name: '选区截屏' });
   fireEvent.click(camera);
   expect(req).toHaveBeenCalledWith('window/screenshot', 'POST');
-  const panel = camera.closest('.panel')!;
+  const panel = camera.closest('.panel-content')!;
   // jsdom has no layout. Model the taller content reported by WebKit after the event.
   Object.defineProperty(panel, 'offsetHeight', {
     configurable: true,
@@ -457,4 +459,123 @@ it('手动同步等待刷新完成，期间不能重复触发', async () => {
   expect(sync.getAttribute('aria-busy')).toBe('true');
   finish!();
   await waitFor(() => expect(sync.disabled).toBe(false));
+});
+
+it('会话失效后刷新手帐仍可打开缓存详情，连续状态通知只读取本机数据', async () => {
+  const requests: string[] = [];
+  const expired = {
+    ...state,
+    session: { ...state.session, connected: false, expired: true },
+  };
+  const req: Request = async (path) => {
+    requests.push(path);
+    if (path.startsWith('collections?'))
+      return [{ id: 'one', display_title: '本机记录' }] as never;
+    if (path === 'collections/one?local=1')
+      return {
+        collection: {
+          id: 'one',
+          display_title: '本机记录',
+          plain_text: '本机正文',
+        },
+      } as never;
+    return [] as never;
+  };
+  render(<Book state={expired} req={req} refresh={() => {}} />);
+  await screen.findByRole('button', { name: '本机记录' });
+  fireEvent(window, new Event('spark-state'));
+  fireEvent(window, new Event('spark-state'));
+  fireEvent.click(await screen.findByRole('button', { name: '本机记录' }));
+  await screen.findByText('本机正文');
+  expect(requests).toContain('collections/one?local=1');
+  expect(
+    requests.some(
+      (p) =>
+        p.startsWith('collections/page') ||
+        p === 'sync/now' ||
+        p === 'collections/one',
+    ),
+  ).toBe(false);
+});
+
+it('写正文消隐当前剪贴板建议，Tab 回到普通导航', async () => {
+  const base = host();
+  const req: Request = (path, ...args) =>
+    path === 'clipboard'
+      ? Promise.resolve({
+          available: true,
+          change_count: 17,
+          text: '复制片段',
+        } as never)
+      : (base as Request)(path, ...args);
+  render(<Capture state={state} req={req} />);
+  await screen.findByText('复制片段');
+  const input = screen.getByRole('textbox', {
+    name: '记录灵感',
+  }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: '新想法' } });
+  expect(screen.queryByText('复制片段')).toBeNull();
+  expect(fireEvent.keyDown(input, { key: 'Tab' })).toBe(true);
+  expect(input.value).toBe('新想法');
+  expect(base).toHaveBeenCalledWith('clipboard/dismiss', 'POST', {
+    change_count: 17,
+  });
+  fireEvent(window, new Event('spark-show'));
+  await waitFor(() =>
+    expect(base.mock.calls.filter(([path]) => path === 'projects').length).toBe(
+      2,
+    ),
+  );
+  expect(screen.queryByText('复制片段')).toBeNull();
+});
+
+it('浮窗保持打开时收到目录刷新结果即可选择项目', async () => {
+  let projects: { id: string; name: string }[] = [];
+  const base = host();
+  const req: Request = (path, ...args) =>
+    path === 'projects'
+      ? Promise.resolve(projects as never)
+      : (base as Request)(path, ...args);
+  render(<Capture state={state} req={req} />);
+  const input = screen.getByRole('textbox', { name: '记录灵感' });
+  fireEvent.change(input, { target: { value: '灵感 @画' } });
+  expect(screen.queryByRole('option')).toBeNull();
+  projects = [{ id: 'p', name: '画册' }];
+  fireEvent(window, new Event('spark-state'));
+  fireEvent.click(await screen.findByRole('option', { name: '@ 画册' }));
+  expect((input as HTMLTextAreaElement).value).toBe('灵感 ');
+});
+
+it('快搜失效时在防抖结束后仍只读本机结果和缓存预览', async () => {
+  const paths: string[] = [];
+  const req: Request = async (path) => {
+    paths.push(path);
+    if (path.startsWith('search/local'))
+      return [
+        {
+          id: 'one',
+          display_title: '步道',
+          snippet: '河岸',
+          sync_state: 'synced',
+        },
+      ] as never;
+    if (path === 'collections/one?local=1')
+      return {
+        collection: { display_title: '步道', plain_text: '缓存预览' },
+      } as never;
+    return [] as never;
+  };
+  vi.useFakeTimers();
+  try {
+    render(<Search req={req} back={() => {}} localOnly />);
+    const input = screen.getByRole('textbox', { name: '搜索收藏' });
+    fireEvent.change(input, { target: { value: '河岸' } });
+    await act(() => vi.advanceTimersByTimeAsync(250));
+    fireEvent.click(screen.getByRole('button', { name: /步道/ }));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByText('缓存预览')).toBeTruthy();
+    expect(paths.some((path) => path.startsWith('search/remote'))).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });

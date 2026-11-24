@@ -139,7 +139,7 @@ html[data-window='panel'] #root {
 }
 .panel {
   width: 100%;
-  max-height: 560px;
+  max-height: min(560px, 100vh);
   overflow: auto;
   scroll-padding-bottom: 46px;
 }
@@ -1228,7 +1228,7 @@ button.card:hover {
   button:not(:disabled):active {
     transform: scale(0.97);
   }
-  .panel > .capture-sheet,
+  .panel-content > .capture-sheet,
   .panel .search-view,
   .panel .login-form,
   .journal-view,

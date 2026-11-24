@@ -237,7 +237,7 @@ func TestOfflineCaptureRestartReconnectSingleCloudRecord(t *testing.T) {
 	}
 	creds := auth.NewMemoryStore()
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
-	_ = creds.Save(auth.StoredSession{Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
+	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 
 	// Capture while offline.
 	item, err := st.EnqueueCapture(store.EnqueueInput{
@@ -322,7 +322,7 @@ func TestNeverSentPast7DaysAndSentUnknownPast7Days(t *testing.T) {
 
 	creds := auth.NewMemoryStore()
 	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
-	_ = creds.Save(auth.StoredSession{Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: t0.Add(30 * 24 * time.Hour)})
+	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: t0.Add(30 * 24 * time.Hour)})
 
 	// Draft 1: offline, NEVER sent for 10 days -> must succeed on first send!
 	neverSent, err := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", RawText: "十天前离线草稿"}, t0)
@@ -374,7 +374,7 @@ func Test401StopsQueueAndAccountSwitchDoesNotCrossQueues(t *testing.T) {
 
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	creds := auth.NewMemoryStore()
-	_ = creds.Save(auth.StoredSession{Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
+	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 
 	itemA1, _ := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", RawText: "A1"}, now)
 	itemA2, _ := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", RawText: "A2"}, now.Add(time.Second))
@@ -395,7 +395,7 @@ func Test401StopsQueueAndAccountSwitchDoesNotCrossQueues(t *testing.T) {
 	cloud.mu.Lock()
 	cloud.force401 = false
 	cloud.mu.Unlock()
-	_ = creds.Save(auth.StoredSession{Token: "tok-B", AccountID: "acc-B", AccountLabel: "b@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
+	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-B", AccountID: "acc-B", AccountLabel: "b@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 	itemB, _ := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-B", RawText: "B1"}, now.Add(3*time.Second))
 
 	eng.SyncOnce(context.Background())
@@ -422,7 +422,7 @@ func Test409DuplicateResourcePreservesLocalDraftForReview(t *testing.T) {
 	defer st.Close()
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	creds := auth.NewMemoryStore()
-	_ = creds.Save(auth.StoredSession{Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
+	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 
 	item, _ := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", RawText: "冲突测试"}, now)
 	client, _ := api.NewClient(apiSrv.URL, true)
@@ -447,11 +447,160 @@ func TestDeletedReceiptKeepsLocalOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := st.UpsertCachedCollectionDetail("owner", api.Collection{ID: item.ID, PlainText: "old cloud copy"}); err != nil {
+		t.Fatal(err)
+	}
 	engine := New(st, auth.NewMemoryStore(), nil)
 	deleted := now.UTC().Format(time.RFC3339)
 	engine.acceptReceipt("owner", item, api.Collection{ID: item.ID, DeletedAt: &deleted})
+	if _, ok, err := st.GetCachedCollectionDetail("owner", item.ID); ok || err != nil {
+		t.Fatal("deleted receipt still cached", err)
+	}
 	got, found, err := st.GetOutboxItem("owner", item.ID)
 	if err != nil || !found || got.State != store.OutboxNeedsReview || got.RawText != "  original text  " {
 		t.Fatal("deleted receipt discarded or altered the local draft")
+	}
+}
+
+type interruptedVerification struct {
+	BackendClient
+	polling chan struct{}
+}
+
+func (c interruptedVerification) GetUpload(ctx context.Context, _ auth.StoredSession, _ string) (api.Upload, error) {
+	close(c.polling)
+	<-ctx.Done()
+	return api.Upload{}, ctx.Err()
+}
+
+func TestCancelDuringVerificationResumesWithSameUpload(t *testing.T) {
+	cloud := newFakeCloud()
+	id := uuid.NewString()
+	cloud.uploads[id] = "verifying"
+	upstream, oss := cloud.start(t)
+	defer upstream.Close()
+	defer oss.Close()
+	client, err := api.NewClient(upstream.URL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	creds := auth.NewMemoryStore()
+	if err := creds.Save(auth.StoredSession{Token: "tok-A", AccountID: "acc-A", Origin: upstream.URL, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	item, err := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", Attachments: []store.PendingAttachmentInput{{Filename: "note.png", Data: samplePNG()}}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	att := item.Attachments[0]
+	if err := st.UpdateAttachmentGrant("acc-A", att.ID, id, store.StageVerifying, now, now.Add(24*time.Hour), api.UploadGrant{}); err != nil {
+		t.Fatal(err)
+	}
+	interrupted := interruptedVerification{client, make(chan struct{})}
+	engine := New(st, creds, interrupted)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); engine.SyncOnce(ctx) }()
+	select {
+	case <-interrupted.polling:
+	case <-ctx.Done():
+		t.Fatal("verification did not start")
+	}
+	cancel()
+	<-done
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	st, err = store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	retained, found, err := st.GetOutboxItem("acc-A", item.ID)
+	if err != nil || !found || retained.State != store.OutboxSyncing || len(retained.Attachments) != 1 || retained.Attachments[0].Stage != store.StageVerifying || retained.Attachments[0].UploadID != id {
+		t.Fatalf("lost resumable upload: %+v, %v", retained, err)
+	}
+	if err := st.ResetInterruptedSyncing("acc-A", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	New(st, creds, client).SyncOnce(t.Context())
+	synced, _, err := st.GetOutboxItem("acc-A", item.ID)
+	if err != nil || synced.State != store.OutboxSynced {
+		t.Fatalf("resume: %s, %v", synced.State, err)
+	}
+	cloud.mu.Lock()
+	defer cloud.mu.Unlock()
+	if cloud.ossPutCount != 0 || len(cloud.uploadIdem) != 0 || cloud.createPostCount != 1 {
+		t.Fatal("registration or upload repeated on restart")
+	}
+}
+
+type catalogBackend struct {
+	BackendClient
+	requests int
+	offline  bool
+}
+
+func (c *catalogBackend) ListProjects(context.Context, auth.StoredSession, string, string, string, int) (api.ProjectPage, error) {
+	c.requests++
+	return api.ProjectPage{Items: []api.Project{{ID: "p", Name: "参考"}}}, nil
+}
+func (c *catalogBackend) ListTags(context.Context, auth.StoredSession, string, string, int) (api.TagPage, error) {
+	if c.offline {
+		return api.TagPage{}, io.ErrUnexpectedEOF
+	}
+	return api.TagPage{Items: []api.Tag{{ID: "t", Name: "速写"}}}, nil
+}
+
+func TestCatalogWithoutBookWindow(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	creds := auth.NewMemoryStore()
+	client := &catalogBackend{}
+	e := New(st, creds, client)
+	now := time.Now()
+	e.SetClock(func() time.Time { return now })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	changed, done := make(chan struct{}, 1), make(chan struct{})
+	e.SetOnChange(func() { changed <- struct{}{} })
+	go func() { defer close(done); e.Run(ctx) }()
+	sess := auth.StoredSession{AccountID: "owner", Token: "session", ExpiresAt: now.Add(time.Hour)}
+	if err := creds.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	e.RequestCatalog()
+	select {
+	case <-changed:
+	case <-ctx.Done():
+		t.Fatal("login/panel request did not refresh")
+	}
+	cancel()
+	<-done
+	p, err := st.ListCachedProjects("owner")
+	if err != nil || len(p) != 1 || p[0].Name != "参考" {
+		t.Fatal("missing projects", err)
+	}
+	if err := e.refreshCatalog(t.Context(), sess, false); err != nil || client.requests != 1 {
+		t.Fatal("fresh directory refetched", err)
+	}
+	now = now.Add(6 * time.Minute)
+	client.offline = true
+	if err := e.refreshCatalog(t.Context(), sess, false); err == nil || client.requests != 2 {
+		t.Fatal("stale directory not refreshed")
+	}
+	tags, err := st.ListCachedTags("owner")
+	if err != nil || len(tags) != 1 || tags[0].Name != "速写" {
+		t.Fatal("offline refresh discarded directory", err)
 	}
 }

@@ -5,29 +5,36 @@
 #import <stdlib.h>
 
 
-extern void sparkGoTrayDropText(char *text);
-extern void sparkGoTrayDropFiles(char *joinedPaths);
-extern void sparkGoTrayDropImage(void *, size_t);
+extern int sparkGoTrayDropText(char *text);
+extern int sparkGoTrayDropFiles(char *joinedPaths);
+extern int sparkGoTrayDropImage(void *, size_t);
 extern void sparkGoTrayHoverExpand(void);
 
 static NSRunningApplication *gPrevFrontApp;
+static void onMainSync(dispatch_block_t block) {
+    if (NSThread.isMainThread) block();
+    else dispatch_sync(dispatch_get_main_queue(), block);
+}
+
 void sparkRememberFrontApp(void) {
-	dispatch_async(dispatch_get_main_queue(), ^{
-		NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
-		NSRunningApplication *selfApp = [NSRunningApplication currentApplication];
-		if (front != nil && front.processIdentifier != selfApp.processIdentifier) {
-			gPrevFrontApp = front;
-		}
-	});
+    onMainSync(^{
+        NSRunningApplication *front = NSWorkspace.sharedWorkspace.frontmostApplication;
+        gPrevFrontApp = front.processIdentifier == NSRunningApplication.currentApplication.processIdentifier ? nil : front;
+    });
 }
 
 void sparkRestoreFrontApp(void) {
-	dispatch_async(dispatch_get_main_queue(), ^{
-		if (gPrevFrontApp != nil && !gPrevFrontApp.terminated) {
-			[gPrevFrontApp activateWithOptions:NSApplicationActivateIgnoringOtherApps];
-		}
-		gPrevFrontApp = nil;
-	});
+    onMainSync(^{
+        if (gPrevFrontApp && !gPrevFrontApp.terminated) {
+            if (@available(macOS 14.0, *)) {
+                [NSApp yieldActivationToApplication:gPrevFrontApp];
+                [gPrevFrontApp activateFromApplication:NSRunningApplication.currentApplication options:0];
+            } else {
+                [gPrevFrontApp activateWithOptions:0];
+            }
+        }
+        gPrevFrontApp = nil;
+    });
 }
 
 void sparkSetDockVisible(int visible) {
@@ -105,15 +112,16 @@ int sparkReadClipboard(int *outChangeCount, int *outConcealed, char **outText, v
 	}
 }
 
-void sparkCopyText(const char *text) {
-	if (text == NULL) return;
-	NSString *str = [NSString stringWithUTF8String:text];
-	if (str == nil) return;
-	dispatch_async(dispatch_get_main_queue(), ^{
-		NSPasteboard *pb = [NSPasteboard generalPasteboard];
-		[pb clearContents];
-		[pb setString:str forType:NSPasteboardTypeString];
-	});
+int sparkCopyText(const char *text, size_t length) {
+    NSString *str = [[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding];
+    if (!str) return 0;
+    __block BOOL written = NO;
+    onMainSync(^{
+        NSPasteboard *pb = NSPasteboard.generalPasteboard;
+        [pb clearContents];
+        written = [pb setString:str forType:NSPasteboardTypeString];
+    });
+    return written;
 }
 
 // Drag-and-drop overlay view attached onto our NSStatusItem button.
@@ -185,8 +193,7 @@ void sparkTrayState(int state) {
 		if (paths.count > 0) {
 			NSData *json = [NSJSONSerialization dataWithJSONObject:paths options:0 error:nil];
             NSString *joined = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
-			sparkGoTrayDropFiles((char *)[joined UTF8String]);
-			return YES;
+			return sparkGoTrayDropFiles((char *)[joined UTF8String]) != 0;
 		}
 	}
     NSData *png = [pb dataForType:NSPasteboardTypePNG];
@@ -197,14 +204,12 @@ void sparkTrayState(int state) {
         }
     }
     if (png.length && png.length <= 5*1024*1024) {
-        sparkGoTrayDropImage((void *)png.bytes,png.length);
-        return YES;
+        return sparkGoTrayDropImage((void *)png.bytes,png.length) != 0;
     }
 	NSString *text = [pb stringForType:NSPasteboardTypeURL];
 	if (text == nil) text = [pb stringForType:NSPasteboardTypeString];
 	if (text != nil && text.length > 0) {
-		sparkGoTrayDropText((char *)[text UTF8String]);
-		return YES;
+		return sparkGoTrayDropText((char *)[text UTF8String]) != 0;
 	}
 	return NO;
 }
@@ -233,27 +238,22 @@ void sparkAttachTrayDrop(void) {
 
 int sparkClipboardCount(void) { return (int)[NSPasteboard generalPasteboard].changeCount; }
 
-void sparkPositionPanel(void *pointer) {
-    if (!pointer) return;
-    NSWindow *window = (__bridge NSWindow *)pointer;
-    NSPoint mouse = NSEvent.mouseLocation;
-    for (NSScreen *screen in NSScreen.screens) {
-        if (!NSPointInRect(mouse, screen.frame)) continue;
-        NSRect area = screen.visibleFrame;
-        [window setFrameTopLeftPoint:NSMakePoint(NSMidX(area)-window.frame.size.width/2,NSMinY(area)+area.size.height*.78)];
-        break;
+CGRect sparkPanelFrame(void *pointer) { return ((__bridge NSWindow *)pointer).frame; }
+
+CGRect sparkPanelVisibleFrame(void *pointer, int atMouse) {
+    if (atMouse) {
+        NSPoint mouse = NSEvent.mouseLocation;
+        for (NSScreen *screen in NSScreen.screens)
+            if (NSPointInRect(mouse, screen.frame)) return screen.visibleFrame;
     }
+    NSScreen *screen = ((__bridge NSWindow *)pointer).screen ?: NSScreen.mainScreen;
+    return screen.visibleFrame;
 }
 
-// Keep the menu-bar anchor stationary as the sheet grows downwards.
-void sparkResizePanel(void *pointer, int height) {
+void sparkApplyPanelFrame(void *pointer, CGRect frame, int resize) {
     NSWindow *window = (__bridge NSWindow *)pointer;
-    if (!window) return;
-    NSRect frame = window.frame;
-    frame.origin.y = NSMaxY(frame) - height;
-    frame.size = NSMakeSize(460, height);
     if (NSEqualRects(frame, window.frame)) return;
-    BOOL animate = window.isVisible && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    BOOL animate = resize && window.visible && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
     [window setFrame:frame display:YES animate:animate];
 }
 

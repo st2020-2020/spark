@@ -129,7 +129,11 @@ export function Book({ state, req, refresh }: Props) {
   const input = useRef<HTMLInputElement>(null),
     ime = useRef(false),
     serial = useRef(0),
-    { hits, error, offline: searchOffline } = useSearch(req, query, !!query);
+    {
+      hits,
+      error,
+      offline: searchOffline,
+    } = useSearch(req, query, !!query, !!state.session.expired);
   const pid = tab.startsWith('p:') ? tab.slice(2) : '',
     tid = tab.startsWith('t:') ? tab.slice(2) : '';
   const title =
@@ -253,6 +257,7 @@ export function Book({ state, req, refresh }: Props) {
             )
           : cached,
       );
+      if (state.session.expired) return;
       const page = await req<{ items: Summary[]; next_cursor?: string }>(
         'collections/page?project_id=' + pid + '&tag_id=' + tid,
         'GET',
@@ -276,7 +281,7 @@ export function Book({ state, req, refresh }: Props) {
       c.abort();
       serial.current++;
     };
-  }, [req, pid, tid, rev]);
+  }, [req, pid, tid, rev, state.session.expired]);
   async function more() {
     const seq = serial.current;
     loading(true);
@@ -608,7 +613,11 @@ export function Book({ state, req, refresh }: Props) {
                     <ArrowLeft />
                     返回{title}
                   </button>
-                  <Preview req={req} id={detail} />
+                  <Preview
+                    req={req}
+                    id={detail}
+                    localOnly={state.session.expired}
+                  />
                   {outbox.find((o) => o.id === detail)?.state ===
                     'needs_review' && (
                     <div className="review">

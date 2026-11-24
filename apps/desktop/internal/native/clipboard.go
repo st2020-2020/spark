@@ -66,3 +66,12 @@ func (t *ClipboardTracker) Dismiss() {
 	defer t.mu.Unlock()
 	t.changedAt = time.Time{}
 }
+
+// DismissSample ignores only the copy the user saw, even if a newer one arrived.
+func (t *ClipboardTracker) DismissSample(count int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if count == t.lastCount {
+		t.changedAt = time.Time{}
+	}
+}

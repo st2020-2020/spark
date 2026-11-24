@@ -7,12 +7,13 @@ import (
 	"errors"
 )
 
-func RegisterTrayDropHandlers(_ func(string), _ func([]string), _ func([]byte), _ func()) {}
-func RememberFrontApp()                                                                   {}
-func RestoreFrontApp()                                                                    {}
-func SetDockVisible(_ bool)                                                               {}
-func ReadClipboardSample() RawClipboardSample                                             { return RawClipboardSample{} }
-func CopyTextToClipboard(_ string)                                                        {}
+func RegisterTrayDropHandlers(_ func(string) bool, _ func([]string) bool, _ func([]byte) bool, _ func()) {
+}
+func RememberFrontApp()                       {}
+func RestoreFrontApp()                        {}
+func SetDockVisible(_ bool)                   {}
+func ReadClipboardSample() RawClipboardSample { return RawClipboardSample{} }
+func CopyTextToClipboard(_ string) bool       { return false }
 func CaptureInteractiveScreenshot(_ context.Context) ([]byte, error) {
 	return nil, errors.New("interactive screenshot is only supported on macOS")
 }

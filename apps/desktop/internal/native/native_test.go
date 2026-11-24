@@ -30,3 +30,20 @@ func TestClipboardSuggestionReadsOnlyFreshCopy(t *testing.T) {
 	tr.Dismiss()
 	tr.FreshSample(now, unexpected)
 }
+
+func TestLateDismissPreservesNewCopy(t *testing.T) {
+	tr := NewClipboardTracker()
+	now := time.Now()
+	for _, count := range []int{1, 2, 3} {
+		tr.Observe(count, now)
+	}
+	tr.DismissSample(2)
+	read := func() RawClipboardSample { return RawClipboardSample{ChangeCount: 3, Text: "current"} }
+	if _, ok := tr.FreshSample(now, read); !ok {
+		t.Fatal("late dismissal hid newer copy")
+	}
+	tr.DismissSample(3)
+	if _, ok := tr.FreshSample(now, read); ok {
+		t.Fatal("dismissed copy resurfaced")
+	}
+}

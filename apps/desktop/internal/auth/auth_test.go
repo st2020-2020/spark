@@ -55,3 +55,56 @@ func TestDesktopPairDomainSeparatedChallenge(t *testing.T) {
 		t.Fatalf("pair URL must never contain verifier")
 	}
 }
+
+func TestOriginBindingAndExpiryTransitions(t *testing.T) {
+	const origin = "https://notes.example.test"
+	backing := NewMemoryStore()
+	for _, unbound := range []string{"", "https://elsewhere.example.test"} {
+		_ = backing.Save(StoredSession{Origin: unbound, Token: "old", AccountID: "owner"})
+		s, err := OpenSessions(backing, origin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Load(); err != ErrNoSession {
+			t.Fatal("restored unbound credential")
+		}
+	}
+	sessions, err := OpenSessions(backing, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued := StoredSession{Origin: origin, Token: "new", AccountID: "owner", ExpiresAt: time.Now().Add(time.Hour)}
+	if err = sessions.Save(issued); err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan bool, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			changed, err := sessions.Expire(issued.Token)
+			if err != nil {
+				t.Error(err)
+			}
+			results <- changed
+		}()
+	}
+	n := 0
+	for i := 0; i < 8; i++ {
+		if <-results {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("expected one expiry transition, got %d", n)
+	}
+	restored, err := OpenSessions(backing, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := restored.Load()
+	if err != nil || !s.Public(time.Now()).Expired || s.AccountID != "owner" {
+		t.Fatal("lost offline account ownership")
+	}
+	if changed, err := restored.Expire("previous"); err != nil || changed {
+		t.Fatal("stale request changed the current session")
+	}
+}

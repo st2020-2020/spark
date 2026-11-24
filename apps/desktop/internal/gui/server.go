@@ -22,6 +22,8 @@ import (
 // Host owns the in-process UI bridge. Every account-bound request carries the
 // account displayed when the gesture started so a stale window cannot write to a new account.
 type Host struct {
+	Captures     CaptureTasks
+	CopyText     func(string) bool
 	Rebind       func(string, string) error
 	Store        *store.Store
 	Sessions     *auth.Sessions
@@ -113,7 +115,7 @@ func (h *Host) Handler() http.Handler {
 		if err != nil || current.Token != s.Token {
 			return nil, problem{409, "登录状态已变化"}
 		}
-		if err := h.API.RevokeDesktopSession(r.Context(), s.Token); err != nil {
+		if err := h.API.RevokeDesktopSession(r.Context(), s); err != nil {
 			if ae, ok := api.AsAPIError(err); !ok || ae.Status != 401 {
 				return nil, err
 			}
@@ -123,6 +125,10 @@ func (h *Host) Handler() http.Handler {
 		return nil, err
 	})
 	accountRoute("POST /local/capture", func(s auth.StoredSession, r *http.Request) (any, error) {
+		if !h.Captures.Begin() {
+			return nil, problem{503, "Spark 正在退出"}
+		}
+		defer h.Captures.Done()
 		var req struct {
 			RawText     string   `json:"raw_text"`
 			Intent      string   `json:"intent"`
@@ -167,14 +173,20 @@ func (h *Host) Handler() http.Handler {
 		return h.Store.SearchLocal(s.AccountID, q, n)
 	})
 	accountRoute("GET /local/search/remote", func(s auth.StoredSession, r *http.Request) (any, error) {
-		return h.API.SearchCollections(r.Context(), s.Token, r.URL.Query().Get("q"), "", "", "", 30)
+		if s.Public(time.Now()).Expired {
+			return nil, problem{401, "会话已到期，请重新登录"}
+		}
+		return h.API.SearchCollections(r.Context(), s, r.URL.Query().Get("q"), "", "", "", 30)
 	})
 	accountRoute("GET /local/collections", func(s auth.StoredSession, r *http.Request) (any, error) {
 		return h.Store.ListCachedCollections(s.AccountID, r.URL.Query().Get("project_id"), 100)
 	})
 	accountRoute("GET /local/collections/page", func(s auth.StoredSession, r *http.Request) (any, error) {
+		if s.Public(time.Now()).Expired {
+			return nil, problem{401, "会话已到期，请重新登录"}
+		}
 		q := r.URL.Query()
-		p, err := h.API.ListCollections(r.Context(), s.Token, "active", q.Get("project_id"), q.Get("tag_id"), q.Get("cursor"), 40)
+		p, err := h.API.ListCollections(r.Context(), s, "active", q.Get("project_id"), q.Get("tag_id"), q.Get("cursor"), 40)
 		if err == nil {
 			err = h.Store.UpsertCachedCollections(s.AccountID, p.Items)
 		}
@@ -192,19 +204,21 @@ func (h *Host) Handler() http.Handler {
 		if found && item.State != store.OutboxSynced {
 			return response{"item": item}, nil
 		}
-		c, err := h.API.GetCollection(r.Context(), s.Token, id)
-		if err == nil {
-			err = h.Store.UpsertCachedCollectionDetail(s.AccountID, c)
-			return response{"collection": c}, err
+		if s.Public(time.Now()).Expired || r.URL.Query().Get("local") == "1" {
+			return h.cachedDetail(s.AccountID, id)
 		}
-		if ae, ok := api.AsAPIError(err); ok && ae.Status != 429 && ae.Status < 500 {
+		c, err := h.remoteDetail(r, s, id)
+		if err == nil {
+			return response{"collection": c}, nil
+		}
+		var missing problem
+		if errors.As(err, &missing) {
 			return nil, err
 		}
-		cached, ok, e := h.Store.GetCachedCollectionDetail(s.AccountID, id)
-		if e == nil && ok {
-			return response{"collection": cached, "offline": true}, nil
+		if ae, ok := api.AsAPIError(err); ok && ae.Status != 429 && ae.Status != 401 && ae.Status < 500 {
+			return nil, err
 		}
-		return nil, err
+		return h.cachedDetail(s.AccountID, id)
 	})
 	accountRoute("GET /local/image/{id}", func(s auth.StoredSession, r *http.Request) (any, error) {
 		id := r.PathValue("id")
@@ -224,7 +238,10 @@ func (h *Host) Handler() http.Handler {
 			}
 			return nil, problem{404, "图片不存在"}
 		}
-		b, mime, err := h.API.GetAttachmentThumbnail(r.Context(), s.Token, id)
+		if s.Public(time.Now()).Expired {
+			return nil, problem{401, "请重新登录后读取云端图片"}
+		}
+		b, mime, err := h.API.GetAttachmentThumbnail(r.Context(), s, id)
 		return response{"mime": mime, "data": b}, err
 	})
 	accountRoute("POST /local/sync/now", func(s auth.StoredSession, r *http.Request) (any, error) {
@@ -281,14 +298,14 @@ func (h *Host) Handler() http.Handler {
 		if ok && item.State != store.OutboxSynced && len(item.Attachments) > 0 {
 			data, err = h.Store.ReadAttachmentBytes(item.Attachments[0])
 		} else {
-			col, e := h.API.GetCollection(r.Context(), s.Token, id)
+			col, e := h.remoteDetail(r, s, id)
 			if e != nil {
 				return nil, e
 			}
 			if len(col.Attachments) == 0 {
 				return nil, problem{404, "没有可复制的图片"}
 			}
-			data, err = h.API.OriginalImage(r.Context(), s.Token, col.Attachments[0].ID)
+			data, err = h.API.OriginalImage(r.Context(), s, col.Attachments[0].ID)
 		}
 		if err != nil {
 			return nil, err
@@ -321,18 +338,68 @@ func (h *Host) Handler() http.Handler {
 		if !ok {
 			return response{"available": false}, nil
 		}
-		return response{"available": true, "text": v.Text, "image": v.ImagePNG}, nil
+		return response{"available": true, "change_count": v.ChangeCount, "text": v.Text, "image": v.ImagePNG}, nil
 	})
-	route("POST /local/clipboard/dismiss", func(_ http.ResponseWriter, r *http.Request) (any, error) { h.Clipboard.Dismiss(); return nil, nil })
+	route("POST /local/clipboard/dismiss", func(_ http.ResponseWriter, r *http.Request) (any, error) {
+		var input struct {
+			Count *int `json:"change_count"`
+		}
+		if err := decode(r, &input); err != nil {
+			return nil, err
+		}
+		if input.Count == nil {
+			return nil, problem{400, "剪贴板建议编号无效"}
+		}
+		h.Clipboard.DismissSample(*input.Count)
+		return nil, nil
+	})
 	route("POST /local/clipboard/copy", func(_ http.ResponseWriter, r *http.Request) (any, error) {
 		var v struct{ Text string }
 		if err := decode(r, &v); err != nil {
 			return nil, err
 		}
-		native.CopyTextToClipboard(v.Text)
+		if !h.CopyText(v.Text) {
+			return nil, problem{503, "未能写入系统剪贴板，请重试。"}
+		}
 		return nil, nil
 	})
 	return m
+}
+
+func (h *Host) cachedDetail(account, id string) (any, error) {
+	c, ok, err := h.Store.GetCachedCollectionDetail(account, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, problem{404, "本机尚未缓存这条收藏的详情"}
+	}
+	return response{"collection": c, "offline": true}, nil
+}
+
+func (h *Host) remoteDetail(r *http.Request, s auth.StoredSession, id string) (api.Collection, error) {
+	c, err := h.API.GetCollection(r.Context(), s, id)
+	if err == nil && c.ID != id {
+		return api.Collection{}, problem{502, "收藏回执编号不符"}
+	}
+	ae, apiErr := api.AsAPIError(err)
+	if (apiErr && ae.Status == 404) || (err == nil && c.DeletedAt != nil) {
+		changed, e := h.Store.RemoveCachedCollection(s.AccountID, id)
+		if e != nil {
+			return api.Collection{}, problem{500, "无法清除已删除收藏的缓存"}
+		}
+		if changed {
+			h.Change()
+		}
+		return api.Collection{}, problem{404, "这条收藏已删除或不存在"}
+	}
+	if err != nil {
+		return api.Collection{}, err
+	}
+	if err := h.Store.UpsertCachedCollectionDetail(s.AccountID, c); err != nil {
+		return api.Collection{}, problem{500, "无法更新本机收藏缓存"}
+	}
+	return c, nil
 }
 
 func (h *Host) Capture(in store.EnqueueInput) (store.OutboxItem, error) {
@@ -380,12 +447,14 @@ func (h *Host) login(w http.ResponseWriter, r *http.Request) (any, error) {
 	if !auth.IsValidSecret(v.Token) || uuid.Validate(v.AccountID) != nil || !v.ExpiresAt.After(time.Now()) {
 		return nil, problem{502, "服务端没有返回有效的桌面会话。"}
 	}
-	if err := h.Sessions.Save(auth.StoredSession{Token: v.Token, AccountID: v.AccountID, AccountLabel: v.AccountLabel, ExpiresAt: v.ExpiresAt}); err != nil {
-		_ = h.API.RevokeDesktopSession(r.Context(), v.Token)
+	issued := auth.StoredSession{Origin: h.API.BaseURL(), Token: v.Token, AccountID: v.AccountID, AccountLabel: v.AccountLabel, ExpiresAt: v.ExpiresAt}
+	if err := h.Sessions.Save(issued); err != nil {
+		_ = h.API.RevokeDesktopSession(r.Context(), issued)
 		return nil, problem{500, "无法保存到系统钥匙串，请解锁钥匙串后重试。"}
 	}
 	h.Clipboard.Observe(native.ClipboardCount(), time.Now())
 	h.Clipboard.Dismiss()
+	h.Engine.RequestCatalog()
 	h.Engine.Trigger()
 	h.Change()
 	return nil, nil

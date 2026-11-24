@@ -44,6 +44,12 @@ func (s *Store) UpsertCachedCollections(accountID string, items []api.Collection
 	defer stmt.Close()
 
 	for _, c := range items {
+		if c.DeletedAt != nil {
+			if _, err := tx.Exec("DELETE FROM cached_collections WHERE account_id=? AND id=?", accountID, c.ID); err != nil {
+				return err
+			}
+			continue
+		}
 		raw, err := json.Marshal(c)
 		if err != nil {
 			return err
@@ -67,6 +73,10 @@ func (s *Store) UpsertCachedCollections(accountID string, items []api.Collection
 func (s *Store) UpsertCachedCollectionDetail(accountID string, c api.Collection) error {
 	if accountID == "" || c.ID == "" {
 		return nil
+	}
+	if c.DeletedAt != nil {
+		_, err := s.RemoveCachedCollection(accountID, c.ID)
+		return err
 	}
 	if c.Document != nil {
 		c.PlainText = c.Document.PlainText()
@@ -136,6 +146,15 @@ func (s *Store) UpsertCachedCollectionDetail(accountID string, c api.Collection)
 	return err
 }
 
+func (s *Store) RemoveCachedCollection(accountID, id string) (bool, error) {
+	result, err := s.db.Exec("DELETE FROM cached_collections WHERE account_id=? AND id=?", accountID, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := result.RowsAffected()
+	return n > 0, err
+}
+
 func (s *Store) ListCachedCollections(accountID string, projectID string, limit int) ([]api.CollectionSummary, error) {
 	if accountID == "" {
 		return []api.CollectionSummary{}, nil
@@ -145,7 +164,7 @@ func (s *Store) ListCachedCollections(accountID string, projectID string, limit 
 	}
 	rows, err := s.db.Query(`
 		SELECT summary_json FROM cached_collections
-		WHERE account_id=? ORDER BY created_at DESC LIMIT ?`, accountID, limit)
+		WHERE account_id=? AND json_extract(summary_json, '$.deleted_at') IS NULL ORDER BY created_at DESC LIMIT ?`, accountID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +190,7 @@ func (s *Store) ListCachedCollections(accountID string, projectID string, limit 
 
 func (s *Store) GetCachedCollectionDetail(accountID, id string) (api.Collection, bool, error) {
 	var raw string
-	err := s.db.QueryRow(`SELECT detail_json FROM cached_collections WHERE account_id=? AND id=?`, accountID, id).Scan(&raw)
+	err := s.db.QueryRow(`SELECT detail_json FROM cached_collections WHERE account_id=? AND id=? AND json_extract(summary_json, '$.deleted_at') IS NULL`, accountID, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && raw == "") {
 		return api.Collection{}, false, nil
 	}
@@ -226,7 +245,7 @@ func (s *Store) SearchLocal(accountID, query string, limit int) ([]LocalSearchHi
             UNION ALL
             SELECT c.id, 'cache', 'synced', display_title, plain_text, original_url, created_at, 1,
                 NULL, searchable_text, primary_type, COALESCE(json_extract(summary_json, '$.projects'), '[]') FROM cached_collections c
-            WHERE account_id=? AND NOT EXISTS (SELECT 1 FROM outbox_items o WHERE o.id=c.id AND o.account_id=c.account_id AND o.state!='synced')
+            WHERE account_id=? AND json_extract(summary_json, '$.deleted_at') IS NULL AND NOT EXISTS (SELECT 1 FROM outbox_items o WHERE o.id=c.id AND o.account_id=c.account_id AND o.state!='synced')
         )
         SELECT id,source,state,title,plain,original_url,created_at,COALESCE(filename,''),kind,projects FROM entries
         WHERE NOT EXISTS (SELECT 1 FROM json_each(?) WHERE instr(hay,value)=0)

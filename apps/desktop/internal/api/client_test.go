@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"spark/apps/desktop/internal/auth"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -56,7 +58,7 @@ func TestClientNoRedirectAndOSSStrictPut(t *testing.T) {
 	}
 
 	// API client must reject redirect instead of forwarding Bearer token.
-	_, err = client.GetDesktopSession(context.Background(), "test-secret-token")
+	_, err = client.GetDesktopSession(context.Background(), auth.StoredSession{Origin: apiSrv.URL, Token: "test-secret-token"})
 	if !apiRedirectHit {
 		t.Fatalf("expected API server to be reached")
 	}
@@ -120,5 +122,34 @@ func TestBuildDocumentSchemaShape(t *testing.T) {
 	emptyDoc := BuildDocument("   ")
 	if len(emptyDoc.Content.Content) != 1 || emptyDoc.Content.Content[0].Type != "paragraph" || len(emptyDoc.Content.Content[0].Content) != 0 {
 		t.Fatalf("unexpected empty document: %+v", emptyDoc)
+	}
+}
+
+func TestOriginMismatchStopsBothBearerTransports(t *testing.T) {
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("sample"))
+	}))
+	defer upstream.Close()
+	c, err := NewClient(upstream.URL, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, origin := range []string{"", "https://other.example.test"} {
+		s := auth.StoredSession{Origin: origin, Token: "synthetic"}
+		if _, err := c.GetDesktopSession(context.Background(), s); err == nil {
+			t.Fatal("unbound JSON request")
+		}
+		if _, _, err := c.GetAttachmentThumbnail(context.Background(), s, "image"); err == nil {
+			t.Fatal("unbound thumbnail request")
+		}
+	}
+	if hits.Load() != 0 {
+		t.Fatal("rejected credentials reached a transport")
+	}
+	if _, _, err := c.GetAttachmentThumbnail(context.Background(), auth.StoredSession{Origin: c.BaseURL(), Token: "synthetic"}, "image"); err != nil || hits.Load() != 1 {
+		t.Fatal("same-origin thumbnail failed", err)
 	}
 }

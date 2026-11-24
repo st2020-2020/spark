@@ -32,6 +32,7 @@ type PairRequest struct {
 // StoredSession represents the persisted desktop device session kept in macOS Keychain.
 // Token must remain strictly inside the Go host process and never be serialized to WebView.
 type StoredSession struct {
+	Origin       string    `json:"origin"`
 	Token        string    `json:"token"`
 	AccountID    string    `json:"account_id"`
 	AccountLabel string    `json:"account_label"`

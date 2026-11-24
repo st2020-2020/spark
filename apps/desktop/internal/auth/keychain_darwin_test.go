@@ -20,11 +20,11 @@ func TestIsolatedKeychainRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	issued := StoredSession{Token: proof.Verifier, AccountID: "synthetic-account", ExpiresAt: time.Now().UTC().Add(time.Hour)}
+	issued := StoredSession{Origin: "https://example.test", Token: proof.Verifier, AccountID: "synthetic-account", ExpiresAt: time.Now().UTC().Add(time.Hour)}
 	if err := k.Save(issued); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := OpenSessions(k)
+	reopened, err := OpenSessions(k, issued.Origin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestIsolatedKeychainRoundTrip(t *testing.T) {
 	if err != nil || loaded != issued {
 		t.Fatal("session did not round-trip")
 	}
-	if err := reopened.Expire(issued.Token); err != nil {
+	if _, err := reopened.Expire(issued.Token); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err = k.Load()
