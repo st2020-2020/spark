@@ -33,6 +33,7 @@ import { greeting, todayLine, groupByDay } from '../../../web/src/lib/journal';
 import { PALETTES } from '../../../web/src/lib/appearance';
 import { projectToneClass } from '../../../web/src/lib/projectTone';
 import { Capture } from './Panel';
+import { SidebarGroup, sidebarScope } from './SidebarSpace';
 import { extractDomain } from '../../../web/src/lib/format';
 import { SearchResults, useSearch } from './Search';
 function EntryCard({
@@ -56,19 +57,49 @@ function EntryCard({
         <ImageView req={req} id={entry.cover_attachment_id} name="收藏缩略图" />
       )}
       {(domain || projects.length > 0 || tags.length > 0) && (
-        <span className="labels">
-          {domain && <small className="domain">{domain}</small>}
-          {projects.map((p) => (
-            <small
+        <span className="entry-meta">
+          {projects.slice(0, 2).map((p) => (
+            <span
               key={p.project_id}
-              className={'washi ' + projectToneClass(p.project_id)}
+              className={'entry-project ' + projectToneClass(p.project_id)}
+              title={p.name}
             >
-              {p.name}
+              <i aria-hidden="true" />
+              <span>{p.name}</span>
+            </span>
+          ))}
+          {projects.length > 2 && (
+            <small
+              className="meta-more"
+              title={projects
+                .slice(2)
+                .map((p) => p.name)
+                .join('、')}
+            >
+              +{projects.length - 2}
+            </small>
+          )}
+          {tags.slice(0, 3).map((t) => (
+            <small className="entry-tag" key={t.tag_id} title={t.path}>
+              #{t.path}
             </small>
           ))}
-          {tags.map((t) => (
-            <small key={t.tag_id}># {t.path}</small>
-          ))}
+          {tags.length > 3 && (
+            <small
+              className="meta-more"
+              title={tags
+                .slice(3)
+                .map((t) => t.path)
+                .join('、')}
+            >
+              +{tags.length - 3}
+            </small>
+          )}
+          {domain && (
+            <small className="entry-domain" title={domain}>
+              {domain}
+            </small>
+          )}
         </span>
       )}
     </button>
@@ -89,7 +120,25 @@ function SyncTool({ busy, onClick }: { busy: boolean; onClick: () => void }) {
   );
 }
 type Props = { state: State; req: Request; refresh: () => void };
-export function Book({ state, req, refresh }: Props) {
+export function Book(props: Props) {
+  const scope = sidebarScope(
+    props.state.origin,
+    props.state.session.account_id,
+  );
+  return (
+    <Journal
+      key={scope ?? props.state.session.account_id}
+      {...props}
+      scope={scope}
+    />
+  );
+}
+function Journal({
+  state,
+  req,
+  refresh,
+  scope,
+}: Props & { scope: string | null }) {
   const [tab, tabTo] = useState('inbox'),
     [detail, open] = useState(
       new URLSearchParams(location.search).get('id') || '',
@@ -147,7 +196,11 @@ export function Book({ state, req, refresh }: Props) {
     '收藏';
   // Older sessions may serialize a missing expiry as Go’s zero time.
   const expiresAt = Date.parse(state.session.expires_at ?? '');
-  const count = Object.values(state.counts).reduce((a, b) => a + (b || 0), 0);
+  const count =
+    (state.counts.local_saved ?? 0) +
+    (state.counts.syncing ?? 0) +
+    (state.counts.auth_paused ?? 0) +
+    (state.counts.needs_review ?? 0);
   const dialog = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
     if (confirm) dialog.current?.showModal();
@@ -190,7 +243,7 @@ export function Book({ state, req, refresh }: Props) {
       select = (e: Event) => open((e as CustomEvent).detail);
     const key = (e: KeyboardEvent) => {
       if (
-        dialog.current?.open ||
+        document.querySelector('dialog[open]') ||
         !e.metaKey ||
         e.isComposing ||
         e.keyCode === 229
@@ -226,6 +279,7 @@ export function Book({ state, req, refresh }: Props) {
       req<Choice[]>('tags', 'GET', undefined, c.signal),
     ])
       .then(([items, p, t]) => {
+        if (c.signal.aborted) return;
         pending(items);
         projectList(p);
         tagList(t);
@@ -379,65 +433,74 @@ export function Book({ state, req, refresh }: Props) {
       <div className="workspace">
         {!fold && (
           <aside style={{ width }}>
-            <div className="sidebar-top">
-              <Tool label="折叠侧栏" onClick={() => collapse(true)}>
-                <PanelLeft />
-              </Tool>
-            </div>
-            <div className="brand">
-              <Jar />
-              Spark
-            </div>
-            <button
-              className="primary compose"
-              title={`在收件箱写随手记 ⌘N · 随手记快捷键 ${formatShortcut(state.capture_key)}`}
-              onClick={compose}
-            >
-              <NotebookPen />
-              随手记 <kbd>{formatShortcut(state.capture_key)}</kbd>
-            </button>
-            <nav>
-              {[
-                ['inbox', Inbox, '收件箱'],
-                ['all', BookOpen, '全部收藏'],
-                ['outbox', Archive, '本机发件箱'],
-              ].map(([value, Icon, label]) => {
-                const I = Icon as typeof Inbox;
-                return (
-                  <button
-                    key={String(value)}
-                    className={tab === value ? 'chosen' : ''}
-                    onClick={() => nav(String(value))}
-                  >
-                    <I />
-                    {String(label)}
-                    {value === 'outbox' && count > 0 && <small>{count}</small>}
-                  </button>
-                );
-              })}
-              {projects.length > 0 && <h3>项目</h3>}
-              {projects.map((p) => (
+            <div className="sidebar-fixed">
+              <div className="sidebar-top">
+                <div className="brand">
+                  <Jar />
+                  Spark
+                </div>
+                <Tool label="折叠侧栏" onClick={() => collapse(true)}>
+                  <PanelLeft />
+                </Tool>
+              </div>
+              <div className="sidebar-actions">
                 <button
-                  className={pid === p.id ? 'chosen' : ''}
-                  key={p.id}
-                  onClick={() => nav('p:' + p.id)}
+                  className="primary compose"
+                  title={`在收件箱写随手记 ⌘N · 随手记快捷键 ${formatShortcut(state.capture_key)}`}
+                  onClick={compose}
                 >
-                  <i className={'tone ' + projectToneClass(p.id)} />
-                  <span className="nav-name">{p.name}</span>
-                  <small>{p.collection_count}</small>
+                  <NotebookPen />
+                  随手记 <kbd>{formatShortcut(state.capture_key)}</kbd>
                 </button>
-              ))}
-              {tags.length > 0 && <h3>标签</h3>}
-              {tags.map((t) => (
                 <button
-                  className={tid === t.id ? 'chosen' : ''}
-                  key={t.id}
-                  onClick={() => nav('t:' + t.id)}
+                  className="sidebar-search"
+                  aria-label="快搜 ⌘K"
+                  title="搜索手帐 ⌘K"
+                  onClick={() => input.current?.focus()}
                 >
-                  <span className="nav-name"># {t.name}</span>
-                  <small>{t.collection_count}</small>
+                  <Search />
+                  <kbd>⌘K</kbd>
                 </button>
-              ))}
+              </div>
+              <nav className="core-nav" aria-label="手帐导航">
+                {[
+                  ['inbox', Inbox, '收件箱'],
+                  ['all', BookOpen, '全部收藏'],
+                  ['outbox', Archive, '本机发件箱'],
+                ].map(([value, Icon, label]) => {
+                  const I = Icon as typeof Inbox;
+                  return (
+                    <button
+                      key={String(value)}
+                      aria-current={tab === value ? 'page' : undefined}
+                      className={tab === value ? 'chosen' : ''}
+                      onClick={() => nav(String(value))}
+                    >
+                      <I />
+                      {String(label)}
+                      {value === 'outbox' && count > 0 && (
+                        <small>{count}</small>
+                      )}
+                    </button>
+                  );
+                })}
+              </nav>
+            </div>
+            <nav className="sidebar-space" aria-label="我的空间">
+              <SidebarGroup
+                kind="projects"
+                scope={scope}
+                choices={projects}
+                selected={pid}
+                onNavigate={(id) => nav('p:' + id)}
+              />
+              <SidebarGroup
+                kind="tags"
+                scope={scope}
+                choices={tags}
+                selected={tid}
+                onNavigate={(id) => nav('t:' + id)}
+              />
             </nav>
             <button
               className="account"
@@ -530,7 +593,7 @@ export function Book({ state, req, refresh }: Props) {
                   <X />
                 </Tool>
               ) : (
-                <kbd aria-hidden="true">⌘K</kbd>
+                fold && <kbd aria-hidden="true">⌘K</kbd>
               )}
             </div>
             <SyncTool busy={syncing || !!state.counts.syncing} onClick={sync} />

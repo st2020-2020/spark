@@ -61,6 +61,12 @@ export SPARK_DESKTOP_API_URL="${SPARK_TEST_ORIGIN:?请指定当轮隔离栈地�
 
 ## 4. 验证结果
 
+### 2026-11-24 v0.9 手帐侧栏与收藏卡片
+
+在隔离的 macOS WKWebView 中加载生产前端，以合成的项目、标签和三条收藏刷新了 `apps/desktop/build/ui-polish/previews/inbox-populated-1080.png`。在 1080 × 740 pt 与 720 × 500 pt 的窗口中，三张卡片的元信息均占一行（19 pt），账号入口始终贴底。窄窗内把侧栏收窄到 200 pt 后，顶部操作仍完整可用；加长项目名、标签和域名后没有横向溢出。打开「自定义」时，弹层在窗口内完整显示，筛选框自动获得焦点。
+
+22 项前端测试通过，覆盖推荐排序、即时筛选与置顶、空选择、恢复推荐、失效 ID、跨账号与服务隔离、元信息数量上限和待同步计数。类型检查、生产构建、8 个 Go 包的竞态测试、`go vet`、应用打包和本地签名校验均通过。
+
 ### 2026-11-24 悬浮随手记与手帐交互
 
 macOS 27.2.1（Apple Silicon）上的 Wails 测试构建加载生产前端，使用内存会话、临时 SQLite 和合成离线收藏。使用 ScreenCaptureKit 按本进程窗口实拍。六张 PNG 位于 `apps/desktop/build/ui-polish/previews/`。

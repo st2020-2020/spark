@@ -579,3 +579,162 @@ it('快搜失效时在防抖结束后仍只读本机结果和缓存预览', asyn
     vi.useRealTimers();
   }
 });
+
+it('常用项目可即时筛选置顶，重开、换账号及切换服务各自保留选择', async () => {
+  localStorage.clear();
+  let projects = Array.from({ length: 7 }, (_, i) => ({
+    id: 'p' + i,
+    name: '计划' + i,
+    collection_count: 100 - i,
+    updated_at: new Date(Date.UTC(2026, 9, 1 + i)).toISOString(),
+    state: 'active',
+  }));
+  projects.push({
+    ...projects[6],
+    id: 'archived',
+    name: '已归档计划',
+    state: 'archived',
+  });
+  const req: Request = async (path) =>
+    path === 'projects'
+      ? (projects as never)
+      : path.startsWith('collections/page')
+        ? ({ items: [] } as never)
+        : ([] as never);
+  const book = (origin: string, account: string) => (
+    <Book
+      state={{
+        ...state,
+        origin,
+        session: { ...state.session, account_id: account },
+      }}
+      req={req}
+      refresh={() => {}}
+    />
+  );
+  const view = render(book('https://NOTES.example.test:443/', 'a'));
+  const group = () => within(screen.getByRole('region', { name: '常用项目' }));
+  await group().findByRole('button', { name: /计划6/ });
+  expect(group().queryByText('计划0')).toBeNull();
+  fireEvent.click(group().getByRole('button', { name: '自定义常用项目' }));
+  const popup = within(screen.getByRole('dialog', { name: '自定义常用项目' }));
+  expect(popup.queryByText('已归档计划')).toBeNull();
+  const search = popup.getByRole('textbox', { name: '筛选项目' });
+  expect(document.activeElement).toBe(search);
+  fireEvent.change(search, { target: { value: '未找到' } });
+  expect(popup.getByRole('status').textContent).toBe('没有匹配的项目');
+  fireEvent.change(search, { target: { value: '计划0' } });
+  expect(popup.queryByText('计划6')).toBeNull();
+  const pin = popup.getByRole('button', { name: '计划0' });
+  fireEvent.click(pin);
+  expect(pin.getAttribute('aria-pressed')).toBe('true');
+  fireEvent.click(popup.getByRole('button', { name: '关闭自定义' }));
+  expect(document.activeElement).toBe(
+    group().getByRole('button', { name: '自定义常用项目' }),
+  );
+  expect(group().getByText('计划0')).toBeTruthy();
+  view.rerender(book('https://notes.example.test', 'b'));
+  await group().findByText('计划6');
+  expect(group().queryByText('计划0')).toBeNull();
+  view.rerender(book('https://another.example.test', 'a'));
+  await group().findByText('计划6');
+  expect(group().queryByText('计划0')).toBeNull();
+  view.rerender(book('https://notes.example.test', 'a'));
+  await group().findByText('计划0');
+  projects = projects.slice(1);
+  fireEvent(window, new Event('spark-state'));
+  await waitFor(() => expect(group().queryByText('计划0')).toBeNull());
+  localStorage.clear();
+});
+
+it('置顶标签默认按频率取五个，可展开导航、取消全部、持久化空选择并恢复推荐', async () => {
+  localStorage.clear();
+  const tags = Array.from({ length: 6 }, (_, i) => ({
+    id: 't' + i,
+    name: '标签' + i,
+    collection_count: i,
+  }));
+  const req: Request = async (path) =>
+    path === 'tags'
+      ? (tags as never)
+      : path.startsWith('collections/page')
+        ? ({ items: [] } as never)
+        : ([] as never);
+  const ui = (
+    <Book
+      state={{ ...state, origin: 'https://notes.example.test' }}
+      req={req}
+      refresh={() => {}}
+    />
+  );
+  const group = () => within(screen.getByRole('region', { name: '置顶标签' }));
+  const dialog = () =>
+    within(screen.getByRole('dialog', { name: '自定义置顶标签' }));
+  const view = render(ui);
+  await group().findByText('#标签5');
+  expect(group().queryByText('#标签0')).toBeNull();
+  fireEvent.click(group().getByRole('button', { name: /全部标签/ }));
+  fireEvent.click(group().getByRole('button', { name: '#标签0' }));
+  await screen.findByRole('heading', { name: '标签0' });
+  fireEvent.click(group().getByRole('button', { name: '收起' }));
+  fireEvent.click(group().getByRole('button', { name: '自定义置顶标签' }));
+  for (const btn of dialog().getAllByRole('button', { pressed: true }))
+    fireEvent.click(btn);
+  fireEvent.click(dialog().getByRole('button', { name: '关闭自定义' }));
+  expect(group().getByText('尚未置顶标签')).toBeTruthy();
+  view.unmount();
+  render(ui);
+  await group().findByText('尚未置顶标签');
+  fireEvent.click(group().getByRole('button', { name: '自定义置顶标签' }));
+  fireEvent.click(dialog().getByRole('button', { name: '恢复自动推荐' }));
+  expect(dialog().getAllByRole('button', { pressed: true })).toHaveLength(5);
+  fireEvent(
+    screen.getByRole('dialog'),
+    new Event('cancel', { cancelable: true }),
+  );
+  expect(group().getByText('#标签5')).toBeTruthy();
+  expect(group().queryByText('#标签0')).toBeNull();
+  localStorage.clear();
+});
+
+it('收藏卡片按项目、标签、域名顺序显示上限与额外数量', async () => {
+  const item = {
+    id: 'n',
+    created_at: new Date().toISOString(),
+    display_title: '整理清单',
+    original_url: 'https://studio.example.test/path',
+    projects: Array.from({ length: 4 }, (_, i) => ({
+      project_id: 'p' + i,
+      name: '项目' + i,
+      decision: 'manual',
+    })),
+    tags: Array.from({ length: 6 }, (_, i) => ({
+      tag_id: 't' + i,
+      path: '标签' + i,
+      decision: 'confirmed',
+    })),
+  };
+  const req: Request = async (path) =>
+    path.startsWith('collections/page')
+      ? ({ items: [item] } as never)
+      : ([] as never);
+  const journal = (counts: State['counts']) => (
+    <Book state={{ ...state, counts }} req={req} refresh={() => {}} />
+  );
+  const view = render(journal({ synced: 12 }));
+  const card = await screen.findByRole('button', { name: /整理清单/ });
+  expect(card.textContent).toBe(
+    '整理清单项目0项目1+2#标签0#标签1#标签2+3studio.example.test',
+  );
+  fireEvent.click(screen.getByRole('button', { name: '快搜 ⌘K' }));
+  expect(document.activeElement).toBe(
+    screen.getByRole('textbox', { name: '搜索手帐' }),
+  );
+  expect(screen.getByRole('button', { name: '本机发件箱' }).textContent).toBe(
+    '本机发件箱',
+  );
+  view.rerender(journal({ synced: 12, local_saved: 1, auth_paused: 2 }));
+  expect(screen.getByRole('button', { name: /本机发件箱/ }).textContent).toBe(
+    '本机发件箱3',
+  );
+});

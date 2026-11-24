@@ -27,7 +27,14 @@ export type State = {
   capture_key: string;
   screenshot_key: string;
 };
-export type Choice = { id: string; name: string; collection_count: number };
+export type Choice = {
+  id: string;
+  name: string;
+  path?: string;
+  state?: string;
+  updated_at?: string;
+  collection_count: number;
+};
 export type FileImage = { filename: string; data_b64: string; mime: string };
 export type Outbox = {
   id: string;
