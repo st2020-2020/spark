@@ -138,8 +138,33 @@ export function CollectionCard({
       expectedCurrentReadAt?: string | undefined;
       enforceMatch?: boolean;
       maxResourceVersion?: number;
+      serverCollection?: Collection;
     },
   ) => {
+    const mergeSummary = (item: CollectionSummary): CollectionSummary => {
+      const updated = options?.serverCollection;
+      if (!updated) {
+        return { ...item, read_at: targetReadAt };
+      }
+      return {
+        ...item,
+        display_title: updated.display_title,
+        content_types: updated.content_types,
+        projects: updated.projects,
+        tags: updated.tags,
+        organization_status: updated.organization?.status ?? item.organization_status,
+        read_at: updated.read_at,
+        created_at: updated.created_at,
+        updated_at: updated.updated_at,
+        resource_version: updated.resource_version,
+        has_suggestion: updated.has_suggestion,
+        original_url: updated.original_url,
+        thread_id: updated.thread_id ?? item.thread_id,
+        source_collection_id: updated.source_collection_id ?? item.source_collection_id,
+        follow_up_count: updated.follow_up_count ?? item.follow_up_count,
+      };
+    };
+
     const patchList = (old: InfiniteListCache | undefined) => {
       if (!old || !Array.isArray(old.pages)) return old;
       let touched = false;
@@ -159,7 +184,7 @@ export function CollectionCard({
             return row;
           }
           pageTouched = true;
-          const updatedItem: CollectionSummary = { ...item, read_at: targetReadAt };
+          const updatedItem = mergeSummary(item);
           return 'collection' in row ? { ...row, collection: updatedItem } : updatedItem;
         });
         if (!pageTouched) return page;
@@ -181,22 +206,23 @@ export function CollectionCard({
         return old;
       }
       if (options?.enforceMatch && old.read_at !== options.expectedCurrentReadAt) return old;
-      return { ...old, read_at: targetReadAt };
+      return options?.serverCollection ?? { ...old, read_at: targetReadAt };
     });
   };
 
   const toggleReadMutation = useMutation<
     Collection,
     unknown,
-    void,
+    boolean,
     {
       capturedSession: AuthSessionSnapshot;
       prevReadAt: string | undefined;
       optimisticReadAt: string | undefined;
+      targetRead: boolean;
     }
   >({
-    mutationFn: () => api.setReadState(collection.id, { read: !collection.read_at }),
-    onMutate: async () => {
+    mutationFn: (targetRead) => api.setReadState(collection.id, { read: targetRead }),
+    onMutate: async (targetRead) => {
       setMenuOpen(false);
       const capturedSession = captureAuthSession();
       adjustInFlightReads(capturedSession.generation, 1);
@@ -207,16 +233,19 @@ export function CollectionCard({
       await queryClient.cancelQueries({ queryKey: ['collection', collection.id] });
 
       const prevReadAt = collection.read_at;
-      const optimisticReadAt = prevReadAt ? undefined : new Date().toISOString();
+      const optimisticReadAt = targetRead ? (prevReadAt ?? new Date().toISOString()) : undefined;
       if (isSameAuthSession(capturedSession)) {
         patchTargetReadAt(optimisticReadAt);
       }
 
-      return { capturedSession, prevReadAt, optimisticReadAt };
+      return { capturedSession, prevReadAt, optimisticReadAt, targetRead };
     },
-    onSuccess: (updated, _vars, context) => {
+    onSuccess: (updated, _targetRead, context) => {
       if (!isSameAuthSession(context?.capturedSession)) return;
-      patchTargetReadAt(updated.read_at, { maxResourceVersion: updated.resource_version });
+      patchTargetReadAt(updated.read_at, {
+        maxResourceVersion: updated.resource_version,
+        serverCollection: updated,
+      });
       queryClient.setQueryData<Collection>(['collection', collection.id], (existing) => {
         if (!existing) return updated;
         if (existing.resource_version > updated.resource_version) {
@@ -225,7 +254,7 @@ export function CollectionCard({
         return updated;
       });
     },
-    onError: (err, _vars, context) => {
+    onError: (err, _targetRead, context) => {
       if (!context || !isSameAuthSession(context.capturedSession)) return;
       patchTargetReadAt(context.prevReadAt, {
         expectedCurrentReadAt: context.optimisticReadAt,
@@ -233,7 +262,7 @@ export function CollectionCard({
       });
       pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
     },
-    onSettled: (_data, err, _vars, context) => {
+    onSettled: (_data, err, _targetRead, context) => {
       if (!context) return;
       const remaining = adjustInFlightReads(context.capturedSession.generation, -1);
       if (!isSameAuthSession(context.capturedSession)) return;
@@ -310,7 +339,7 @@ export function CollectionCard({
           e.preventDefault();
           openFollowUp(toFollowUpSourceFromSummary(collection));
         } else if (key === 'r' && !toggleReadMutation.isPending) {
-          e.preventDefault(); toggleReadMutation.mutate();
+          e.preventDefault(); toggleReadMutation.mutate(Boolean(isUnread));
         }
       }} className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
       <div className="sp-note-meta">
@@ -392,7 +421,7 @@ export function CollectionCard({
                   role="menuitem"
                   className="sp-menu-item"
                   disabled={toggleReadMutation.isPending}
-                  onClick={() => toggleReadMutation.mutate()}
+                  onClick={() => toggleReadMutation.mutate(Boolean(isUnread))}
                 >
                   {collection.read_at ? (
                     <Mail size={16} strokeWidth={2} aria-hidden="true" />

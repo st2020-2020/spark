@@ -1006,4 +1006,185 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
       });
     }
   });
+
+  it('syncs list row resource_version without accepting out-of-order v2 over v3, and preserves captured targetRead when reconnecting from offline', async () => {
+    const api = await admin();
+    const colA = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '版本同步 卡片A' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'sync-rv-a',
+    );
+    const colB = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '乱序保护 卡片B' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'sync-rv-b',
+    );
+    const colC = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '离线已读 卡片C' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'offline-read-c',
+    );
+
+    const queryClient = createAppQueryClient();
+    const realGet = api.getCollection.bind(api);
+    const realTrash = api.trashCollection.bind(api);
+    const realSetRead = api.setReadState.bind(api);
+
+    const detailA = await realGet(colA.id);
+    const detailB = await realGet(colB.id);
+
+    let resolveKeepInFlight!: () => void;
+    const keepInFlightPromise = new Promise<void>((r) => {
+      resolveKeepInFlight = r;
+    });
+    let resolveDelayedB!: (val: Awaited<ReturnType<typeof realSetRead>>) => void;
+
+    const setReadSpy = vi.spyOn(api, 'setReadState').mockImplementation(async (id, body) => {
+      if (id === colA.id) {
+        return {
+          ...detailA,
+          resource_version: detailA.resource_version + 1,
+          read_at: new Date().toISOString(),
+        };
+      }
+      if (id === colB.id) {
+        return new Promise((resolve) => {
+          resolveDelayedB = resolve;
+        });
+      }
+      if (id === colC.id) {
+        await keepInFlightPromise;
+        return realSetRead(id, body);
+      }
+      return realSetRead(id, body);
+    });
+
+    const trashSpy = vi.spyOn(api, 'trashCollection');
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/inbox']}>
+        <QueryClientProvider client={queryClient}>
+          <ApiProvider api={api}>
+            <ToastProvider>
+              <AuthProvider>
+                <AppRoutes />
+              </AuthProvider>
+            </ToastProvider>
+          </ApiProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('版本同步 卡片A');
+    const cardA = screen.getByText('版本同步 卡片A').closest('article')!;
+    const cardB = screen.getByText('乱序保护 卡片B').closest('article')!;
+    const cardC = screen.getByText('离线已读 卡片C').closest('article')!;
+
+    // 1. Mark B so it is in-flight, and mark A so A finishes while B is still in-flight (no list invalidation yet!)
+    await user.click(within(cardB).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+    await user.click(within(cardA).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+
+    // A finished with updated resource_version = detailA.resource_version + 1;
+    // trash A before B finishes must use the synced resource_version (+1), NOT stale version!
+    await waitFor(() => {
+      const listData = queryClient.getQueriesData<{
+        pages: Array<{ items: Array<{ id: string; resource_version: number }> }>;
+      }>({
+        queryKey: ['collections'],
+      });
+      const rowA = listData
+        .flatMap(([, d]) => (d && Array.isArray(d.pages) ? d.pages.flatMap((p) => p.items) : []))
+        .find((i) => i.id === colA.id);
+      expect(rowA?.resource_version).toBe(detailA.resource_version + 1);
+    });
+    // Also seed real server version on mock server for colA so trash passes with new resource_version
+    await realSetRead(colA.id, { read: true });
+    await user.click(within(cardA).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '移入回收站' }));
+    expect(trashSpy).toHaveBeenCalledWith(colA.id, {
+      base_resource_version: detailA.resource_version + 1,
+    });
+    void realTrash;
+
+    // 2. While B's older response (v2 read) is still pending, simulate newer v3 unread in list cache,
+    // then resolve B with stale v2 -> list row MUST reject v2 and stay unread at v3!
+    queryClient.setQueriesData<{
+      pages: Array<{ items: Array<{ id: string; resource_version: number; read_at?: string }> }>;
+    }>({ queryKey: ['collections'] }, (old) => {
+      if (!old || !Array.isArray(old.pages)) return old;
+      return {
+        ...old,
+        pages: old.pages.map((p) => ({
+          ...p,
+          items: p.items.map((item) =>
+            item.id === colB.id
+              ? { ...item, resource_version: detailB.resource_version + 3, read_at: undefined }
+              : item,
+          ),
+        })),
+      };
+    });
+    act(() => {
+      resolveDelayedB({
+        ...detailB,
+        resource_version: detailB.resource_version + 2,
+        read_at: new Date().toISOString(),
+      });
+    });
+    await waitFor(() => {
+      expect(within(cardB).getByRole('img', { name: '未读' })).toBeInTheDocument();
+    });
+
+    // 3. Offline/paused mutation on C captures targetRead = true even though optimistic UI flips props to read before mutationFn runs
+    const onLineSpy = vi.spyOn(window.navigator, 'onLine', 'get').mockReturnValue(false);
+    await user.click(within(cardC).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+    // Optimistically card C is already read; now reconnect online and resolve
+    onLineSpy.mockReturnValue(true);
+    window.dispatchEvent(new Event('online'));
+    resolveKeepInFlight();
+
+    await waitFor(() => {
+      expect(setReadSpy).toHaveBeenCalledWith(colC.id, { read: true });
+    });
+  });
 });
