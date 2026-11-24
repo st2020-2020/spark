@@ -59,8 +59,9 @@ describe('Platform AI organization & UI states', () => {
     await screen.findByText(/第三方服务范围：/);
     await screen.findByText(/历史收藏说明：/);
     await user.click(screen.getByRole('button', { name: '我已了解并开启' }));
-    await screen.findByText('AI 自动整理已开启');
+    await screen.findByText('已开启 AI 自动整理');
     expect(screen.queryByRole('region', { name: 'AI 自动整理入口' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'AI 自动整理状态' })).not.toBeInTheDocument();
 
     // 2. Create a project so AI matcher can suggest it with evidence
     const sidebar = within(screen.getByRole('complementary', { name: '主导航' }));

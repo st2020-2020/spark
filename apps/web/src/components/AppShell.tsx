@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -21,20 +21,21 @@ import {
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
+import { confirmLeavingImageDraft } from '../lib/drafts';
 import { handleMenuKeyDown } from '../lib/menuKeyboard';
+import {
+  canAnimateMotion,
+  prefersReducedMotion,
+  SHEET_EXIT_MS,
+  useSheetSwipeDismiss,
+} from '../lib/motion';
 import { projectToneClass } from '../lib/projectTone';
+import { formatShortcut, isTouchDevice } from '../lib/shortcuts';
 import { BrandLink, SparkGlyph } from './Brand';
 import { CommandPalette } from './CommandPalette';
 import { TagNavigation } from './Tags';
 import { ActivityCalendar } from './ActivityCalendar';
 import { QuickCaptureSheet } from './QuickCaptureSheet';
-
-function prefersReducedMotion(): boolean {
-  return (
-    typeof window.matchMedia === 'function' &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  );
-}
 
 function formatBadgeCount(count: number): string {
   return count > 99 ? '99+' : String(count);
@@ -54,6 +55,8 @@ export function AppShell({
   const location = useLocation();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerRendered, setDrawerRendered] = useState(false);
+  const [drawerClosing, setDrawerClosing] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [inputFocusedMobile, setInputFocusedMobile] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
@@ -61,6 +64,53 @@ export function AppShell({
 
   const drawerPanelRef = useRef<HTMLDivElement | null>(null);
   const accountWrapRef = useRef<HTMLDivElement | null>(null);
+  const drawerExitTimerRef = useRef<number | null>(null);
+
+  const {
+    isDragging: drawerDragging,
+    settledAfterDrag: drawerSettledAfterDrag,
+    swipeStyle: drawerSwipeStyle,
+    swipeHandlers: drawerSwipeHandlers,
+  } = useSheetSwipeDismiss({
+    enabled: drawerOpen && !drawerClosing,
+    onDismiss: () => setDrawerOpen(false),
+  });
+
+  useLayoutEffect(() => {
+    if (drawerPanelRef.current) {
+      drawerPanelRef.current.inert = drawerClosing;
+    }
+  }, [drawerClosing]);
+
+  useEffect(() => {
+    if (drawerExitTimerRef.current !== null) {
+      window.clearTimeout(drawerExitTimerRef.current);
+      drawerExitTimerRef.current = null;
+    }
+    if (drawerOpen) {
+      setDrawerRendered(true);
+      setDrawerClosing(false);
+      return;
+    }
+    if (!drawerRendered) return;
+    if (!canAnimateMotion()) {
+      setDrawerClosing(false);
+      setDrawerRendered(false);
+      return;
+    }
+    setDrawerClosing(true);
+    drawerExitTimerRef.current = window.setTimeout(() => {
+      drawerExitTimerRef.current = null;
+      setDrawerClosing(false);
+      setDrawerRendered(false);
+    }, SHEET_EXIT_MS);
+    return () => {
+      if (drawerExitTimerRef.current !== null) {
+        window.clearTimeout(drawerExitTimerRef.current);
+        drawerExitTimerRef.current = null;
+      }
+    };
+  }, [drawerOpen, drawerRendered]);
 
   const activeProjectsQuery = useQuery({
     queryKey: ['projects', 'sidebar-active'],
@@ -91,6 +141,9 @@ export function AppShell({
   useEffect(() => {
     if (!drawerOpen) return;
     const prevActive = document.activeElement as HTMLElement | null;
+    if (drawerPanelRef.current) {
+      drawerPanelRef.current.inert = false;
+    }
     drawerPanelRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -192,21 +245,30 @@ export function AppShell({
   const quickCaptureRef = useRef(handleQuickCapture);
   quickCaptureRef.current = handleQuickCapture;
 
-  // "N" opens quick capture from anywhere, unless the person is typing or a dialog is open.
+  // "N" opens quick capture from anywhere outside inputs; Cmd/Ctrl+K opens CommandPalette even while typing.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.shiftKey) return;
+      if (
+        document.querySelector(
+          '[aria-modal="true"], [role="menu"], [role="dialog"], [role="listbox"]',
+        )
+      ) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (event.metaKey || event.ctrlKey) {
+        if (key === 'k') {
+          event.preventDefault();
+          setCommandOpen(true);
+        }
+        return;
+      }
       const target = event.target;
       if (
         target instanceof HTMLElement &&
         target.closest('input, textarea, select, [contenteditable="true"], [role="menu"], [role="listbox"]')
       ) {
-        return;
-      }
-      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="dialog"]')) return;
-      const key = event.key.toLowerCase();
-      if (event.metaKey || event.ctrlKey) {
-        if (key === 'k') { event.preventDefault(); setCommandOpen(true); }
         return;
       }
       if (key === 'n') { event.preventDefault(); quickCaptureRef.current(); }
@@ -223,7 +285,7 @@ export function AppShell({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const renderPrimaryAndProjectsNav = () => (
+  const renderPrimaryAndProjectsNav = (compactMobile = false) => (
     <>
       <nav aria-label="工作区页面">
         <ul className="sp-nav-list">
@@ -309,7 +371,21 @@ export function AppShell({
         )}
       </ul>
       <TagNavigation />
-      <button type="button" className="sp-nav-link" onClick={() => { setDrawerOpen(false); setCommandOpen(true); }}>命令面板 <kbd>⌘/Ctrl K</kbd></button>
+      <button
+        type="button"
+        className="sp-nav-link sp-nav-link--command"
+        aria-label={compactMobile ? '搜索与跳转' : '快速跳转'}
+        onClick={() => {
+          setDrawerOpen(false);
+          setCommandOpen(true);
+        }}
+      >
+        <Search size={16} strokeWidth={2} aria-hidden="true" />
+        <span>{compactMobile ? '搜索与跳转' : '快速跳转'}</span>
+        {!compactMobile && !isTouchDevice() && (
+          <kbd className="sp-kbd-hint sp-kbd-hint--nav">{formatShortcut('K')}</kbd>
+        )}
+      </button>
     </>
   );
 
@@ -428,7 +504,9 @@ export function AppShell({
                   type="button"
                   role="menuitem"
                   className="sp-menu-item sp-menu-item--danger"
-                  onClick={() => void logout()}
+                  onClick={() => {
+                    if (confirmLeavingImageDraft()) void logout();
+                  }}
                 >
                   <LogOut size={16} strokeWidth={2} aria-hidden="true" />
                   <span>退出登录</span>
@@ -438,7 +516,9 @@ export function AppShell({
           </div>
         </aside>
 
-        <main className="sp-main-column">{children}</main>
+        <main key={location.pathname} className="sp-main-column sp-page-stage">
+          {children}
+        </main>
       </div>
 
       {/* Phone tab bar: 收件箱 / 项目 / 记一条 / 搜索 / 更多 */}
@@ -483,37 +563,43 @@ export function AppShell({
         </button>
       </nav>
 
-      {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} />}
+      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
       <QuickCaptureSheet open={captureOpen} onClose={() => setCaptureOpen(false)} />
 
       {/* Tablet side drawer / phone bottom sheet — one panel, two presentations. */}
-      {drawerOpen && (
+      {(drawerOpen || drawerRendered) && (
         <div
-          className="sp-drawer-backdrop"
+          className={`sp-drawer-backdrop ${drawerClosing ? 'is-closing' : ''}`}
           role="presentation"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setDrawerOpen(false);
+            if (!drawerClosing && e.target === e.currentTarget) setDrawerOpen(false);
           }}
         >
           <div
             ref={drawerPanelRef}
-            className="sp-drawer-panel"
+            className={`sp-drawer-panel ${drawerClosing ? 'is-closing' : ''} ${
+              drawerDragging ? 'is-dragging' : ''
+            } ${drawerSettledAfterDrag ? 'is-swipe-settled' : ''}`}
+            style={drawerSwipeStyle}
             role="dialog"
-            aria-modal="true"
+            aria-modal={!drawerClosing ? 'true' : undefined}
+            aria-hidden={drawerClosing ? 'true' : undefined}
             aria-label="导航菜单"
             tabIndex={-1}
           >
-            <span className="sp-sheet-grabber" aria-hidden="true" />
-            <div className="sp-drawer-head">
-              <BrandLink />
-              <button
-                type="button"
-                className="sp-icon-btn"
-                aria-label="关闭导航菜单"
-                onClick={() => setDrawerOpen(false)}
-              >
-                <X size={20} strokeWidth={2} />
-              </button>
+            <div className="sp-sheet-swipe-zone" {...drawerSwipeHandlers}>
+              <span className="sp-sheet-grabber" aria-hidden="true" />
+              <div className="sp-drawer-head">
+                <BrandLink />
+                <button
+                  type="button"
+                  className="sp-icon-btn"
+                  aria-label="关闭导航菜单"
+                  onClick={() => setDrawerOpen(false)}
+                >
+                  <X size={20} strokeWidth={2} />
+                </button>
+              </div>
             </div>
 
             <ActivityCalendar key={user?.id} onSelect={() => setDrawerOpen(false)} />
@@ -530,7 +616,7 @@ export function AppShell({
               <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
             </Link>
 
-            {renderPrimaryAndProjectsNav()}
+            {renderPrimaryAndProjectsNav(true)}
 
             <div className="sp-drawer-footer">
               <NavLink
@@ -552,7 +638,9 @@ export function AppShell({
               <button
                 type="button"
                 className="sp-nav-link sp-nav-link--danger"
-                onClick={() => void logout()}
+                onClick={() => {
+                  if (confirmLeavingImageDraft()) void logout();
+                }}
               >
                 <LogOut size={16} strokeWidth={2} aria-hidden="true" />
                 <span>退出登录</span>

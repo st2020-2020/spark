@@ -46,6 +46,25 @@
 .sp-calendar-grid a[data-level="1"] { background: color-mix(in srgb, var(--sp-primary) 16%, var(--sp-surface)); }
 .sp-calendar-grid a[data-level="2"] { background: color-mix(in srgb, var(--sp-primary) 35%, var(--sp-surface)); }
 .sp-calendar-grid a[data-level="3"] { background: var(--sp-primary); color: var(--sp-on-primary); }
+.sp-calendar-grid a[data-today="true"] {
+  position: relative;
+  font-weight: 700;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sp-primary) 55%, var(--sp-border-strong));
+}
+.sp-calendar-grid a[data-today="true"]::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: var(--sp-primary);
+}
+.sp-calendar-grid a[data-level="3"][data-today="true"]::after {
+  background: var(--sp-on-primary);
+}
 .sp-calendar-grid a:is(:hover, [aria-current]) { box-shadow: inset 0 0 0 2px var(--sp-primary); }
 .sp-calendar-grid a[aria-current], .sp-calendar-grid a:focus-visible { outline: 2px solid var(--sp-fg); outline-offset: 1px; }
 .sp-calendar-count { margin: 6px 0 0; color: var(--sp-muted); font-size: var(--sp-text-xs); }
@@ -67,6 +86,13 @@
   border-radius: var(--sp-radius-card);
   background: var(--sp-surface);
   scroll-snap-align: start;
+  transition: opacity var(--sp-dur-fast) var(--sp-ease-exit),
+    transform var(--sp-dur-fast) var(--sp-ease-exit);
+}
+.sp-resurface-note.is-hiding {
+  opacity: 0;
+  transform: scale(0.95) translateY(4px);
+  pointer-events: none;
 }
 .sp-resurface-note h3, .sp-resurface-excerpt {
   margin: 4px 0 8px;

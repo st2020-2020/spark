@@ -48,12 +48,22 @@ export function ActivityCalendar({ onSelect }: { onSelect?: () => void }) {
           {activity.data.days.map(({ date, count }) => {
             const day = Number(date.slice(8));
             const label = `${monthLabel}${day}日 · ${count} 条`;
+            const isSelected = date === selected;
+            const isToday = date === today;
             return (
-              <Link key={date} to={`/inbox?date=${date}`} aria-label={label} title={label}
-                aria-current={date === selected ? 'date' : undefined}
+              <Link
+                key={date}
+                to={isSelected ? '/inbox' : `/inbox?date=${date}`}
+                aria-label={label}
+                title={label}
+                aria-current={isSelected ? 'date' : undefined}
+                data-today={isToday ? 'true' : undefined}
                 data-level={count >= 5 ? 3 : count >= 2 ? 2 : count > 0 ? 1 : 0}
-                onPointerEnter={() => setFocusedDate(date)} onFocus={() => setFocusedDate(date)}
-                onPointerDown={() => setFocusedDate(date)} onClick={onSelect}>
+                onPointerEnter={() => setFocusedDate(date)}
+                onFocus={() => setFocusedDate(date)}
+                onPointerDown={() => setFocusedDate(date)}
+                onClick={onSelect}
+              >
                 {day}
               </Link>
             );

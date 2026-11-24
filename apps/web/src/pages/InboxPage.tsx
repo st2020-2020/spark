@@ -14,6 +14,7 @@ import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { JarScene } from '../components/Illustrations';
 import { useApi } from '../context/ApiContext';
+import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { greeting, groupByDay, todayLine } from '../lib/journal';
 
 export function InboxPage() {
@@ -28,6 +29,7 @@ export function InboxPage() {
   const shouldFocusComposer = searchParams.get('focus') === 'composer';
 
   const { user } = useAuth();
+  const { pendingSuggestionsCount } = useOrganizationEvents();
   const { today, tz } = useLocalCalendar();
   const requestedDate = searchParams.get('date');
   const date = validDate(requestedDate) ? requestedDate : null;
@@ -159,7 +161,10 @@ export function InboxPage() {
         </div>
       )}
 
-      {!collectionsQuery.isLoading && !collectionsQuery.isError && hasUnclassifiedInLoaded && (
+      {!collectionsQuery.isLoading &&
+        !collectionsQuery.isError &&
+        hasUnclassifiedInLoaded &&
+        pendingSuggestionsCount === 0 && (
         <div className="sp-triage-hint-bar">
           <Link to="/unclassified/triage" className="sp-triage-hint">
             <Sparkles size={14} strokeWidth={2} aria-hidden="true" />

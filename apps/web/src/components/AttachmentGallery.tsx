@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import type { Attachment } from '../api/types';
 import { formatBytes } from '../lib/format';
+import { canAnimateMotion, MODAL_EXIT_MS } from '../lib/motion';
 import { AttachmentImage } from './AttachmentImage';
 
 export function AttachmentGallery({
@@ -18,8 +19,41 @@ export function AttachmentGallery({
     [attachments],
   );
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [renderedIndex, setRenderedIndex] = useState<number | null>(null);
+  const [closing, setClosing] = useState(false);
+  const exitTimerRef = useRef<number | null>(null);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const prevFocusedRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (exitTimerRef.current !== null) {
+      window.clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = null;
+    }
+    if (activeIndex !== null) {
+      setRenderedIndex(activeIndex);
+      setClosing(false);
+      return;
+    }
+    if (renderedIndex === null) return;
+    if (!canAnimateMotion()) {
+      setClosing(false);
+      setRenderedIndex(null);
+      return;
+    }
+    setClosing(true);
+    exitTimerRef.current = window.setTimeout(() => {
+      exitTimerRef.current = null;
+      setClosing(false);
+      setRenderedIndex(null);
+    }, MODAL_EXIT_MS);
+    return () => {
+      if (exitTimerRef.current !== null) {
+        window.clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+      }
+    };
+  }, [activeIndex, renderedIndex]);
 
   useEffect(() => {
     if (activeIndex === null) return;
@@ -31,11 +65,15 @@ export function AttachmentGallery({
   useEffect(() => {
     if (activeIndex === null) return;
     prevFocusedRef.current = document.activeElement as HTMLElement | null;
+    if (dialogRef.current) {
+      dialogRef.current.inert = false;
+    }
     dialogRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (closing) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -55,7 +93,13 @@ export function AttachmentGallery({
       document.body.style.overflow = previousOverflow;
       prevFocusedRef.current?.focus?.();
     };
-  }, [activeIndex, sorted.length]);
+  }, [activeIndex, closing, sorted.length]);
+
+  useLayoutEffect(() => {
+    if (dialogRef.current) {
+      dialogRef.current.inert = closing;
+    }
+  }, [closing]);
 
   if (sorted.length === 0) return null;
 
@@ -68,7 +112,8 @@ export function AttachmentGallery({
         ? 'sp-attachment-gallery--two'
         : 'sp-attachment-gallery--three';
 
-  const activeAttachment = activeIndex !== null ? sorted[activeIndex] ?? null : null;
+  const displayIndex = activeIndex ?? renderedIndex;
+  const activeAttachment = displayIndex !== null ? sorted[displayIndex] ?? null : null;
 
   return (
     <>
@@ -89,20 +134,21 @@ export function AttachmentGallery({
         ))}
       </div>
 
-      {activeAttachment && activeIndex !== null && (
+      {activeAttachment && displayIndex !== null && (
         <div
-          className="sp-lightbox-backdrop"
+          className={`sp-lightbox-backdrop ${closing ? 'is-closing' : ''}`}
           role="presentation"
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setActiveIndex(null);
+            if (!closing && e.target === e.currentTarget) setActiveIndex(null);
           }}
         >
           <div
             ref={dialogRef}
-            className="sp-lightbox-dialog"
+            className={`sp-lightbox-dialog ${closing ? 'is-closing' : ''}`}
             role="dialog"
-            aria-modal="true"
+            aria-modal={!closing ? 'true' : undefined}
+            aria-hidden={closing ? 'true' : undefined}
             aria-label={`图片预览 ${activeAttachment.filename}`}
             tabIndex={-1}
             onPointerDown={(e) => e.stopPropagation()}
@@ -111,7 +157,7 @@ export function AttachmentGallery({
               <div className="sp-lightbox-meta">
                 <span className="sp-strong sp-truncate">{activeAttachment.filename}</span>
                 <span className="sp-help">
-                  {activeIndex + 1} / {sorted.length} · {formatBytes(activeAttachment.size_bytes)}
+                  {displayIndex + 1} / {sorted.length} · {formatBytes(activeAttachment.size_bytes)}
                 </span>
               </div>
               <button
@@ -131,7 +177,7 @@ export function AttachmentGallery({
                   className="sp-lightbox-nav sp-lightbox-nav--prev"
                   aria-label="上一张图片"
                   onClick={() =>
-                    setActiveIndex((activeIndex - 1 + sorted.length) % sorted.length)
+                    setActiveIndex((displayIndex - 1 + sorted.length) % sorted.length)
                   }
                 >
                   <ChevronLeft size={20} strokeWidth={2} aria-hidden="true" />
@@ -149,7 +195,7 @@ export function AttachmentGallery({
                   type="button"
                   className="sp-lightbox-nav sp-lightbox-nav--next"
                   aria-label="下一张图片"
-                  onClick={() => setActiveIndex((activeIndex + 1) % sorted.length)}
+                  onClick={() => setActiveIndex((displayIndex + 1) % sorted.length)}
                 >
                   <ChevronRight size={20} strokeWidth={2} aria-hidden="true" />
                 </button>

@@ -3,9 +3,17 @@ import { useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
-import type { CollectionSummary } from '../api/types';
+import type { CollectionSummary, ExpectedProjectSuggestion } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
-import { pendingSuggestionOptions, decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
+import {
+  pendingSuggestionOptions,
+  decideCollectionProjectSafely,
+  StaleSuggestionError,
+  toExpectedSuggestion,
+  undoCollectionProjectReceipt,
+} from '../lib/organization';
+import { projectToneClass } from '../lib/projectTone';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
@@ -34,19 +42,52 @@ export function UnclassifiedPage() {
 
   const projectsQuery = useProjectChoices();
 
-  const decideMutation = useMutation({
-    mutationFn: (params: {
+  const decideMutation = useMutation<
+    Awaited<ReturnType<typeof decideCollectionProjectSafely>>,
+    unknown,
+    {
       collectionId: string;
       projectId: string;
       action: 'include' | 'exclude';
       requireSuggested?: boolean;
-    }) => decideCollectionProjectSafely(api, params),
-    onSuccess: (updated, vars) => {
+      requireSuggestionSnapshot?: boolean;
+      expectedSuggestion?: ExpectedProjectSuggestion;
+    },
+    { capturedSession: AuthSessionSnapshot }
+  >({
+    onMutate: () => ({ capturedSession: captureAuthSession() }),
+    mutationFn: (params) => decideCollectionProjectSafely(api, params),
+    onSuccess: (updated, vars, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
+      const capturedSession = context.capturedSession;
       setActionError(null);
       markSuggestionPromptHandled(vars.collectionId);
       queryClient.setQueryData(['collection', vars.collectionId], updated);
+      const receipt = updated.undo_receipt;
       pushToast({
         message: vars.action === 'include' ? '已归入项目' : '已忽略建议关联',
+        ...(receipt
+          ? {
+              actionLabel: '撤销',
+              onAction: async () => {
+                if (!isSameAuthSession(capturedSession)) return;
+                try {
+                  const restored = await undoCollectionProjectReceipt(api, updated.id, receipt);
+                  if (!isSameAuthSession(capturedSession)) return;
+                  queryClient.setQueryData(['collection', restored.id], restored);
+                  void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
+                  void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
+                  void queryClient.invalidateQueries({ queryKey: ['projects'] });
+                  void queryClient.invalidateQueries({ queryKey: ['project', vars.projectId] });
+                  void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
+                  pushToast({ message: '已撤销归类操作' });
+                } catch (undoErr) {
+                  if (!isSameAuthSession(capturedSession)) return;
+                  pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
+                }
+              },
+            }
+          : {}),
       });
       void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
       void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
@@ -56,7 +97,8 @@ export function UnclassifiedPage() {
         void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
       }
     },
-    onError: (err, vars) => {
+    onError: (err, vars, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
       if (err instanceof StaleSuggestionError) {
         markSuggestionPromptHandled(vars.collectionId);
         queryClient.setQueryData(['collection', vars.collectionId], err.freshCollection);
@@ -73,6 +115,7 @@ export function UnclassifiedPage() {
 
   const items = unclassifiedQuery.data?.pages.flatMap((p) => p.items) ?? [];
   const projects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
+  const activeQuickProjects = projects.filter((p) => p.state === 'active').slice(0, 6);
 
   const renderQuickClassify = (col: CollectionSummary) => {
     const suggested = col.projects.filter((p) => p.decision === 'suggested');
@@ -102,6 +145,8 @@ export function UnclassifiedPage() {
                       projectId: sug.project_id,
                       action: 'include',
                       requireSuggested: true,
+                      requireSuggestionSnapshot: true,
+                      expectedSuggestion: toExpectedSuggestion(sug),
                     })
                   }
                 >
@@ -118,6 +163,8 @@ export function UnclassifiedPage() {
                       projectId: sug.project_id,
                       action: 'exclude',
                       requireSuggested: true,
+                      requireSuggestionSnapshot: true,
+                      expectedSuggestion: toExpectedSuggestion(sug),
                     })
                   }
                 >
@@ -129,6 +176,32 @@ export function UnclassifiedPage() {
             <ProjectSuggestionEvidence association={sug} />
           </div>
         ))}
+
+        {activeQuickProjects.length > 0 && (
+          <div className="sp-classify-quick" role="group" aria-label={`快速将「${col.display_title}」归入进行中项目`}>
+            <span className="sp-classify-quick-label">一点即归入</span>
+            <div className="sp-classify-quick-tapes">
+              {activeQuickProjects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`sp-tape sp-classify-tape ${projectToneClass(p.id)}`}
+                  aria-label={`归入项目 ${p.name}`}
+                  disabled={decideMutation.isPending}
+                  onClick={() =>
+                    decideMutation.mutate({
+                      collectionId: col.id,
+                      projectId: p.id,
+                      action: 'include',
+                    })
+                  }
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {projects.length > 0 && (
           <div className="sp-classify-row">
@@ -173,7 +246,10 @@ export function UnclassifiedPage() {
         title="待归类"
         actions={
           <div className="sp-row">
-            <Link to="/unclassified/triage" className="sp-btn sp-btn--primary sp-btn--sm">
+            <Link
+              to="/unclassified/triage"
+              className={`sp-btn sp-btn--sm ${items.length > 0 ? 'sp-btn--primary' : ''}`}
+            >
               <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
               <span>开始整理</span>
             </Link>

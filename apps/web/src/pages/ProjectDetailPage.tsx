@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, Search, X } from 'lucide-react';
@@ -24,7 +24,16 @@ export function ProjectDetailPage() {
   const typeFilter = (params.get('type') ?? '') as CollectionType | '';
   const unreadOnly = params.get('read') === 'false';
   const searchKeyword = params.get('q') ?? '';
+  const [searchText, setSearchText] = useState(searchKeyword);
   const [debouncedKeyword, setDebouncedKeyword] = useState(searchKeyword.trim());
+  const searchComposingRef = useRef(false);
+
+  useEffect(() => {
+    if (!searchComposingRef.current) {
+      setSearchText(searchKeyword);
+    }
+  }, [searchKeyword]);
+
   function updateFilter(name: string, value: string) {
     setParams(previous => {
       const next = new URLSearchParams(previous);
@@ -44,6 +53,7 @@ export function ProjectDetailPage() {
   const [conflictLatestVersion, setConflictLatestVersion] = useState<number | null>(null);
 
   useEffect(() => {
+    if (searchComposingRef.current) return;
     const timer = window.setTimeout(() => setDebouncedKeyword(searchKeyword.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [searchKeyword]);
@@ -217,9 +227,48 @@ export function ProjectDetailPage() {
             type="search"
             aria-label="在当前项目内搜索"
             placeholder="在项目内搜索…"
-            value={searchKeyword}
-            onChange={(e) => updateFilter('q', e.target.value)}
+            value={searchText}
+            onCompositionStart={() => {
+              searchComposingRef.current = true;
+            }}
+            onCompositionEnd={(e) => {
+              searchComposingRef.current = false;
+              const next = e.currentTarget.value;
+              setSearchText(next);
+              updateFilter('q', next);
+            }}
+            onKeyDown={(e) => {
+              if (searchComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
+            onChange={(e) => {
+              const next = e.target.value;
+              setSearchText(next);
+              if (searchComposingRef.current || (e.nativeEvent as InputEvent).isComposing) {
+                return;
+              }
+              updateFilter('q', next);
+            }}
           />
+          {searchText && (
+            <button
+              type="button"
+              className="sp-search-clear"
+              aria-label="清空项目内搜索"
+              onClick={() => {
+                searchComposingRef.current = false;
+                setSearchText('');
+                updateFilter('q', '');
+              }}
+            >
+              <X size={14} strokeWidth={2.2} aria-hidden="true" />
+            </button>
+          )}
         </div>
         <button
           type="button"

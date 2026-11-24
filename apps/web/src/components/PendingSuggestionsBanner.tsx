@@ -3,8 +3,15 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, ChevronUp, Sparkles, X } from 'lucide-react';
+import type { ExpectedProjectSuggestion } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
-import { decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
+import {
+  decideCollectionProjectSafely,
+  StaleSuggestionError,
+  toExpectedSuggestion,
+  undoCollectionProjectReceipt,
+} from '../lib/organization';
 import { useApi } from '../context/ApiContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { useToast } from '../context/ToastContext';
@@ -22,32 +29,66 @@ export function PendingSuggestionsBanner() {
 
   const [expanded, setExpanded] = useState(false);
 
-  const decideMutation = useMutation({
-    mutationFn: (params: {
+  const decideMutation = useMutation<
+    Awaited<ReturnType<typeof decideCollectionProjectSafely>>,
+    unknown,
+    {
       collectionId: string;
       projectId: string;
       action: 'include' | 'exclude';
-    }) =>
+      expectedSuggestion?: ExpectedProjectSuggestion;
+    },
+    { capturedSession: AuthSessionSnapshot }
+  >({
+    onMutate: () => ({ capturedSession: captureAuthSession() }),
+    mutationFn: (params) =>
       decideCollectionProjectSafely(api, {
         ...params,
         requireSuggested: true,
+        requireSuggestionSnapshot: true,
       }),
-    onSuccess: (updated, vars) => {
+    onSuccess: (updated, vars, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
+      const capturedSession = context.capturedSession;
       markSuggestionPromptHandled(vars.collectionId);
       queryClient.setQueryData(['collection', vars.collectionId], updated);
+      const receipt = updated.undo_receipt;
       pushToast({
         message: vars.action === 'include' ? '已确认归入项目' : '已忽略该条项目建议',
+        ...(receipt
+          ? {
+              actionLabel: '撤销',
+              onAction: async () => {
+                if (!isSameAuthSession(capturedSession)) return;
+                try {
+                  const restored = await undoCollectionProjectReceipt(api, updated.id, receipt);
+                  if (!isSameAuthSession(capturedSession)) return;
+                  queryClient.setQueryData(['collection', restored.id], restored);
+                  void queryClient.invalidateQueries({ queryKey: ['collections'] });
+                  void queryClient.invalidateQueries({ queryKey: ['projects'] });
+                  void queryClient.invalidateQueries({ queryKey: ['project'] });
+                  void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+                  pushToast({ message: '已撤销该项目建议操作' });
+                } catch (undoErr) {
+                  if (!isSameAuthSession(capturedSession)) return;
+                  pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
+                }
+              },
+            }
+          : {}),
       });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
       void queryClient.invalidateQueries({ queryKey: ['project'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
-    onError: (err, vars) => {
+    onError: (err, vars, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
       if (err instanceof StaleSuggestionError) {
         markSuggestionPromptHandled(vars.collectionId);
         queryClient.setQueryData(['collection', vars.collectionId], err.freshCollection);
         void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
         pushToast({ message: err.message });
         return;
       }
@@ -136,6 +177,7 @@ export function PendingSuggestionsBanner() {
                             collectionId: col.id,
                             projectId: firstSuggested.project_id,
                             action: 'include',
+                            expectedSuggestion: toExpectedSuggestion(firstSuggested),
                           })
                         }
                       >
@@ -151,6 +193,7 @@ export function PendingSuggestionsBanner() {
                             collectionId: col.id,
                             projectId: firstSuggested.project_id,
                             action: 'exclude',
+                            expectedSuggestion: toExpectedSuggestion(firstSuggested),
                           })
                         }
                       >

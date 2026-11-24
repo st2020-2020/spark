@@ -1142,6 +1142,17 @@ export function TriagePage() {
     !reducedMotion && isDraggingHorizontal
       ? `translateX(${dragOffsetX}px) rotate(${(dragOffsetX * 0.025).toFixed(2)}deg)`
       : undefined;
+  const swipeProgress =
+    !reducedMotion && isDraggingHorizontal
+      ? Math.min(1, Math.abs(dragOffsetX) / SWIPE_COMMIT_PX)
+      : 0;
+  const peekTransform =
+    !reducedMotion && isDraggingHorizontal
+      ? `translateY(${(6 * (1 - swipeProgress)).toFixed(1)}px) scale(${(
+          0.97 +
+          0.03 * swipeProgress
+        ).toFixed(3)}) rotate(${(-1.1 * (1 - swipeProgress)).toFixed(2)}deg)`
+      : undefined;
 
   const canExpandMoreProjects =
     moreProjectsOpen ||
@@ -1275,7 +1286,13 @@ export function TriagePage() {
         <div className="sp-triage-stage">
           <div className="sp-triage-deck">
             {nextSummary && (
-              <div className="sp-triage-card sp-triage-card--peek" aria-hidden="true" />
+              <div
+                className={`sp-triage-card sp-triage-card--peek ${
+                  isDraggingHorizontal ? 'is-dragging' : ''
+                }`}
+                style={peekTransform ? { transform: peekTransform } : undefined}
+                aria-hidden="true"
+              />
             )}
 
             <article

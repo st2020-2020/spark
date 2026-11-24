@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, X } from 'lucide-react';
 import { generateUuid } from '../lib/idempotency';
+import { canAnimateMotion, TOAST_EXIT_MS } from '../lib/motion';
 
 export interface ToastItem {
   id: string;
@@ -12,16 +13,23 @@ export interface ToastItem {
   onAction?: () => void | Promise<void>;
 }
 
+interface InternalToastItem extends ToastItem {
+  closing?: boolean;
+}
+
 interface ToastContextValue {
   pushToast: (toast: Omit<ToastItem, 'id'>, durationMs?: number) => void;
   dismissToast: (id: string) => void;
+  clearAllToasts: () => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [toasts, setToasts] = useState<InternalToastItem[]>([]);
   const timersRef = useRef<Map<string, number>>(new Map());
+  const exitTimersRef = useRef<Map<string, number>>(new Map());
+  const consumedActionsRef = useRef<Set<string>>(new Set());
 
   const clearTimer = useCallback((id: string) => {
     const timer = timersRef.current.get(id);
@@ -29,12 +37,28 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(timer);
       timersRef.current.delete(id);
     }
+    const exitTimer = exitTimersRef.current.get(id);
+    if (exitTimer !== undefined) {
+      window.clearTimeout(exitTimer);
+      exitTimersRef.current.delete(id);
+    }
   }, []);
 
   const dismissToast = useCallback(
     (id: string) => {
       clearTimer(id);
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+      if (!canAnimateMotion()) {
+        consumedActionsRef.current.delete(id);
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+        return;
+      }
+      setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, closing: true } : t)));
+      const exitTimer = window.setTimeout(() => {
+        exitTimersRef.current.delete(id);
+        consumedActionsRef.current.delete(id);
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, TOAST_EXIT_MS);
+      exitTimersRef.current.set(id, exitTimer);
     },
     [clearTimer],
   );
@@ -47,12 +71,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           const existing = prev.find((item) => item.dedupeKey === toast.dedupeKey);
           if (existing) {
             clearTimer(existing.id);
+            consumedActionsRef.current.delete(existing.id);
             if (durationMs > 0) {
               const timer = window.setTimeout(() => dismissToast(existing.id), durationMs);
               timersRef.current.set(existing.id, timer);
             }
             return prev.map((item) =>
-              item.id === existing.id ? { ...toast, id: existing.id } : item,
+              item.id === existing.id ? { ...toast, id: existing.id, closing: false } : item,
             );
           }
         }
@@ -60,11 +85,24 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           const timer = window.setTimeout(() => dismissToast(nextId), durationMs);
           timersRef.current.set(nextId, timer);
         }
-        return [...prev, { ...toast, id: nextId }];
+        return [...prev, { ...toast, id: nextId, closing: false }];
       });
     },
     [clearTimer, dismissToast],
   );
+
+  const clearAllToasts = useCallback(() => {
+    for (const timer of timersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    timersRef.current.clear();
+    for (const timer of exitTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    exitTimersRef.current.clear();
+    consumedActionsRef.current.clear();
+    setToasts((prev) => (prev.length === 0 ? prev : []));
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -72,11 +110,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         window.clearTimeout(timer);
       }
       timersRef.current.clear();
+      for (const timer of exitTimersRef.current.values()) {
+        window.clearTimeout(timer);
+      }
+      exitTimersRef.current.clear();
     };
   }, []);
 
   return (
-    <ToastContext.Provider value={{ pushToast, dismissToast }}>
+    <ToastContext.Provider value={{ pushToast, dismissToast, clearAllToasts }}>
       {children}
       <div className="sp-toast-region" aria-live="polite" aria-atomic="false">
         {toasts.map((toast) => (
@@ -84,7 +126,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             className={`sp-toast ${toast.tone === 'error' ? 'sp-toast--error' : ''} ${
               toast.variant === 'ai-suggestion' ? 'sp-toast--ai' : ''
-            }`}
+            } ${toast.closing ? 'is-closing' : ''}`}
             role={toast.tone === 'error' ? 'alert' : 'status'}
           >
             <div className="sp-toast-body">
@@ -103,7 +145,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 <button
                   type="button"
                   className="sp-toast-action"
+                  disabled={Boolean(toast.closing)}
                   onClick={() => {
+                    if (toast.closing || consumedActionsRef.current.has(toast.id)) {
+                      return;
+                    }
+                    consumedActionsRef.current.add(toast.id);
                     void toast.onAction?.();
                     dismissToast(toast.id);
                   }}
@@ -115,6 +162,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 type="button"
                 className="sp-toast-close"
                 aria-label="关闭提示"
+                disabled={Boolean(toast.closing)}
                 onClick={() => dismissToast(toast.id)}
               >
                 <X size={16} strokeWidth={2} aria-hidden="true" />

@@ -33,6 +33,7 @@ function SignedAttachmentImage({
   const api = useApi();
   const [failedImage, setFailedImage] = useState<FailedImage | null>(null);
   const [renewedImageFailed, setRenewedImageFailed] = useState(false);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
 
   const grantKey = ['attachment-download', accountId, attachment.id];
   const options = {
@@ -105,13 +106,16 @@ function SignedAttachmentImage({
     );
   }
 
+  const isLoaded = Boolean(currentUrl) && loadedUrl === currentUrl;
+
   if (variant === 'lightbox') {
     return (
       <div className="sp-lightbox-media">
         <img
           src={currentUrl}
           alt={attachment.filename}
-          className={thumbClass}
+          className={`${thumbClass} ${isLoaded ? 'is-loaded' : ''}`}
+          onLoad={() => setLoadedUrl(currentUrl)}
           onError={handleImageError}
         />
         {showOpenOriginal && (
@@ -134,7 +138,8 @@ function SignedAttachmentImage({
       <img
         src={currentUrl}
         alt={attachment.filename}
-        className={thumbClass}
+        className={`${thumbClass} ${isLoaded ? 'is-loaded' : ''}`}
+        onLoad={() => setLoadedUrl(currentUrl)}
         onError={handleImageError}
       />
     );
@@ -153,7 +158,8 @@ function SignedAttachmentImage({
       <img
         src={currentUrl}
         alt={attachment.filename}
-        className={thumbClass}
+        className={`${thumbClass} ${isLoaded ? 'is-loaded' : ''}`}
+        onLoad={() => setLoadedUrl(currentUrl)}
         onError={handleImageError}
       />
       <span className="sp-attachment-zoom-hint" aria-hidden="true">

@@ -15,11 +15,13 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import type { Attachment, CollectionSummary, SearchHit } from '../api/types';
+import type { Attachment, Collection, CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
 import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
+import { canAnimateMotion } from '../lib/motion';
 import {
   formatDateTime,
   formatRelativeTime,
@@ -32,6 +34,18 @@ import { projectToneClass } from '../lib/projectTone';
 import { AttachmentGallery } from './AttachmentGallery';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import { HighlightText } from './StateBlocks';
+
+const inFlightReadsBySession = new Map<number, number>();
+
+function adjustInFlightReads(generation: number, delta: number): number {
+  const next = Math.max(0, (inFlightReadsBySession.get(generation) ?? 0) + delta);
+  if (next === 0) {
+    inFlightReadsBySession.delete(generation);
+  } else {
+    inFlightReadsBySession.set(generation, next);
+  }
+  return next;
+}
 
 function shouldShowDistinctTitle(collection: CollectionSummary): boolean {
   const title = collection.display_title?.trim();
@@ -67,6 +81,24 @@ export function CollectionCard({
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapRef = useRef<HTMLDivElement | null>(null);
   const moreBtnRef = useRef<HTMLButtonElement | null>(null);
+  const isUnread = !collection.read_at;
+  const [prevUnread, setPrevUnread] = useState(isUnread);
+  const [justRead, setJustRead] = useState(false);
+
+  if (prevUnread !== isUnread) {
+    setPrevUnread(isUnread);
+    if (prevUnread && !isUnread && canAnimateMotion()) {
+      setJustRead(true);
+    } else if (isUnread) {
+      setJustRead(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!justRead) return;
+    const timer = window.setTimeout(() => setJustRead(false), 160);
+    return () => window.clearTimeout(timer);
+  }, [justRead]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -94,14 +126,154 @@ export function CollectionCard({
     };
   }, [menuOpen]);
 
-  const toggleReadMutation = useMutation({
-    mutationFn: () => api.setReadState(collection.id, { read: !collection.read_at }),
-    onSuccess: () => {
-      setMenuOpen(false);
-      void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+  type ListRow = CollectionSummary | SearchHit;
+  type InfiniteListCache = {
+    pages: Array<{ items: ListRow[]; next_cursor?: string }>;
+    pageParams: unknown[];
+  };
+
+  const patchTargetReadAt = (
+    targetReadAt: string | undefined,
+    options?: {
+      expectedCurrentReadAt?: string | undefined;
+      enforceMatch?: boolean;
+      maxResourceVersion?: number;
+      serverCollection?: Collection;
     },
-    onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
+  ) => {
+    const mergeSummary = (item: CollectionSummary): CollectionSummary => {
+      const updated = options?.serverCollection;
+      if (!updated) {
+        return { ...item, read_at: targetReadAt };
+      }
+      return {
+        ...item,
+        display_title: updated.display_title,
+        content_types: updated.content_types,
+        projects: updated.projects,
+        tags: updated.tags,
+        organization_status: updated.organization?.status ?? item.organization_status,
+        read_at: updated.read_at,
+        created_at: updated.created_at,
+        updated_at: updated.updated_at,
+        resource_version: updated.resource_version,
+        has_suggestion: updated.has_suggestion,
+        original_url: updated.original_url,
+        thread_id: updated.thread_id ?? item.thread_id,
+        source_collection_id: updated.source_collection_id ?? item.source_collection_id,
+        follow_up_count: updated.follow_up_count ?? item.follow_up_count,
+      };
+    };
+
+    const patchList = (old: InfiniteListCache | undefined) => {
+      if (!old || !Array.isArray(old.pages)) return old;
+      let touched = false;
+      const pages = old.pages.map((page) => {
+        if (!Array.isArray(page.items)) return page;
+        let pageTouched = false;
+        const items = page.items.map((row) => {
+          const item = 'collection' in row ? row.collection : row;
+          if (item.id !== collection.id) return row;
+          if (
+            options?.maxResourceVersion !== undefined &&
+            item.resource_version > options.maxResourceVersion
+          ) {
+            return row;
+          }
+          if (options?.enforceMatch && item.read_at !== options.expectedCurrentReadAt) {
+            return row;
+          }
+          pageTouched = true;
+          const updatedItem = mergeSummary(item);
+          return 'collection' in row ? { ...row, collection: updatedItem } : updatedItem;
+        });
+        if (!pageTouched) return page;
+        touched = true;
+        return { ...page, items };
+      });
+      return touched ? { ...old, pages } : old;
+    };
+
+    queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections'] }, patchList);
+    queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['project-collections'] }, patchList);
+    queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections-command'] }, patchList);
+    queryClient.setQueryData<Collection>(['collection', collection.id], (old) => {
+      if (!old) return old;
+      if (
+        options?.maxResourceVersion !== undefined &&
+        old.resource_version > options.maxResourceVersion
+      ) {
+        return old;
+      }
+      if (options?.enforceMatch && old.read_at !== options.expectedCurrentReadAt) return old;
+      return options?.serverCollection ?? { ...old, read_at: targetReadAt };
+    });
+  };
+
+  const toggleReadMutation = useMutation<
+    Collection,
+    unknown,
+    boolean,
+    {
+      capturedSession: AuthSessionSnapshot;
+      prevReadAt: string | undefined;
+      optimisticReadAt: string | undefined;
+      targetRead: boolean;
+    }
+  >({
+    mutationFn: (targetRead) => api.setReadState(collection.id, { read: targetRead }),
+    onMutate: async (targetRead) => {
+      setMenuOpen(false);
+      const capturedSession = captureAuthSession();
+      adjustInFlightReads(capturedSession.generation, 1);
+
+      await queryClient.cancelQueries({ queryKey: ['collections'] });
+      await queryClient.cancelQueries({ queryKey: ['project-collections'] });
+      await queryClient.cancelQueries({ queryKey: ['collections-command'] });
+      await queryClient.cancelQueries({ queryKey: ['collection', collection.id] });
+
+      const prevReadAt = collection.read_at;
+      const optimisticReadAt = targetRead ? (prevReadAt ?? new Date().toISOString()) : undefined;
+      if (isSameAuthSession(capturedSession)) {
+        patchTargetReadAt(optimisticReadAt);
+      }
+
+      return { capturedSession, prevReadAt, optimisticReadAt, targetRead };
+    },
+    onSuccess: (updated, _targetRead, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
+      patchTargetReadAt(updated.read_at, {
+        maxResourceVersion: updated.resource_version,
+        serverCollection: updated,
+      });
+      queryClient.setQueryData<Collection>(['collection', collection.id], (existing) => {
+        if (!existing) return updated;
+        if (existing.resource_version > updated.resource_version) {
+          return existing;
+        }
+        return updated;
+      });
+    },
+    onError: (err, _targetRead, context) => {
+      if (!context || !isSameAuthSession(context.capturedSession)) return;
+      patchTargetReadAt(context.prevReadAt, {
+        expectedCurrentReadAt: context.optimisticReadAt,
+        enforceMatch: true,
+      });
+      pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
+    },
+    onSettled: (_data, err, _targetRead, context) => {
+      if (!context) return;
+      const remaining = adjustInFlightReads(context.capturedSession.generation, -1);
+      if (!isSameAuthSession(context.capturedSession)) return;
+      if (err) {
+        void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
+      }
+      if (remaining === 0) {
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      }
+    },
   });
 
   const trashMutation = useMutation({
@@ -137,7 +309,6 @@ export function CollectionCard({
     onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
   });
 
-  const isUnread = !collection.read_at;
   const effectiveProjects = collection.projects.filter(
     (p) => p.decision === 'manual' || p.decision === 'confirmed' || p.decision === 'auto',
   );
@@ -168,7 +339,7 @@ export function CollectionCard({
           e.preventDefault();
           openFollowUp(toFollowUpSourceFromSummary(collection));
         } else if (key === 'r' && !toggleReadMutation.isPending) {
-          e.preventDefault(); toggleReadMutation.mutate();
+          e.preventDefault(); toggleReadMutation.mutate(Boolean(isUnread));
         }
       }} className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
       <div className="sp-note-meta">
@@ -187,7 +358,15 @@ export function CollectionCard({
             <ImageIcon size={13} strokeWidth={2.2} aria-hidden="true" />
           </span>
         )}
-        {isUnread && <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />}
+        {(isUnread || justRead) && (
+          <span
+            className={`sp-unread-dot ${isUnread ? '' : 'is-read'}`}
+            role={isUnread ? 'img' : undefined}
+            aria-label={isUnread ? '未读' : undefined}
+            title={isUnread ? '未读' : undefined}
+            aria-hidden={isUnread ? undefined : 'true'}
+          />
+        )}
 
         {showOrgStatus &&
           (collection.organization_status === 'failed' ||
@@ -242,7 +421,7 @@ export function CollectionCard({
                   role="menuitem"
                   className="sp-menu-item"
                   disabled={toggleReadMutation.isPending}
-                  onClick={() => toggleReadMutation.mutate()}
+                  onClick={() => toggleReadMutation.mutate(Boolean(isUnread))}
                 >
                   {collection.read_at ? (
                     <Mail size={16} strokeWidth={2} aria-hidden="true" />

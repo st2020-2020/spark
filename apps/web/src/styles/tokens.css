@@ -77,7 +77,13 @@
   --sp-leading-body: 1.75;
 
   --sp-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --sp-ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.15);
   --sp-ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+  --sp-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --sp-dur-instant: 100ms;
+  --sp-dur-fast: 160ms;
+  --sp-dur-normal: 220ms;
+  --sp-dur-sheet: 300ms;
 
   --sp-topbar-h: 56px;
   --sp-tabbar-h: 62px;
