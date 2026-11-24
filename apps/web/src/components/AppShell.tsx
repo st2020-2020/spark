@@ -235,21 +235,24 @@ export function AppShell({
   const quickCaptureRef = useRef(handleQuickCapture);
   quickCaptureRef.current = handleQuickCapture;
 
-  // "N" opens quick capture from anywhere, unless the person is typing or a dialog is open.
+  // "N" opens quick capture from anywhere outside inputs; Cmd/Ctrl+K opens CommandPalette even while typing.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.shiftKey) return;
+      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="dialog"]')) return;
+      const key = event.key.toLowerCase();
+      if (event.metaKey || event.ctrlKey) {
+        if (key === 'k') {
+          event.preventDefault();
+          setCommandOpen(true);
+        }
+        return;
+      }
       const target = event.target;
       if (
         target instanceof HTMLElement &&
         target.closest('input, textarea, select, [contenteditable="true"], [role="menu"], [role="listbox"]')
       ) {
-        return;
-      }
-      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="dialog"]')) return;
-      const key = event.key.toLowerCase();
-      if (event.metaKey || event.ctrlKey) {
-        if (key === 'k') { event.preventDefault(); setCommandOpen(true); }
         return;
       }
       if (key === 'n') { event.preventDefault(); quickCaptureRef.current(); }

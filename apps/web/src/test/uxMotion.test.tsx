@@ -314,4 +314,38 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     expect(paletteOption.querySelector('mark')).not.toBeNull();
     expect(paletteOption.querySelector('.sp-command-row-check')).not.toBeNull();
   });
+
+  it('opens CommandPalette via Cmd/Ctrl+K from both composer editor and search input, while keeping single-key shortcuts suppressed inside inputs', async () => {
+    const api = await admin();
+    const user = userEvent.setup();
+    mount(api, '/inbox');
+
+    const textbox = await waitFor(() => {
+      const live = screen.getByRole('textbox', { name: '收藏正文编辑器' });
+      live.focus();
+      expect(live).toHaveFocus();
+      return live;
+    });
+
+    // Single-key N inside editor must not trigger quick capture sheet / interfere
+    fireEvent.keyDown(textbox, { key: 'n' });
+    expect(screen.queryByRole('dialog', { name: '快速收集' })).not.toBeInTheDocument();
+
+    // Cmd+K inside [contenteditable="true"] editor opens CommandPalette
+    fireEvent.keyDown(textbox, { key: 'k', metaKey: true });
+    const command = screen.getByRole('combobox', { name: '搜索收藏、项目或命令' });
+    expect(command).toHaveFocus();
+    fireEvent.keyDown(command, { key: 'Escape' });
+    expect(textbox).toHaveFocus();
+
+    // Ctrl+K inside header <input> search box also opens CommandPalette
+    const headerSearch = screen.getByRole('searchbox', { name: '搜索收藏' });
+    await user.click(headerSearch);
+    expect(headerSearch).toHaveFocus();
+    fireEvent.keyDown(headerSearch, { key: 'k', ctrlKey: true });
+    const commandFromSearch = screen.getByRole('combobox', { name: '搜索收藏、项目或命令' });
+    expect(commandFromSearch).toHaveFocus();
+    fireEvent.keyDown(commandFromSearch, { key: 'Escape' });
+    expect(headerSearch).toHaveFocus();
+  });
 });
