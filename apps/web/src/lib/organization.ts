@@ -8,6 +8,7 @@ import type {
   ProjectAssociation,
   Stage,
 } from '../api/types';
+import { generateIdempotencyKey } from './idempotency';
 
 export const pendingSuggestionKey = ['collections', 'unclassified', 'suggested'] as const;
 
@@ -993,7 +994,9 @@ export class StaleSuggestionError extends Error {
   }
 }
 
-function toExpectedSuggestion(assoc: ProjectAssociation | undefined): ExpectedProjectSuggestion | undefined {
+export function toExpectedSuggestion(
+  assoc: ProjectAssociation | undefined,
+): ExpectedProjectSuggestion | undefined {
   if (
     assoc &&
     assoc.decision === 'suggested' &&
@@ -1015,6 +1018,8 @@ export async function decideCollectionProjectSafely(
     projectId: string;
     action: 'include' | 'exclude';
     requireSuggested?: boolean;
+    expectedSuggestion?: ExpectedProjectSuggestion;
+    idempotencyKey?: string;
   },
 ): Promise<Collection> {
   const fresh = await api.getCollection(params.collectionId);
@@ -1026,17 +1031,44 @@ export async function decideCollectionProjectSafely(
     if (!assoc || assoc.decision !== 'suggested') {
       throw new StaleSuggestionError('该条建议已在其他页面处理完成，列表已为你同步最新状态。', fresh);
     }
+    if (
+      params.expectedSuggestion &&
+      (assoc.suggestion_run_id !== params.expectedSuggestion.run_id ||
+        assoc.project_version !== params.expectedSuggestion.project_version)
+    ) {
+      throw new StaleSuggestionError('项目建议已更新，请核对最新建议与依据后再操作。', fresh);
+    }
   }
-  const expected = params.requireSuggested ? toExpectedSuggestion(assoc) : undefined;
-  return api.updateProjectDecisions(params.collectionId, {
-    base_decision_version: fresh.decision_version,
-    operations: [
-      {
-        id: params.projectId,
-        action: params.action,
-        ...(expected ? { expected_suggestion: expected } : {}),
-      },
-    ],
+  const expected = params.requireSuggested
+    ? (params.expectedSuggestion ?? toExpectedSuggestion(assoc))
+    : undefined;
+  return api.updateProjectDecisions(
+    params.collectionId,
+    {
+      base_decision_version: fresh.decision_version,
+      operations: [
+        {
+          id: params.projectId,
+          action: params.action,
+          ...(expected ? { expected_suggestion: expected } : {}),
+        },
+      ],
+    },
+    params.idempotencyKey ?? generateIdempotencyKey(),
+  );
+}
+
+export async function undoCollectionProjectReceipt(
+  api: Pick<SparkApi, 'undoProjectDecisions'>,
+  collectionId: string,
+  receipt: NonNullable<Collection['undo_receipt']>,
+): Promise<Collection> {
+  if (Date.parse(receipt.expires_at) <= Date.now()) {
+    throw new Error('撤销回执已过期，无法撤销上一步操作。');
+  }
+  return api.undoProjectDecisions(collectionId, {
+    operation_key: receipt.operation_key,
+    base_decision_version: receipt.decision_version,
   });
 }
 

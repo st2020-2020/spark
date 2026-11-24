@@ -906,6 +906,10 @@ button:disabled {
   transition: transform var(--sp-dur-normal) var(--sp-ease-spring);
 }
 
+.sp-drawer-panel.is-swipe-settled:not(.is-closing) {
+  animation: none;
+}
+
 .sp-drawer-panel.is-closing {
   animation: sp-drawer-out var(--sp-dur-normal) var(--sp-ease-exit) forwards;
 }
@@ -2354,16 +2358,12 @@ a.sp-tape:hover {
   box-shadow: 0 0 0 3px var(--sp-accent);
   flex-shrink: 0;
   transition: transform var(--sp-dur-fast) var(--sp-ease-out),
-    opacity var(--sp-dur-fast) var(--sp-ease-out),
-    width var(--sp-dur-fast) var(--sp-ease-out);
+    opacity var(--sp-dur-fast) var(--sp-ease-out);
 }
 
 .sp-unread-dot.is-read {
-  width: 0;
   opacity: 0;
   transform: scale(0);
-  box-shadow: none;
-  margin-inline: -4px;
   pointer-events: none;
 }
 
@@ -3358,8 +3358,9 @@ p.sp-help {
 }
 
 .sp-banner-detail--quiet {
-  font-size: 11px;
-  opacity: 0.68;
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
+  opacity: 0.78;
 }
 
 .sp-spaced {
@@ -3810,6 +3811,10 @@ a.sp-pill:hover {
   padding: 22px 24px 24px;
   animation: sp-pop-in var(--sp-dur-normal) var(--sp-ease-spring);
   transition: transform var(--sp-dur-normal) var(--sp-ease-spring);
+}
+
+.sp-modal.is-swipe-settled:not(.is-closing) {
+  animation: none;
 }
 
 .sp-modal.is-closing {

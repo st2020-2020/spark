@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 
 export function prefersReducedMotion(): boolean {
   return (
@@ -39,6 +39,7 @@ export function useSheetSwipeDismiss({
 }: SwipeDismissOptions) {
   const [dragY, setDragY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [settledAfterDrag, setSettledAfterDrag] = useState(false);
   const dragRef = useRef<{
     active: boolean;
     pointerId: number;
@@ -46,9 +47,35 @@ export function useSheetSwipeDismiss({
     lastY: number;
   } | null>(null);
 
+  const resetSwipe = () => {
+    dragRef.current = null;
+    setIsDragging(false);
+    setDragY(0);
+  };
+
+  useEffect(() => {
+    if (!enabled) {
+      resetSwipe();
+      setSettledAfterDrag(false);
+    }
+  }, [enabled]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => {
+      if (window.innerWidth > 767) {
+        resetSwipe();
+        setSettledAfterDrag(false);
+      }
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (!enabled || (event.button !== undefined && event.button !== 0)) return;
     if (typeof window !== 'undefined' && window.innerWidth > 767) return;
+    if (!Number.isFinite(event.clientY)) return;
     const target = event.target as HTMLElement | null;
     if (target?.closest('button, a, input, select, textarea')) return;
 
@@ -58,6 +85,7 @@ export function useSheetSwipeDismiss({
       startY: event.clientY,
       lastY: 0,
     };
+    setSettledAfterDrag(true);
     setIsDragging(true);
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -69,6 +97,7 @@ export function useSheetSwipeDismiss({
   const onPointerMove = (event: ReactPointerEvent<HTMLElement>) => {
     const st = dragRef.current;
     if (!st || !st.active || st.pointerId !== event.pointerId) return;
+    if (!Number.isFinite(event.clientY)) return;
     const dy = Math.max(0, event.clientY - st.startY);
     st.lastY = dy;
     setDragY(dy);
@@ -78,9 +107,7 @@ export function useSheetSwipeDismiss({
     const st = dragRef.current;
     if (!st || !st.active || st.pointerId !== event.pointerId) return;
     const dy = st.lastY;
-    dragRef.current = null;
-    setIsDragging(false);
-    setDragY(0);
+    resetSwipe();
     try {
       if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
@@ -98,12 +125,14 @@ export function useSheetSwipeDismiss({
 
   return {
     isDragging,
+    settledAfterDrag,
     swipeStyle,
     swipeHandlers: {
       onPointerDown,
       onPointerMove,
       onPointerUp: (e: ReactPointerEvent<HTMLElement>) => finishDrag(e, true),
       onPointerCancel: (e: ReactPointerEvent<HTMLElement>) => finishDrag(e, false),
+      onLostPointerCapture: (e: ReactPointerEvent<HTMLElement>) => finishDrag(e, false),
     },
   };
 }

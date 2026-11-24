@@ -48,7 +48,11 @@ export function Resurface() {
   const { tz, today } = useLocalCalendar();
   const prefs = useResurfacePreferences();
   const key = ['collections', 'resurface', user?.id, tz, today];
-  const [hidingIds, setHidingIds] = useState<string[]>([]);
+  const [exitingItems, setExitingItems] = useState<Array<{
+    date: string;
+    index: number;
+    entry: ResurfaceResult['items'][number];
+  }>>([]);
   const hideTimersRef = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     const timers = hideTimersRef.current;
@@ -64,23 +68,29 @@ export function Resurface() {
   const hide = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string }) => api.hideResurfaceItem(id, date, tz),
     onSuccess: async (_, { id, date }) => {
-      const removeFromCache = async () => {
-        await client.cancelQueries({ queryKey: key });
-        client.setQueryData<ResurfaceResult>(key, old => old?.date === date
-          ? { ...old, items: old.items.filter(item => item.collection.id !== id) } : old);
-        setHidingIds(prev => prev.filter(itemId => itemId !== id));
-        pushToast({ message: '今天先收起这条回看' });
-      };
-      if (!canAnimateMotion()) {
-        await removeFromCache();
-        return;
+      await client.cancelQueries({ queryKey: key });
+      const prev = client.getQueryData<ResurfaceResult>(key);
+      const hiddenIndex =
+        prev?.date === date ? prev.items.findIndex(item => item.collection.id === id) : -1;
+      const hiddenEntry = hiddenIndex >= 0 ? prev?.items[hiddenIndex] : undefined;
+
+      client.setQueryData<ResurfaceResult>(key, old => old?.date === date
+        ? { ...old, items: old.items.filter(item => item.collection.id !== id) } : old);
+      pushToast({ message: '今天先收起这条回看' });
+
+      if (canAnimateMotion() && hiddenEntry) {
+        setExitingItems(current => [
+          ...current.filter(item => item.entry.collection.id !== id),
+          { date, index: hiddenIndex, entry: hiddenEntry },
+        ]);
+        const prevTimer = hideTimersRef.current.get(id);
+        if (prevTimer !== undefined) window.clearTimeout(prevTimer);
+        const timer = window.setTimeout(() => {
+          hideTimersRef.current.delete(id);
+          setExitingItems(current => current.filter(item => item.entry.collection.id !== id));
+        }, 160);
+        hideTimersRef.current.set(id, timer);
       }
-      setHidingIds(prev => (prev.includes(id) ? prev : [...prev, id]));
-      const timer = window.setTimeout(() => {
-        hideTimersRef.current.delete(id);
-        void removeFromCache();
-      }, 160);
-      hideTimersRef.current.set(id, timer);
     },
     onError: error => {
       if (error instanceof ApiError && error.status === 409) {
@@ -92,14 +102,31 @@ export function Resurface() {
   if (prefs.isError) return <ErrorBanner error={prefs.error} onRetry={() => void prefs.refetch()} />;
   if (!prefs.data?.enabled) return null;
   if (result.isError) return <ErrorBanner error={result.error} onRetry={() => void result.refetch()} />;
-  if (!result.data?.items.length) return null;
-  const { date, items } = result.data;
+  const activeItems = result.data?.items ?? [];
+  const activeDate = result.data?.date ?? today;
+  const activeExiting = exitingItems.filter(
+    ex => ex.date === activeDate && !activeItems.some(item => item.collection.id === ex.entry.collection.id),
+  );
+  if (!activeItems.length && !activeExiting.length) return null;
+
+  const displayEntries: Array<{ entry: ResurfaceResult['items'][number]; isHiding: boolean }> = activeItems.map(entry => ({
+    entry,
+    isHiding: false,
+  }));
+  for (const ex of activeExiting.slice().sort((a, b) => a.index - b.index)) {
+    displayEntries.splice(Math.min(ex.index, displayEntries.length), 0, {
+      entry: ex.entry,
+      isHiding: true,
+    });
+  }
+
+  const date = activeDate;
   const state = { from: pathname + search };
   return (
     <section className="sp-resurface" aria-label="今日重现">
       <h2 className="sp-section-title">今日重现</h2>
       <div className="sp-resurface-strip">
-        {items.map(({ collection, reason }) => {
+        {displayEntries.map(({ entry: { collection, reason }, isHiding }) => {
           const createdYear = new Date(collection.created_at).getFullYear();
           const years = Number(date.slice(0, 4)) - createdYear;
           const project = collection.projects.find(p => ['manual', 'auto', 'confirmed'].includes(p.decision));
@@ -108,7 +135,7 @@ export function Resurface() {
             inactive_project: '来自久未回看的项目收藏',
             anniversary: years === 1 ? '一年前的今天' : `${years} 年前的今天`,
           };
-          return <article className={`sp-resurface-note ${hidingIds.includes(collection.id) ? 'is-hiding' : ''}`} key={collection.id}>
+          return <article className={`sp-resurface-note ${isHiding ? 'is-hiding' : ''}`} aria-hidden={isHiding ? 'true' : undefined} key={collection.id}>
             <p className="sp-help sp-break-anywhere">{labels[reason]}</p>
             <h3><CollectionLink id={collection.id} state={state}>{collection.display_title || collection.excerpt || '未命名收藏'}</CollectionLink></h3>
             {collection.excerpt && collection.excerpt !== collection.display_title && <p className="sp-resurface-excerpt">{collection.excerpt}</p>}

@@ -3,15 +3,23 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, ChevronUp, Sparkles, X } from 'lucide-react';
+import type { ExpectedProjectSuggestion } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
-import { decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
+import {
+  decideCollectionProjectSafely,
+  StaleSuggestionError,
+  toExpectedSuggestion,
+  undoCollectionProjectReceipt,
+} from '../lib/organization';
 import { useApi } from '../context/ApiContext';
+import { useAuth } from '../context/AuthContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { useToast } from '../context/ToastContext';
 import { ProjectSuggestionEvidence } from './ProjectSuggestionEvidence';
 
 export function PendingSuggestionsBanner() {
   const api = useApi();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const { pushToast } = useToast();
   const {
@@ -27,6 +35,8 @@ export function PendingSuggestionsBanner() {
       collectionId: string;
       projectId: string;
       action: 'include' | 'exclude';
+      expectedSuggestion?: ExpectedProjectSuggestion;
+      accountId?: string;
     }) =>
       decideCollectionProjectSafely(api, {
         ...params,
@@ -35,30 +45,28 @@ export function PendingSuggestionsBanner() {
     onSuccess: (updated, vars) => {
       markSuggestionPromptHandled(vars.collectionId);
       queryClient.setQueryData(['collection', vars.collectionId], updated);
+      const receipt = updated.undo_receipt;
       pushToast({
         message: vars.action === 'include' ? '已确认归入项目' : '已忽略该条项目建议',
-        actionLabel: '撤销',
-        onAction: async () => {
-          try {
-            const restored = updated.undo_receipt
-              ? await api.undoProjectDecisions(updated.id, {
-                  operation_key: updated.undo_receipt.operation_key,
-                  base_decision_version: updated.undo_receipt.decision_version,
-                })
-              : await api.updateProjectDecisions(updated.id, {
-                  base_decision_version: updated.decision_version,
-                  operations: [{ id: vars.projectId, action: 'reset' }],
-                });
-            queryClient.setQueryData(['collection', restored.id], restored);
-            void queryClient.invalidateQueries({ queryKey: ['collections'] });
-            void queryClient.invalidateQueries({ queryKey: ['projects'] });
-            void queryClient.invalidateQueries({ queryKey: ['project'] });
-            void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
-            pushToast({ message: '已撤销该项目建议操作' });
-          } catch (undoErr) {
-            pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
-          }
-        },
+        ...(receipt
+          ? {
+              actionLabel: '撤销',
+              onAction: async () => {
+                if (vars.accountId && user?.id && user.id !== vars.accountId) return;
+                try {
+                  const restored = await undoCollectionProjectReceipt(api, updated.id, receipt);
+                  queryClient.setQueryData(['collection', restored.id], restored);
+                  void queryClient.invalidateQueries({ queryKey: ['collections'] });
+                  void queryClient.invalidateQueries({ queryKey: ['projects'] });
+                  void queryClient.invalidateQueries({ queryKey: ['project'] });
+                  void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+                  pushToast({ message: '已撤销该项目建议操作' });
+                } catch (undoErr) {
+                  pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
+                }
+              },
+            }
+          : {}),
       });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
@@ -158,6 +166,8 @@ export function PendingSuggestionsBanner() {
                             collectionId: col.id,
                             projectId: firstSuggested.project_id,
                             action: 'include',
+                            expectedSuggestion: toExpectedSuggestion(firstSuggested),
+                            accountId: user?.id,
                           })
                         }
                       >
@@ -173,6 +183,8 @@ export function PendingSuggestionsBanner() {
                             collectionId: col.id,
                             projectId: firstSuggested.project_id,
                             action: 'exclude',
+                            expectedSuggestion: toExpectedSuggestion(firstSuggested),
+                            accountId: user?.id,
                           })
                         }
                       >

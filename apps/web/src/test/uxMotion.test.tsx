@@ -348,4 +348,254 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     fireEvent.keyDown(commandFromSearch, { key: 'Escape' });
     expect(headerSearch).toHaveFocus();
   });
+
+  it('uses server undo_receipt without reset fallback and omits undo when receipt is absent', async () => {
+    const api = await admin();
+    const proj = await api.createProject(
+      { name: '回执验证项目', description: '', focus_points: [] },
+      'p-receipt',
+    );
+    const col = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '回执精准撤销笔记' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'receipt-col',
+    );
+
+    const updateSpy = vi.spyOn(api, 'updateProjectDecisions');
+    const undoSpy = vi.spyOn(api, 'undoProjectDecisions');
+    const user = userEvent.setup();
+    mount(api, '/unclassified');
+
+    await screen.findByText('回执精准撤销笔记');
+    await user.click(screen.getByRole('button', { name: `归入项目 ${proj.name}` }));
+    expect(await screen.findByText('已归入项目')).toBeInTheDocument();
+
+    // updateProjectDecisions must receive an idempotencyKey
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy.mock.calls[0]?.[2]).toBeTruthy();
+
+    // Click Toast undo and verify undoProjectDecisions is invoked and NEVER reset
+    await user.click(screen.getByRole('button', { name: '撤销' }));
+    await waitFor(() => expect(undoSpy).toHaveBeenCalledTimes(1));
+    const resetCalled = updateSpy.mock.calls.some(([, body]) =>
+      body.operations.some((op) => op.action === 'reset'),
+    );
+    expect(resetCalled).toBe(false);
+    expect(await screen.findByText('回执精准撤销笔记')).toBeInTheDocument();
+
+    // If server returns no undo_receipt, Toast renders without undo button
+    const rawDetail = await api.getCollection(col.id);
+    updateSpy.mockResolvedValueOnce({ ...rawDetail, undo_receipt: undefined });
+    await user.click(screen.getByRole('button', { name: `归入项目 ${proj.name}` }));
+    expect(await screen.findByText('已归入项目')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument();
+  });
+
+  it('optimistically updates SearchHit ({ collection, snippets }) rows and only rolls back failed item without clobbering concurrent card state', async () => {
+    const api = await admin();
+    const colA = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '并发标记 卡片A' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'card-a',
+    );
+    const colB = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '并发标记 卡片B' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'card-b',
+    );
+
+    let rejectA!: (err: Error) => void;
+    const realSetReadState = api.setReadState.bind(api);
+    vi.spyOn(api, 'setReadState').mockImplementation((id, body) => {
+      if (id === colA.id) {
+        return new Promise((_, reject) => {
+          rejectA = reject;
+        });
+      }
+      return realSetReadState(id, body);
+    });
+
+    const user = userEvent.setup();
+    mount(api, '/collections?q=' + encodeURIComponent('并发标记'));
+
+    const [matchA] = await screen.findAllByText(/卡片A/);
+    const [matchB] = await screen.findAllByText(/卡片B/);
+    const cardA = matchA.closest('article')!;
+    const cardB = matchB.closest('article')!;
+
+    expect(within(cardA).getByRole('img', { name: '未读' })).toBeInTheDocument();
+    expect(within(cardB).getByRole('img', { name: '未读' })).toBeInTheDocument();
+
+    // Start slow read toggle on Card A (in-flight, optimistic read applied)
+    await user.click(within(cardA).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+    await waitFor(() => {
+      expect(within(cardA).queryByRole('img', { name: '未读' })).not.toBeInTheDocument();
+    });
+
+    // Concurrently complete read toggle on Card B while Card A is still in-flight
+    await user.click(within(cardB).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+    await waitFor(() => {
+      expect(within(cardB).queryByRole('img', { name: '未读' })).not.toBeInTheDocument();
+    });
+
+    // Fail Card A -> only Card A rolls back to unread; Card B stays read!
+    rejectA(new Error('card A failed'));
+    expect(await within(cardA).findByRole('img', { name: '未读' })).toBeInTheDocument();
+    expect(within(cardB).queryByRole('img', { name: '未读' })).not.toBeInTheDocument();
+    expect(colB.id).toBeTruthy();
+  });
+
+  it('guards Cmd/Ctrl+K when a mention listbox is open, executes Toast actions once, and resets sheet swipe state on cancel/resize', async () => {
+    const api = await admin();
+    await api.createTag({ name: '动效' }, 'tag-motion');
+    const user = userEvent.setup();
+    mount(api, '/inbox');
+
+    const textbox = await waitFor(() => {
+      const live = screen.getByRole('textbox', { name: '收藏正文编辑器' });
+      live.focus();
+      expect(live).toHaveFocus();
+      return live;
+    });
+
+    // Open # mention listbox via paste and ensure Cmd+K does not interrupt it
+    paste(textbox, '灵感 #');
+    expect(await screen.findByRole('listbox', { name: '标签联想' })).toBeInTheDocument();
+    fireEvent.keyDown(textbox, { key: 'k', metaKey: true });
+    expect(screen.queryByRole('dialog', { name: '命令面板' })).not.toBeInTheDocument();
+
+    // Verify Toast action executes only once even on rapid double click
+    const onAction = vi.fn();
+    function ToastTrigger() {
+      return (
+        <PurgeConfirmModal
+          open={false}
+          isSubmitting={false}
+          onCancel={() => {}}
+          onConfirm={() => {}}
+        />
+      );
+    }
+    const toastSpyView = render(
+      <ToastProvider>
+        <ToastTrigger />
+      </ToastProvider>,
+    );
+    toastSpyView.unmount();
+
+    const { useToast } = await import('../context/ToastContext');
+    function DoubleClickHarness() {
+      const { pushToast } = useToast();
+      return (
+        <button
+          type="button"
+          onClick={() => pushToast({ message: '测试提示', actionLabel: '只执行一次', onAction })}
+        >
+          触发提示
+        </button>
+      );
+    }
+    render(
+      <ToastProvider>
+        <DoubleClickHarness />
+      </ToastProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: '触发提示' }));
+    const actionBtn = await screen.findByRole('button', { name: '只执行一次' });
+    fireEvent.click(actionBtn);
+    fireEvent.click(actionBtn);
+    expect(onAction).toHaveBeenCalledTimes(1);
+
+    // Verify useSheetSwipeDismiss resets drag state on lostpointercapture & desktop resize
+    const { useSheetSwipeDismiss } = await import('../lib/motion');
+    const prevWidth = window.innerWidth;
+    const prevPointerEvent = window.PointerEvent;
+    class TestPointerEvent extends MouseEvent {
+      readonly pointerId: number;
+      constructor(type: string, init: MouseEventInit & { pointerId?: number } = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+      }
+    }
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      value: TestPointerEvent,
+    });
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    function SwipeHarness({ enabled }: { enabled: boolean }) {
+      const { isDragging, swipeStyle, swipeHandlers } = useSheetSwipeDismiss({
+        enabled,
+        onDismiss: () => {},
+      });
+      return (
+        <div
+          data-testid="swipe-zone"
+          data-dragging={isDragging ? 'true' : 'false'}
+          style={swipeStyle}
+          {...swipeHandlers}
+        />
+      );
+    }
+    const { rerender } = render(<SwipeHarness enabled />);
+    const zone = screen.getByTestId('swipe-zone');
+    fireEvent(zone, new TestPointerEvent('pointerdown', { bubbles: true, button: 0, clientY: 100, pointerId: 1 }));
+    fireEvent(zone, new TestPointerEvent('pointermove', { bubbles: true, clientY: 150, pointerId: 1 }));
+    expect(zone).toHaveAttribute('data-dragging', 'true');
+    expect(zone.style.transform).toBe('translateY(50px)');
+    fireEvent.lostPointerCapture(zone);
+    expect(zone).toHaveAttribute('data-dragging', 'false');
+    expect(zone.style.transform).toBe('');
+
+    fireEvent(zone, new TestPointerEvent('pointerdown', { bubbles: true, button: 0, clientY: 100, pointerId: 2 }));
+    fireEvent(zone, new TestPointerEvent('pointermove', { bubbles: true, clientY: 140, pointerId: 2 }));
+    expect(zone.style.transform).toBe('translateY(40px)');
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+    fireEvent(window, new Event('resize'));
+    expect(zone).toHaveAttribute('data-dragging', 'false');
+    expect(zone.style.transform).toBe('');
+    rerender(<SwipeHarness enabled={false} />);
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: prevWidth });
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      value: prevPointerEvent,
+    });
+  });
 });

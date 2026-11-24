@@ -28,6 +28,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<InternalToastItem[]>([]);
   const timersRef = useRef<Map<string, number>>(new Map());
   const exitTimersRef = useRef<Map<string, number>>(new Map());
+  const consumedActionsRef = useRef<Set<string>>(new Set());
 
   const clearTimer = useCallback((id: string) => {
     const timer = timersRef.current.get(id);
@@ -46,12 +47,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     (id: string) => {
       clearTimer(id);
       if (!canAnimateMotion()) {
+        consumedActionsRef.current.delete(id);
         setToasts((prev) => prev.filter((t) => t.id !== id));
         return;
       }
       setToasts((prev) => prev.map((t) => (t.id === id ? { ...t, closing: true } : t)));
       const exitTimer = window.setTimeout(() => {
         exitTimersRef.current.delete(id);
+        consumedActionsRef.current.delete(id);
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, TOAST_EXIT_MS);
       exitTimersRef.current.set(id, exitTimer);
@@ -67,6 +70,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           const existing = prev.find((item) => item.dedupeKey === toast.dedupeKey);
           if (existing) {
             clearTimer(existing.id);
+            consumedActionsRef.current.delete(existing.id);
             if (durationMs > 0) {
               const timer = window.setTimeout(() => dismissToast(existing.id), durationMs);
               timersRef.current.set(existing.id, timer);
@@ -127,7 +131,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 <button
                   type="button"
                   className="sp-toast-action"
+                  disabled={Boolean(toast.closing)}
                   onClick={() => {
+                    if (toast.closing || consumedActionsRef.current.has(toast.id)) {
+                      return;
+                    }
+                    consumedActionsRef.current.add(toast.id);
                     void toast.onAction?.();
                     dismissToast(toast.id);
                   }}
@@ -139,6 +148,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 type="button"
                 className="sp-toast-close"
                 aria-label="关闭提示"
+                disabled={Boolean(toast.closing)}
                 onClick={() => dismissToast(toast.id)}
               >
                 <X size={16} strokeWidth={2} aria-hidden="true" />

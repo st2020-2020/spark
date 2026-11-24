@@ -68,12 +68,19 @@ export function AppShell({
 
   const {
     isDragging: drawerDragging,
+    settledAfterDrag: drawerSettledAfterDrag,
     swipeStyle: drawerSwipeStyle,
     swipeHandlers: drawerSwipeHandlers,
   } = useSheetSwipeDismiss({
     enabled: drawerOpen && !drawerClosing,
     onDismiss: () => setDrawerOpen(false),
   });
+
+  useEffect(() => {
+    if (drawerPanelRef.current) {
+      drawerPanelRef.current.inert = drawerClosing;
+    }
+  }, [drawerClosing]);
 
   useEffect(() => {
     if (drawerExitTimerRef.current !== null) {
@@ -239,7 +246,13 @@ export function AppShell({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || event.altKey || event.shiftKey) return;
-      if (document.querySelector('[aria-modal="true"], [role="menu"], [role="dialog"]')) return;
+      if (
+        document.querySelector(
+          '[aria-modal="true"], [role="menu"], [role="dialog"], [role="listbox"]',
+        )
+      ) {
+        return;
+      }
       const key = event.key.toLowerCase();
       if (event.metaKey || event.ctrlKey) {
         if (key === 'k') {
@@ -556,17 +569,18 @@ export function AppShell({
           className={`sp-drawer-backdrop ${drawerClosing ? 'is-closing' : ''}`}
           role="presentation"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setDrawerOpen(false);
+            if (!drawerClosing && e.target === e.currentTarget) setDrawerOpen(false);
           }}
         >
           <div
             ref={drawerPanelRef}
             className={`sp-drawer-panel ${drawerClosing ? 'is-closing' : ''} ${
               drawerDragging ? 'is-dragging' : ''
-            }`}
+            } ${drawerSettledAfterDrag ? 'is-swipe-settled' : ''}`}
             style={drawerSwipeStyle}
             role="dialog"
-            aria-modal="true"
+            aria-modal={!drawerClosing ? 'true' : undefined}
+            aria-hidden={drawerClosing ? 'true' : undefined}
             aria-label="导航菜单"
             tabIndex={-1}
           >

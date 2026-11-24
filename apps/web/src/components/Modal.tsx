@@ -21,10 +21,17 @@ export function Modal({
   onCloseRef.current = onClose;
   const exitTimerRef = useRef<number | null>(null);
 
-  const { isDragging, swipeStyle, swipeHandlers } = useSheetSwipeDismiss({
+  const { isDragging, settledAfterDrag, swipeStyle, swipeHandlers } = useSheetSwipeDismiss({
     enabled: open && !closing,
     onDismiss: () => onCloseRef.current(),
   });
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (panel) {
+      panel.inert = closing;
+    }
+  }, [closing]);
 
   useEffect(() => {
     if (exitTimerRef.current !== null) {
@@ -93,15 +100,18 @@ export function Modal({
       className={`sp-modal-backdrop ${closing ? 'is-closing' : ''}`}
       role="presentation"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCloseRef.current();
+        if (!closing && e.target === e.currentTarget) onCloseRef.current();
       }}
     >
       <div
         ref={panelRef}
-        className={`sp-modal ${closing ? 'is-closing' : ''} ${isDragging ? 'is-dragging' : ''}`}
+        className={`sp-modal ${closing ? 'is-closing' : ''} ${
+          isDragging ? 'is-dragging' : ''
+        } ${settledAfterDrag ? 'is-swipe-settled' : ''}`}
         style={swipeStyle}
         role="dialog"
-        aria-modal="true"
+        aria-modal={!closing ? 'true' : undefined}
+        aria-hidden={closing ? 'true' : undefined}
         aria-label={title}
         tabIndex={-1}
       >

@@ -70,6 +70,7 @@ export function AttachmentGallery({
     document.body.style.overflow = 'hidden';
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (closing) return;
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -89,7 +90,13 @@ export function AttachmentGallery({
       document.body.style.overflow = previousOverflow;
       prevFocusedRef.current?.focus?.();
     };
-  }, [activeIndex, sorted.length]);
+  }, [activeIndex, closing, sorted.length]);
+
+  useEffect(() => {
+    if (dialogRef.current) {
+      dialogRef.current.inert = closing;
+    }
+  }, [closing]);
 
   if (sorted.length === 0) return null;
 
@@ -130,14 +137,15 @@ export function AttachmentGallery({
           role="presentation"
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setActiveIndex(null);
+            if (!closing && e.target === e.currentTarget) setActiveIndex(null);
           }}
         >
           <div
             ref={dialogRef}
             className={`sp-lightbox-dialog ${closing ? 'is-closing' : ''}`}
             role="dialog"
-            aria-modal="true"
+            aria-modal={!closing ? 'true' : undefined}
+            aria-hidden={closing ? 'true' : undefined}
             aria-label={`图片预览 ${activeAttachment.filename}`}
             tabIndex={-1}
             onPointerDown={(e) => e.stopPropagation()}

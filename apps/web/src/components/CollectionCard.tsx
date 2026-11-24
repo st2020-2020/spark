@@ -18,8 +18,10 @@ import {
 import type { Attachment, Collection, CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
+import { useAuth } from '../context/AuthContext';
 import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
+import { canAnimateMotion } from '../lib/motion';
 import {
   formatDateTime,
   formatRelativeTime,
@@ -57,6 +59,7 @@ export function CollectionCard({
   timeStyle?: 'relative' | 'clock';
 }) {
   const api = useApi();
+  const { user } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const recordOpened = useRecordOpened();
@@ -64,9 +67,44 @@ export function CollectionCard({
   const queryClient = useQueryClient();
   const { openFollowUp } = useFollowUp();
 
+  const userIdRef = useRef<string | undefined>(user?.id);
+  userIdRef.current = user?.id;
+
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapRef = useRef<HTMLDivElement | null>(null);
   const moreBtnRef = useRef<HTMLButtonElement | null>(null);
+  const wasUnreadRef = useRef(!collection.read_at);
+  const [justRead, setJustRead] = useState(false);
+  const justReadTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const isNowUnread = !collection.read_at;
+    if (wasUnreadRef.current && !isNowUnread && canAnimateMotion()) {
+      setJustRead(true);
+      if (justReadTimerRef.current !== null) {
+        window.clearTimeout(justReadTimerRef.current);
+      }
+      justReadTimerRef.current = window.setTimeout(() => {
+        justReadTimerRef.current = null;
+        setJustRead(false);
+      }, 180);
+    } else if (isNowUnread) {
+      if (justReadTimerRef.current !== null) {
+        window.clearTimeout(justReadTimerRef.current);
+        justReadTimerRef.current = null;
+      }
+      setJustRead(false);
+    }
+    wasUnreadRef.current = isNowUnread;
+  }, [collection.read_at]);
+
+  useEffect(() => {
+    return () => {
+      if (justReadTimerRef.current !== null) {
+        window.clearTimeout(justReadTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -94,73 +132,77 @@ export function CollectionCard({
     };
   }, [menuOpen]);
 
+  type ListRow = CollectionSummary | SearchHit;
+  type InfiniteListCache = {
+    pages: Array<{ items: ListRow[]; next_cursor?: string }>;
+    pageParams: unknown[];
+  };
+
+  const patchTargetReadAt = (
+    targetReadAt: string | undefined,
+    expectedCurrentReadAt?: string | undefined,
+    enforceMatch = false,
+  ) => {
+    const patchList = (old: InfiniteListCache | undefined) => {
+      if (!old || !Array.isArray(old.pages)) return old;
+      let touched = false;
+      const pages = old.pages.map((page) => {
+        if (!Array.isArray(page.items)) return page;
+        let pageTouched = false;
+        const items = page.items.map((row) => {
+          const item = 'collection' in row ? row.collection : row;
+          if (item.id !== collection.id) return row;
+          if (enforceMatch && item.read_at !== expectedCurrentReadAt) return row;
+          pageTouched = true;
+          const updatedItem: CollectionSummary = { ...item, read_at: targetReadAt };
+          return 'collection' in row ? { ...row, collection: updatedItem } : updatedItem;
+        });
+        if (!pageTouched) return page;
+        touched = true;
+        return { ...page, items };
+      });
+      return touched ? { ...old, pages } : old;
+    };
+
+    queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections'] }, patchList);
+    queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['project-collections'] }, patchList);
+    queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections-command'] }, patchList);
+    queryClient.setQueryData<Collection>(['collection', collection.id], (old) => {
+      if (!old) return old;
+      if (enforceMatch && old.read_at !== expectedCurrentReadAt) return old;
+      return { ...old, read_at: targetReadAt };
+    });
+  };
+
   const toggleReadMutation = useMutation({
     mutationFn: () => api.setReadState(collection.id, { read: !collection.read_at }),
     onMutate: async () => {
       setMenuOpen(false);
       await queryClient.cancelQueries({ queryKey: ['collections'] });
       await queryClient.cancelQueries({ queryKey: ['project-collections'] });
+      await queryClient.cancelQueries({ queryKey: ['collections-command'] });
       await queryClient.cancelQueries({ queryKey: ['collection', collection.id] });
 
-      type InfiniteListCache = {
-        pages: Array<{ items: CollectionSummary[]; next_cursor?: string }>;
-        pageParams: unknown[];
-      };
+      const capturedUserId = userIdRef.current;
+      const prevReadAt = collection.read_at;
+      const optimisticReadAt = prevReadAt ? undefined : new Date().toISOString();
+      patchTargetReadAt(optimisticReadAt);
 
-      const prevCollections = queryClient.getQueriesData<InfiniteListCache>({
-        queryKey: ['collections'],
-      });
-      const prevProjectCollections = queryClient.getQueriesData<InfiniteListCache>({
-        queryKey: ['project-collections'],
-      });
-      const prevDetail = queryClient.getQueryData<Collection>(['collection', collection.id]);
-
-      const nextReadAt = collection.read_at ? undefined : new Date().toISOString();
-      const patchList = (old: InfiniteListCache | undefined) => {
-        if (!old || !Array.isArray(old.pages)) return old;
-        let touched = false;
-        const pages = old.pages.map((page) => {
-          if (!Array.isArray(page.items)) return page;
-          let pageTouched = false;
-          const items = page.items.map((item) => {
-            if (item.id !== collection.id) return item;
-            pageTouched = true;
-            return { ...item, read_at: nextReadAt };
-          });
-          if (!pageTouched) return page;
-          touched = true;
-          return { ...page, items };
-        });
-        return touched ? { ...old, pages } : old;
-      };
-
-      queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections'] }, patchList);
-      queryClient.setQueriesData<InfiniteListCache>(
-        { queryKey: ['project-collections'] },
-        patchList,
-      );
-      queryClient.setQueryData<Collection>(['collection', collection.id], (old) =>
-        old ? { ...old, read_at: nextReadAt } : old,
-      );
-
-      return { prevCollections, prevProjectCollections, prevDetail };
+      return { capturedUserId, prevReadAt, optimisticReadAt };
     },
-    onSuccess: (updated) => {
+    onSuccess: (updated, _vars, context) => {
+      if (context?.capturedUserId && userIdRef.current !== context.capturedUserId) return;
+      patchTargetReadAt(updated.read_at);
       queryClient.setQueryData(['collection', collection.id], updated);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
     onError: (err, _vars, context) => {
-      if (context) {
-        for (const [key, data] of context.prevCollections) {
-          queryClient.setQueryData(key, data);
-        }
-        for (const [key, data] of context.prevProjectCollections) {
-          queryClient.setQueryData(key, data);
-        }
-        if (context.prevDetail !== undefined) {
-          queryClient.setQueryData(['collection', collection.id], context.prevDetail);
-        }
+      if (context && (!context.capturedUserId || userIdRef.current === context.capturedUserId)) {
+        patchTargetReadAt(context.prevReadAt, context.optimisticReadAt, true);
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
       }
       pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
     },
@@ -251,9 +293,9 @@ export function CollectionCard({
         )}
         {isUnread ? (
           <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />
-        ) : (
+        ) : justRead ? (
           <span className="sp-unread-dot is-read" aria-hidden="true" />
-        )}
+        ) : null}
 
         {showOrgStatus &&
           (collection.organization_status === 'failed' ||
