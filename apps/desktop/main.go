@@ -105,13 +105,7 @@ func run() error {
 			}
 		})
 	}
-	client.OnUnauthorized = func(token string) error {
-		changed, err := sessions.Expire(token)
-		if changed {
-			host.Change()
-		}
-		return err
-	}
+	client.OnUnauthorized = engine.HandleUnauthorized
 	engine.SetOnChange(host.Change)
 	first, _ := sessions.Load()
 	panel = app.Window.NewWithOptions(application.WebviewWindowOptions{Name: "随手记", Title: "Spark · 随手记", URL: "/?mode=panel", Width: 460, Height: 260, Hidden: first.AccountID != "", Frameless: true, DisableResize: true, BackgroundType: application.BackgroundTypeTransparent,

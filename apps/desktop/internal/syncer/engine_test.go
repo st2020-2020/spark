@@ -235,7 +235,7 @@ func TestOfflineCaptureRestartReconnectSingleCloudRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds := auth.NewMemoryStore()
+	creds := testSessions(t, apiSrv.URL)
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 
@@ -320,7 +320,7 @@ func TestNeverSentPast7DaysAndSentUnknownPast7Days(t *testing.T) {
 	}
 	defer st.Close()
 
-	creds := auth.NewMemoryStore()
+	creds := testSessions(t, apiSrv.URL)
 	t0 := time.Date(2026, 11, 1, 10, 0, 0, 0, time.UTC)
 	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: t0.Add(30 * 24 * time.Hour)})
 
@@ -372,8 +372,8 @@ func Test401StopsQueueAndAccountSwitchDoesNotCrossQueues(t *testing.T) {
 	}
 	defer st.Close()
 
-	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
-	creds := auth.NewMemoryStore()
+	now := time.Now().UTC()
+	creds := testSessions(t, apiSrv.URL)
 	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 
 	itemA1, _ := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", RawText: "A1"}, now)
@@ -381,6 +381,7 @@ func Test401StopsQueueAndAccountSwitchDoesNotCrossQueues(t *testing.T) {
 
 	client, _ := api.NewClient(apiSrv.URL, true)
 	eng := New(st, creds, client)
+	client.OnUnauthorized = eng.HandleUnauthorized
 	eng.SetClock(func() time.Time { return now.Add(2 * time.Second) })
 	eng.SyncOnce(context.Background())
 
@@ -421,7 +422,7 @@ func Test409DuplicateResourcePreservesLocalDraftForReview(t *testing.T) {
 	st, _ := store.Open(dir)
 	defer st.Close()
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
-	creds := auth.NewMemoryStore()
+	creds := testSessions(t, apiSrv.URL)
 	_ = creds.Save(auth.StoredSession{Origin: apiSrv.URL, Token: "tok-A", AccountID: "acc-A", AccountLabel: "a@example.com", ExpiresAt: now.Add(30 * 24 * time.Hour)})
 
 	item, _ := st.EnqueueCapture(store.EnqueueInput{AccountID: "acc-A", RawText: "冲突测试"}, now)
@@ -447,12 +448,14 @@ func TestDeletedReceiptKeepsLocalOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.UpsertCachedCollectionDetail("owner", api.Collection{ID: item.ID, PlainText: "old cloud copy"}); err != nil {
+	read := st.BeginCollectionRead("owner")
+	defer read.Close()
+	if _, err := read.ApplyDetail(api.Collection{ID: item.ID, PlainText: "old cloud copy"}); err != nil {
 		t.Fatal(err)
 	}
-	engine := New(st, auth.NewMemoryStore(), nil)
+	engine := New(st, testSessions(t, "https://example.test"), nil)
 	deleted := now.UTC().Format(time.RFC3339)
-	engine.acceptReceipt("owner", item, api.Collection{ID: item.ID, DeletedAt: &deleted})
+	engine.acceptReceipt(read, item, api.Collection{ID: item.ID, DeletedAt: &deleted})
 	if _, ok, err := st.GetCachedCollectionDetail("owner", item.ID); ok || err != nil {
 		t.Fatal("deleted receipt still cached", err)
 	}
@@ -490,7 +493,7 @@ func TestCancelDuringVerificationResumesWithSameUpload(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
-	creds := auth.NewMemoryStore()
+	creds := testSessions(t, upstream.URL)
 	if err := creds.Save(auth.StoredSession{Token: "tok-A", AccountID: "acc-A", Origin: upstream.URL, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +568,7 @@ func TestCatalogWithoutBookWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	creds := auth.NewMemoryStore()
+	creds := testSessions(t, "https://example.test")
 	client := &catalogBackend{}
 	e := New(st, creds, client)
 	now := time.Now()
@@ -575,7 +578,7 @@ func TestCatalogWithoutBookWindow(t *testing.T) {
 	changed, done := make(chan struct{}, 1), make(chan struct{})
 	e.SetOnChange(func() { changed <- struct{}{} })
 	go func() { defer close(done); e.Run(ctx) }()
-	sess := auth.StoredSession{AccountID: "owner", Token: "session", ExpiresAt: now.Add(time.Hour)}
+	sess := auth.StoredSession{Origin: "https://example.test", AccountID: "owner", Token: "session", ExpiresAt: now.Add(time.Hour)}
 	if err := creds.Save(sess); err != nil {
 		t.Fatal(err)
 	}
@@ -603,4 +606,13 @@ func TestCatalogWithoutBookWindow(t *testing.T) {
 	if err != nil || len(tags) != 1 || tags[0].Name != "速写" {
 		t.Fatal("offline refresh discarded directory", err)
 	}
+}
+
+func testSessions(t *testing.T, origin string) *auth.Sessions {
+	t.Helper()
+	sessions, err := auth.OpenSessions(auth.NewMemoryStore(), origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sessions
 }

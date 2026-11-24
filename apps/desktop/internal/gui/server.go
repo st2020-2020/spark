@@ -186,11 +186,7 @@ func (h *Host) Handler() http.Handler {
 			return nil, problem{401, "会话已到期，请重新登录"}
 		}
 		q := r.URL.Query()
-		p, err := h.API.ListCollections(r.Context(), s, "active", q.Get("project_id"), q.Get("tag_id"), q.Get("cursor"), 40)
-		if err == nil {
-			err = h.Store.UpsertCachedCollections(s.AccountID, p.Items)
-		}
-		return p, err
+		return h.Engine.CollectionPage(r.Context(), s, q.Get("project_id"), q.Get("tag_id"), q.Get("cursor"), 40)
 	})
 	accountRoute("GET /local/collections/{id}", func(s auth.StoredSession, r *http.Request) (any, error) {
 		id := r.PathValue("id")
@@ -378,13 +374,15 @@ func (h *Host) cachedDetail(account, id string) (any, error) {
 }
 
 func (h *Host) remoteDetail(r *http.Request, s auth.StoredSession, id string) (api.Collection, error) {
+	read := h.Store.BeginCollectionRead(s.AccountID)
+	defer read.Close()
 	c, err := h.API.GetCollection(r.Context(), s, id)
 	if err == nil && c.ID != id {
 		return api.Collection{}, problem{502, "收藏回执编号不符"}
 	}
 	ae, apiErr := api.AsAPIError(err)
 	if (apiErr && ae.Status == 404) || (err == nil && c.DeletedAt != nil) {
-		changed, e := h.Store.RemoveCachedCollection(s.AccountID, id)
+		changed, e := read.Delete(id)
 		if e != nil {
 			return api.Collection{}, problem{500, "无法清除已删除收藏的缓存"}
 		}
@@ -396,8 +394,12 @@ func (h *Host) remoteDetail(r *http.Request, s auth.StoredSession, id string) (a
 	if err != nil {
 		return api.Collection{}, err
 	}
-	if err := h.Store.UpsertCachedCollectionDetail(s.AccountID, c); err != nil {
+	accepted, err := read.ApplyDetail(c)
+	if err != nil {
 		return api.Collection{}, problem{500, "无法更新本机收藏缓存"}
+	}
+	if !accepted {
+		return api.Collection{}, problem{404, "收藏状态已更新，请重新打开。"}
 	}
 	return c, nil
 }

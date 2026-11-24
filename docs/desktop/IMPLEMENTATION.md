@@ -256,7 +256,7 @@ pending_local ──(POST /uploads)──▶ grant_issued ──(OSS PUT)──�
 | 服务端响应 | 同步引擎动作 |
 | --- | --- |
 | `201 Created`（含 `Idempotent-Replayed: true`） | 写入 `cached_collections` → 标记 `synced` → 删除 `staging/` 对应原图文件 |
-| `401 desktop_session_expired` | **立即将当前账号全部 `local_saved/syncing` 置为 `auth_paused`**，中止本轮队列 |
+| `401 desktop_session_expired` | 中止本次请求。同一令牌仍属于当前会话且触发失效时，暂停该账号的 `local_saved/syncing`。同账号重新登录后，旧请求迟到的 401 保留新会话与新队列状态。 |
 | `409 operation_in_progress` | 按 `Retry-After`（默认 3s）退避重试 |
 | `409 duplicate_resource` / 墓碑 / `idempotency_mismatch` | 标记 `needs_review`，保留原稿，**严禁换 ID、严禁覆盖、严禁复活** |
 | `400` / `403` / `404` / `413` / `422` | 标记 `needs_review`，展示服务端脱敏说明，停止自动重试 |
@@ -294,7 +294,7 @@ pending_local ──(POST /uploads)──▶ grant_issued ──(OSS PUT)──�
 | `GET projects`、`GET tags` | 读取本机账号目录。登录、启动或呼出浮窗时在后台检查目录，成功后缓存 5 分钟，失败后 15 秒内复用本机结果。手动同步可立即刷新。 |
 | `GET search/local?q=`、`GET search/remote?q=` | 先显示本机结果，云端搜索延迟 180 ms 发出。输入变化取消旧请求，按收藏 ID 去重。 |
 | `GET collections?project_id=`、`GET collections/page` | 前者返回本机摘要数组，后者按项目、标签、cursor 读取在线页，回写本机摘要缓存。 |
-| `GET collections/{id}` | 本机未同步记录返回 `{item}`；在线详情返回 `{collection}`；会话过期、`?local=1` 或可恢复网络错误时读取缓存，并带 `offline:true`。云端明确返回 404 或删除时间时移除该账号对应的云端缓存，保留本机发件箱原稿。 |
+| `GET collections/{id}` | 本机未同步记录返回 `{item}`；在线详情返回 `{collection}`；会话过期、`?local=1` 或可恢复网络错误时读取缓存，并带 `offline:true`。云端明确返回 404 或删除时间时移除该账号对应的云端缓存，保留本机发件箱原稿。删除之前发出的列表及详情请求跳过该条的回写。删除后发起的请求可重新缓存云端已恢复的条目。 |
 | `GET image/{id}` | 云端缩略图经 Go 中转；本机暂存图另传 `?outbox=<收藏ID>`。返回 `{mime,data}`，data 为 Base64。 |
 | `GET clipboard`、`POST clipboard/dismiss` | 当前账号在可见面板查询最近 20 秒的内容，有效建议返回 `{available,change_count,text,image}`。接受、忽略或开始打字时提交 `{change_count}`，仅消隐对应建议。 |
 | `POST clipboard/copy`、`POST clipboard/copy-image?id=` | 分别写入选中文字、收藏的第一张原图。文字写入成功返回 204，系统拒绝写入时返回 503。 |

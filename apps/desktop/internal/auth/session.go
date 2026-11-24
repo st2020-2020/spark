@@ -36,6 +36,15 @@ func (s *Sessions) Load() (StoredSession, error) {
 	}
 	return s.current, nil
 }
+
+// WithCurrent keeps a local queue update ordered with session replacement.
+// The callback must not call back into Sessions or perform network I/O.
+func (s *Sessions) WithCurrent(update func(StoredSession) error) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return update(s.current)
+}
+
 func (s *Sessions) Save(next StoredSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

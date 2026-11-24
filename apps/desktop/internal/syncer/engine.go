@@ -38,7 +38,7 @@ type BackendClient interface {
 // Engine drives account-isolated outbox syncing and cache refreshing.
 type Engine struct {
 	store  *store.Store
-	creds  auth.CredentialStore
+	creds  *auth.Sessions
 	client BackendClient
 	nowFn  func() time.Time
 
@@ -51,7 +51,7 @@ type Engine struct {
 	catalogNext  time.Time
 }
 
-func New(st *store.Store, creds auth.CredentialStore, client BackendClient) *Engine {
+func New(st *store.Store, creds *auth.Sessions, client BackendClient) *Engine {
 	return &Engine{
 		store:     st,
 		creds:     creds,
@@ -91,6 +91,32 @@ func (e *Engine) notifyChange() {
 	if cb != nil {
 		cb()
 	}
+}
+
+// HandleUnauthorized handles a 401 from any authenticated API request.
+func (e *Engine) HandleUnauthorized(token string) error {
+	changed, err := e.creds.Expire(token)
+	if !changed || err != nil {
+		return err
+	}
+	// Expire and the SQLite update can straddle a new login. Verify ownership
+	// while holding the session read lock through the queue update.
+	_, err = e.pauseExpired(token, time.Now())
+	e.notifyChange()
+	return err
+}
+
+func (e *Engine) pauseExpired(token string, now time.Time) (bool, error) {
+	var changed bool
+	err := e.creds.WithCurrent(func(current auth.StoredSession) error {
+		if current.Token != token || !current.Public(now).Expired {
+			return nil
+		}
+		var err error
+		changed, err = e.store.PauseAccountQueueOn401(current.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录后再同步。", now)
+		return err
+	})
+	return changed, err
 }
 
 // Trigger wakes the background sync loop immediately.
@@ -137,12 +163,19 @@ func (e *Engine) Run(ctx context.Context) {
 	e.RequestCatalog()
 	var lastToken string
 	for {
-		// A renewed token must resume only its own account, after any previous
-		// in-flight request has finished pausing the old device's queue.
-		if s, err := e.creds.Load(); err == nil && s.Token != lastToken && s.Public(e.now()).Connected {
-			if err = e.store.ResumeAuthPaused(s.AccountID, e.now()); err == nil {
-				lastToken = s.Token
+		now := e.now()
+		err := e.creds.WithCurrent(func(s auth.StoredSession) error {
+			if s.Token == lastToken || !s.Public(now).Connected {
+				return nil
 			}
+			if err := e.store.ResumeAuthPaused(s.AccountID, now); err != nil {
+				return err
+			}
+			lastToken = s.Token
+			return nil
+		})
+		if err != nil {
+			slog.Warn("无法恢复当前账号的发件箱", "error", err)
 		}
 		e.SyncOnce(ctx)
 		select {
@@ -166,7 +199,10 @@ func (e *Engine) SyncOnce(ctx context.Context) {
 	}
 	now := e.now()
 	if !sess.ExpiresAt.IsZero() && !sess.ExpiresAt.After(now) {
-		changed, _ := e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已到期，请重新登录后再同步。", now)
+		changed, err := e.pauseExpired(sess.Token, now)
+		if err != nil {
+			slog.Warn("无法暂停已到期账号的发件箱", "error", err)
+		}
 		if changed {
 			e.notifyChange()
 		}
@@ -209,21 +245,21 @@ func (e *Engine) RefreshRemoteCache(ctx context.Context) error {
 		return &api.APIError{Status: http.StatusUnauthorized, Code: "desktop_session_expired", Message: "桌面会话已到期，请重新登录。"}
 	}
 
-	if page, err := e.client.ListCollections(ctx, sess, "active", "", "", "", 50); err != nil {
-		if isUnauthorized(err) {
-			changed, _ := e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
-			if changed {
-				e.notifyChange()
-			}
-		}
+	if _, err := e.CollectionPage(ctx, sess, "", "", "", 50); err != nil {
 		return err
-	} else {
-		if err := e.store.UpsertCachedCollections(sess.AccountID, page.Items); err != nil {
-			return err
-		}
 	}
-
 	return e.refreshCatalog(ctx, sess, true)
+}
+
+// CollectionPage applies the same deletion ordering to foreground and background reads.
+func (e *Engine) CollectionPage(ctx context.Context, sess auth.StoredSession, projectID, tagID, cursor string, limit int) (api.CollectionPage, error) {
+	read := e.store.BeginCollectionRead(sess.AccountID)
+	defer read.Close()
+	page, err := e.client.ListCollections(ctx, sess, "active", projectID, tagID, cursor, limit)
+	if err == nil {
+		page.Items, err = read.ApplyPage(page.Items)
+	}
+	return page, err
 }
 
 func (e *Engine) refreshCatalog(ctx context.Context, sess auth.StoredSession, force bool) error {
@@ -347,19 +383,20 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 	// - Previously-sent items (item.EverSent) whose FirstSentAt is >= 7 days ago MUST verify by GET /collections/{id} first;
 	//   never automatically swap UUID, overwrite, or resurrect.
 	if item.EverSent && !item.FirstSentAt.IsZero() && e.now().Sub(item.FirstSentAt) >= IdempotencyWindow {
+		read := e.store.BeginCollectionRead(sess.AccountID)
+		defer read.Close()
 		col, err := e.client.GetCollection(ctx, sess, item.ID)
 		if err == nil {
-			e.acceptReceipt(sess.AccountID, item, col)
+			e.acceptReceipt(read, item, col)
 			return false
 		}
 		if isUnauthorized(err) {
-			_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", e.now())
 			return true
 		}
 		if ae, ok := api.AsAPIError(err); ok {
 			if ae.Status == http.StatusNotFound || ae.Status == http.StatusConflict || ae.Status == http.StatusForbidden {
 				if ae.Status == http.StatusNotFound {
-					if _, err := e.store.RemoveCachedCollection(sess.AccountID, item.ID); err != nil {
+					if _, err := read.Delete(item.ID); err != nil {
 						_ = e.store.MarkOutboxRetry(sess.AccountID, item.ID, "local_db_error", "无法更新本机缓存，稍后重新核对。", e.now().Add(backoffDuration(item.AttemptCount)), e.now())
 						return false
 					}
@@ -384,14 +421,15 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 		return false
 	}
 
+	read := e.store.BeginCollectionRead(sess.AccountID)
+	defer read.Close()
 	col, _, err := e.client.CreateCollectionRaw(ctx, sess, item.IdempotencyKey, []byte(item.FrozenRequestJSON))
 	if err == nil {
-		e.acceptReceipt(sess.AccountID, item, col)
+		e.acceptReceipt(read, item, col)
 		return false
 	}
 
 	if isUnauthorized(err) {
-		_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，已暂停上传，请重新登录。", e.now())
 		return true
 	}
 
@@ -433,24 +471,23 @@ func (e *Engine) processItem(ctx context.Context, sess auth.StoredSession, item 
 }
 
 // Keep the original and its staged files until the matching live receipt has been cached.
-func (e *Engine) acceptReceipt(account string, item store.OutboxItem, col api.Collection) {
+func (e *Engine) acceptReceipt(read *store.CollectionRead, item store.OutboxItem, col api.Collection) {
 	now := e.now()
-	if col.ID == item.ID && col.DeletedAt != nil {
-		if _, err := e.store.RemoveCachedCollection(account, item.ID); err != nil {
-			_ = e.store.MarkOutboxRetry(account, item.ID, "local_db_error", "无法更新本机缓存，稍后重新核对。", now.Add(backoffDuration(item.AttemptCount)), now)
-			return
-		}
-	}
-	if col.ID != item.ID || col.DeletedAt != nil {
-		_ = e.store.MarkOutboxNeedsReview(account, item.ID, "receipt_mismatch", "云端记录已删除或回执编号不符，原稿留在本机供核对。", now)
+	if col.ID != item.ID {
+		_ = e.store.MarkOutboxNeedsReview(item.AccountID, item.ID, "receipt_mismatch", "云端回执编号不符，原稿留在本机供核对。", now)
 		return
 	}
-	if err := e.store.UpsertCachedCollectionDetail(account, col); err == nil {
-		if err = e.store.MarkOutboxSynced(account, item.ID, now); err == nil {
-			return
-		}
+	live, err := read.ApplyDetail(col)
+	if err == nil && !live {
+		_ = e.store.MarkOutboxNeedsReview(item.AccountID, item.ID, "receipt_mismatch", "云端记录已删除，原稿留在本机供核对。", now)
+		return
 	}
-	_ = e.store.MarkOutboxRetry(account, item.ID, "local_db_error", "云端已收下，正在重新保存本机回执。", now.Add(backoffDuration(item.AttemptCount)), now)
+	if err == nil {
+		err = e.store.MarkOutboxSynced(item.AccountID, item.ID, now)
+	}
+	if err != nil {
+		_ = e.store.MarkOutboxRetry(item.AccountID, item.ID, "local_db_error", "正在重新保存本机回执。", now.Add(backoffDuration(item.AttemptCount)), now)
+	}
 }
 
 func (e *Engine) ensureAttachmentReady(
@@ -473,7 +510,6 @@ func (e *Engine) ensureAttachmentReady(
 		up, err := e.client.GetUpload(ctx, sess, att.UploadID)
 		if err != nil {
 			if isUnauthorized(err) {
-				_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 				return "", true, 0, nil
 			}
 			if isTransientError(err) {
@@ -535,7 +571,6 @@ func (e *Engine) ensureAttachmentReady(
 			})
 			if err != nil {
 				if isUnauthorized(err) {
-					_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 					return "", true, 0, nil
 				}
 				if ae, ok := api.AsAPIError(err); ok {
@@ -607,7 +642,6 @@ func (e *Engine) ensureAttachmentReady(
 		up, err := e.client.CompleteUpload(ctx, sess, att.UploadID)
 		if err != nil {
 			if isUnauthorized(err) {
-				_, _ = e.store.PauseAccountQueueOn401(sess.AccountID, "desktop_session_expired", "桌面会话已失效，请重新登录。", now)
 				return "", true, 0, nil
 			}
 			if ae, ok := api.AsAPIError(err); ok && ae.Status == http.StatusConflict && ae.Code == "upload_not_pending" {
@@ -627,6 +661,9 @@ func (e *Engine) ensureAttachmentReady(
 		_ = e.store.UpdateAttachmentStage(sess.AccountID, att.ID, store.StageVerifying, up.ExpiresAt, "")
 		// Poll once right away in case verification completed synchronously in fast/synthetic backends.
 		checked, err := e.client.GetUpload(ctx, sess, att.UploadID)
+		if isUnauthorized(err) {
+			return "", true, 0, nil
+		}
 		if err == nil && (checked.Status == "ready" || checked.Status == "attached") {
 			_ = e.store.UpdateAttachmentStage(sess.AccountID, att.ID, store.StageReady, checked.ExpiresAt, "")
 			return checked.ID, false, 0, nil

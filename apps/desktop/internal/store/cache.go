@@ -10,8 +10,100 @@ import (
 	"spark/apps/desktop/internal/api"
 )
 
-// UpsertCachedCollections stores remote CollectionSummary items for accountID.
-func (s *Store) UpsertCachedCollections(accountID string, items []api.CollectionSummary) error {
+// CollectionRead tracks a remote response from before the HTTP request until
+// its cache transaction finishes. No HTTP call holds the store mutex.
+type CollectionRead struct {
+	store   *Store
+	account string
+	seq     uint64
+	deleted map[string]uint64
+}
+
+func (s *Store) BeginCollectionRead(account string) *CollectionRead {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	s.cacheSequence++
+	r := &CollectionRead{store: s, account: account, seq: s.cacheSequence}
+	s.activeReads[r] = struct{}{}
+	return r
+}
+
+func (r *CollectionRead) Close() {
+	r.store.cacheMu.Lock()
+	defer r.store.cacheMu.Unlock()
+	delete(r.store.activeReads, r)
+}
+
+// Only requests already in flight need the deletion fence. A later read can
+// see a restored collection immediately, even while an older read is pending.
+func (r *CollectionRead) recordDeletion(id string) {
+	s := r.store
+	s.cacheSequence++
+	for pending := range s.activeReads {
+		if pending.account != r.account {
+			continue
+		}
+		if pending.deleted == nil {
+			pending.deleted = make(map[string]uint64)
+		}
+		pending.deleted[id] = s.cacheSequence
+	}
+}
+
+func (r *CollectionRead) ApplyPage(items []api.CollectionSummary) ([]api.CollectionSummary, error) {
+	r.store.cacheMu.Lock()
+	defer r.store.cacheMu.Unlock()
+	accepted := make([]api.CollectionSummary, 0, len(items))
+	for _, item := range items {
+		if r.seq >= r.deleted[item.ID] {
+			accepted = append(accepted, item)
+		}
+	}
+	if err := r.store.upsertCachedCollections(r.account, accepted); err != nil {
+		return nil, err
+	}
+	visible := accepted[:0]
+	for _, item := range accepted {
+		if item.DeletedAt != nil {
+			r.recordDeletion(item.ID)
+		} else {
+			visible = append(visible, item)
+		}
+	}
+	return visible, nil
+}
+
+func (r *CollectionRead) ApplyDetail(c api.Collection) (bool, error) {
+	if c.DeletedAt != nil {
+		_, err := r.Delete(c.ID)
+		return false, err
+	}
+	r.store.cacheMu.Lock()
+	defer r.store.cacheMu.Unlock()
+	if r.seq < r.deleted[c.ID] {
+		return false, nil
+	}
+	err := r.store.upsertCachedCollectionDetail(r.account, c)
+	return err == nil, err
+}
+
+func (r *CollectionRead) Delete(id string) (bool, error) {
+	r.store.cacheMu.Lock()
+	defer r.store.cacheMu.Unlock()
+	if r.seq < r.deleted[id] {
+		return false, nil
+	}
+	result, err := r.store.db.Exec("DELETE FROM cached_collections WHERE account_id=? AND id=?", r.account, id)
+	if err != nil {
+		return false, err
+	}
+	r.recordDeletion(id)
+	n, err := result.RowsAffected()
+	return n > 0, err
+}
+
+// upsertCachedCollections stores remote CollectionSummary items for accountID.
+func (s *Store) upsertCachedCollections(accountID string, items []api.CollectionSummary) error {
 	if accountID == "" || len(items) == 0 {
 		return nil
 	}
@@ -69,14 +161,10 @@ func (s *Store) UpsertCachedCollections(accountID string, items []api.Collection
 	return tx.Commit()
 }
 
-// UpsertCachedCollectionDetail caches a full Collection detail and updates its summary projection.
-func (s *Store) UpsertCachedCollectionDetail(accountID string, c api.Collection) error {
+// upsertCachedCollectionDetail caches a full Collection detail and updates its summary projection.
+func (s *Store) upsertCachedCollectionDetail(accountID string, c api.Collection) error {
 	if accountID == "" || c.ID == "" {
 		return nil
-	}
-	if c.DeletedAt != nil {
-		_, err := s.RemoveCachedCollection(accountID, c.ID)
-		return err
 	}
 	if c.Document != nil {
 		c.PlainText = c.Document.PlainText()
@@ -144,15 +232,6 @@ func (s *Store) UpsertCachedCollectionDetail(accountID string, c api.Collection)
 		accountID, c.ID, c.DisplayTitle, c.PlainText, c.Intent, c.OriginalURL,
 		c.PrimaryType, readAt, c.CreatedAt, c.UpdatedAt, searchable, string(sumJSON), string(detJSON))
 	return err
-}
-
-func (s *Store) RemoveCachedCollection(accountID, id string) (bool, error) {
-	result, err := s.db.Exec("DELETE FROM cached_collections WHERE account_id=? AND id=?", accountID, id)
-	if err != nil {
-		return false, err
-	}
-	n, err := result.RowsAffected()
-	return n > 0, err
 }
 
 func (s *Store) ListCachedCollections(accountID string, projectID string, limit int) ([]api.CollectionSummary, error) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	_ "modernc.org/sqlite"
 )
@@ -15,6 +16,10 @@ type Store struct {
 	db         *sql.DB
 	dataDir    string
 	stagingDir string
+
+	cacheMu       sync.Mutex
+	cacheSequence uint64
+	activeReads   map[*CollectionRead]struct{}
 }
 
 // Open initializes spark-desktop.sqlite inside dataDir and prepares the staging directory.
@@ -44,9 +49,10 @@ func Open(dataDir string) (*Store, error) {
 	}
 
 	return &Store{
-		db:         conn,
-		dataDir:    absDir,
-		stagingDir: stagingDir,
+		db:          conn,
+		activeReads: make(map[*CollectionRead]struct{}),
+		dataDir:     absDir,
+		stagingDir:  stagingDir,
 	}, nil
 }
 

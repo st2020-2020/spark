@@ -94,14 +94,16 @@ func TestCachedBodyIsSearchableBeyondRecentSummaries(t *testing.T) {
 	defer st.Close()
 	doc := api.BuildDocument("first paragraph\nneedle near the end")
 	note := api.Collection{ID: "older", UpdatedAt: "2026-11-01", Document: &doc, Projects: []api.ProjectAssociation{{ProjectID: "sketch", ProjectName: "速写", Decision: "manual"}}}
-	if err := st.UpsertCachedCollectionDetail("a", note); err != nil {
+	read := st.BeginCollectionRead("a")
+	defer read.Close()
+	if _, err := read.ApplyDetail(note); err != nil {
 		t.Fatal(err)
 	}
 	summaries := []api.CollectionSummary{{ID: note.ID, UpdatedAt: note.UpdatedAt, PlainText: "first paragraph", Projects: note.Projects}}
 	for i := range 501 {
 		summaries = append(summaries, api.CollectionSummary{ID: strconv.Itoa(i), CreatedAt: "2026-11-02"})
 	}
-	if err := st.UpsertCachedCollections("a", summaries); err != nil {
+	if _, err := read.ApplyPage(summaries); err != nil {
 		t.Fatal(err)
 	}
 	hits, err := st.SearchLocal("a", "needle end", 5)
