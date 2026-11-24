@@ -24,6 +24,7 @@
 | 设计 | [design/ORGANIZATION.md](design/ORGANIZATION.md) | 自动整理：提取、模型输出、项目匹配、重试 | 现行 |
 | 设计 | [design/WEB.md](design/WEB.md) | Web 页面、状态与交互行为 | 现行 |
 | 设计 | [design/WEB-VISUAL.md](design/WEB-VISUAL.md) | Web 视觉与交互规范（令牌、布局、组件） | 现行 |
+| 设计 | [design/MOBILE.md](design/MOBILE.md) | 移动端（Android & iOS）架构、桥接协议、原生收集与工程设计 | 设计评审 |
 | 设计 | [design/DELIVERY.md](design/DELIVERY.md) | 交付、验收用例与部署恢复 | 现行 |
 | 契约 | [contracts/](../contracts/) | `openapi.json` 接口字段；`document.schema.json` 正文结构；`organization-result.schema.json` 模型输出 | 现行 |
 | 桌面版 | [desktop/](desktop/README.md) | MyGo 桌面版的运行、设计与交互 | 现行 |
