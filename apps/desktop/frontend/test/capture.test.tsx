@@ -95,7 +95,10 @@ it('从手帐入口就地续写，切页保留草稿，组合输入不会提前�
   fireEvent.click(screen.getByRole('button', { name: /随手记 ⌃⌥␣/ }));
   expect(document.activeElement).toBe(editor);
   fireEvent.click(screen.getByRole('button', { name: '全部收藏' }));
+  fireEvent.click(screen.getByRole('button', { name: '自定义置顶标签' }));
+  expect(screen.getByRole('dialog')).toBeTruthy();
   fireEvent(window, new Event('spark-compose'));
+  expect(screen.queryByRole('dialog')).toBeNull();
   expect(document.activeElement).toBe(editor);
   fireEvent.keyDown(editor, { key: 'Enter', metaKey: true, isComposing: true });
   expect(req.mock.calls.some(([p]) => p === 'capture')).toBe(false);
@@ -619,20 +622,20 @@ it('常用项目可即时筛选置顶，重开、换账号及切换服务各自�
   fireEvent.click(group().getByRole('button', { name: '自定义常用项目' }));
   const popup = within(screen.getByRole('dialog', { name: '自定义常用项目' }));
   expect(popup.queryByText('已归档计划')).toBeNull();
-  const search = popup.getByRole('textbox', { name: '筛选项目' });
+  const search = popup.getByRole('combobox', { name: '筛选项目' });
   expect(document.activeElement).toBe(search);
   fireEvent.change(search, { target: { value: '未找到' } });
   expect(popup.getByRole('status').textContent).toBe('没有匹配的项目');
   fireEvent.change(search, { target: { value: '计划0' } });
   expect(popup.queryByText('计划6')).toBeNull();
-  const pin = popup.getByRole('button', { name: '计划0' });
+  const pin = popup.getByRole('option', { name: '计划0' });
   fireEvent.click(pin);
-  expect(pin.getAttribute('aria-pressed')).toBe('true');
+  expect(pin.getAttribute('aria-selected')).toBe('true');
   fireEvent.click(popup.getByRole('button', { name: '关闭自定义' }));
   expect(document.activeElement).toBe(
     group().getByRole('button', { name: '自定义常用项目' }),
   );
-  expect(group().getByText('计划0')).toBeTruthy();
+  expect(group().getAllByRole('button', { name: /计划\d/ })).toHaveLength(6);
   view.rerender(book('https://notes.example.test', 'b'));
   await group().findByText('计划6');
   expect(group().queryByText('计划0')).toBeNull();
@@ -678,7 +681,7 @@ it('置顶标签默认按频率取五个，可展开导航、取消全部、持�
   await screen.findByRole('heading', { name: '标签0' });
   fireEvent.click(group().getByRole('button', { name: '收起' }));
   fireEvent.click(group().getByRole('button', { name: '自定义置顶标签' }));
-  for (const btn of dialog().getAllByRole('button', { pressed: true }))
+  for (const btn of dialog().getAllByRole('option', { selected: true }))
     fireEvent.click(btn);
   fireEvent.click(dialog().getByRole('button', { name: '关闭自定义' }));
   expect(group().getByText('尚未置顶标签')).toBeTruthy();
@@ -687,7 +690,7 @@ it('置顶标签默认按频率取五个，可展开导航、取消全部、持�
   await group().findByText('尚未置顶标签');
   fireEvent.click(group().getByRole('button', { name: '自定义置顶标签' }));
   fireEvent.click(dialog().getByRole('button', { name: '恢复自动推荐' }));
-  expect(dialog().getAllByRole('button', { pressed: true })).toHaveLength(5);
+  expect(dialog().getAllByRole('option', { selected: true })).toHaveLength(5);
   fireEvent(
     screen.getByRole('dialog'),
     new Event('cancel', { cancelable: true }),
@@ -717,7 +720,9 @@ it('收藏卡片按项目、标签、域名顺序显示上限与额外数量', a
   const req: Request = async (path) =>
     path.startsWith('collections/page')
       ? ({ items: [item] } as never)
-      : ([] as never);
+      : path === 'collections/n'
+        ? ({ collection: item } as never)
+        : ([] as never);
   const journal = (counts: State['counts']) => (
     <Book state={{ ...state, counts }} req={req} refresh={() => {}} />
   );
@@ -726,6 +731,20 @@ it('收藏卡片按项目、标签、域名顺序显示上限与额外数量', a
   expect(card.textContent).toBe(
     '整理清单项目0项目1+2#标签0#标签1#标签2+3studio.example.test',
   );
+  expect(
+    within(card).getByRole('img', { name: '另有 2 个项目：项目2、项目3' }),
+  ).toBeTruthy();
+  expect(
+    within(card).getByRole('img', {
+      name: '另有 3 个标签：#标签3、#标签4、#标签5',
+    }),
+  ).toBeTruthy();
+  fireEvent.click(card);
+  const preview = within(await screen.findByRole('article'));
+  expect(preview.getByText('项目 · 项目0、项目1、项目2、项目3')).toBeTruthy();
+  expect(
+    preview.getByText('标签 · #标签0、#标签1、#标签2、#标签3、#标签4、#标签5'),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: '快搜 ⌘K' }));
   expect(document.activeElement).toBe(
     screen.getByRole('textbox', { name: '搜索手帐' }),
@@ -737,4 +756,57 @@ it('收藏卡片按项目、标签、域名顺序显示上限与额外数量', a
   expect(screen.getByRole('button', { name: /本机发件箱/ }).textContent).toBe(
     '本机发件箱3',
   );
+});
+
+it('筛选框和选项支持方向键与回车，输入法确认不改变置顶', async () => {
+  const req: Request = async (path) =>
+    (path === 'projects'
+      ? [
+          { id: 'a', name: '速写本' },
+          { id: 'b', name: '速写纸' },
+        ]
+      : path.startsWith('collections/page')
+        ? { items: [] }
+        : []) as never;
+  render(<Book req={req} state={state} refresh={() => {}} />);
+  await screen.findByRole('button', { name: '速写本' });
+  fireEvent.click(screen.getByRole('button', { name: '自定义常用项目' }));
+  const input = screen.getByRole('combobox');
+  fireEvent.change(input, { target: { value: '速写' } });
+  const [first, second] = screen.getAllByRole('option');
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(input.getAttribute('aria-activedescendant')).toBe(first.id);
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  expect(input.getAttribute('aria-activedescendant')).toBe(second.id);
+  fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+  expect(second.getAttribute('aria-selected')).toBe('true');
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(second.getAttribute('aria-selected')).toBe('false');
+  fireEvent.keyDown(second, { key: 'ArrowUp' });
+  expect(input.getAttribute('aria-activedescendant')).toBe(first.id);
+  fireEvent.change(input, { target: { value: '无' } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(input.hasAttribute('aria-activedescendant')).toBe(false);
+});
+
+it.each([
+  ['Option+Space', '⌥␣'],
+  ['Control+Option+Space', '⌃⌥␣'],
+  ['Command+Shift+Space', '⌘⇧␣'],
+])('窄侧栏收起 %s 提示并保留完整标题', async (keys, label) => {
+  render(
+    <Book
+      req={host() as Request}
+      state={{ ...state, capture_key: keys }}
+      refresh={() => {}}
+    />,
+  );
+  await screen.findByRole('button', { name: '记下第一条灵感' });
+  const grip = screen.getByRole('separator', { name: '调整侧栏宽度' });
+  for (let i = 0; i < 4; i++) fireEvent.keyDown(grip, { key: 'ArrowLeft' });
+  const compose = screen.getByRole('button', { name: '随手记' });
+  expect(compose.title).toContain(label);
+  expect(grip.getAttribute('aria-valuenow')).toBe('200');
+  for (let i = 0; i < 4; i++) fireEvent.keyDown(grip, { key: 'ArrowRight' });
+  expect(screen.getByRole('button', { name: '随手记 ' + label })).toBe(compose);
 });

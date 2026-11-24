@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { BookOpen, Check, Copy, Link2, RotateCw } from 'lucide-react';
 import {
+  active,
   bridge,
   message,
   type State,
@@ -338,6 +339,8 @@ export function Preview({
   if (!d) return <p role="status">正在读取…</p>;
   const item = d.item,
     col = d.collection;
+  const projects = col?.projects?.filter((p) => p.name && active(p.decision));
+  const tags = col?.tags?.filter((t) => t.path && active(t.decision));
   const { url, body } = detailText(d);
   return (
     <article className="detail">
@@ -360,6 +363,16 @@ export function Preview({
       ))}
       {(item?.intent || col?.intent) && (
         <p>用途 · {item?.intent || col?.intent}</p>
+      )}
+      {!!projects?.length && (
+        <p className="detail-memberships">
+          项目 · {projects.map((p) => p.name).join('、')}
+        </p>
+      )}
+      {!!tags?.length && (
+        <p className="detail-memberships">
+          标签 · {tags.map((t) => '#' + t.path).join('、')}
+        </p>
       )}
       {col?.organization?.summary && (
         <p>整理摘要 · {col.organization.summary}</p>

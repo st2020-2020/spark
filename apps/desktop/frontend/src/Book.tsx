@@ -48,6 +48,14 @@ function EntryCard({
   const projects =
     entry.projects?.filter((p) => p.name && active(p.decision)) ?? [];
   const tags = entry.tags?.filter((t) => t.path && active(t.decision)) ?? [];
+  const extraProjects = projects
+    .slice(2)
+    .map((p) => p.name)
+    .join('、');
+  const extraTags = tags
+    .slice(3)
+    .map((t) => '#' + t.path)
+    .join('、');
   const domain = extractDomain(entry.original_url);
   return (
     <button className="card" onClick={onOpen}>
@@ -71,10 +79,11 @@ function EntryCard({
           {projects.length > 2 && (
             <small
               className="meta-more"
-              title={projects
-                .slice(2)
-                .map((p) => p.name)
-                .join('、')}
+              role="img"
+              aria-label={
+                '另有 ' + (projects.length - 2) + ' 个项目：' + extraProjects
+              }
+              title={extraProjects}
             >
               +{projects.length - 2}
             </small>
@@ -87,10 +96,9 @@ function EntryCard({
           {tags.length > 3 && (
             <small
               className="meta-more"
-              title={tags
-                .slice(3)
-                .map((t) => t.path)
-                .join('、')}
+              role="img"
+              aria-label={'另有 ' + (tags.length - 3) + ' 个标签：' + extraTags}
+              title={extraTags}
             >
               +{tags.length - 3}
             </small>
@@ -160,6 +168,7 @@ function Journal({
     [syncing, setSyncing] = useState(false),
     [working, work] = useState(false);
   const editor = useRef<HTMLTextAreaElement>(null);
+  const [pinDialog, setPinDialog] = useState<'projects' | 'tags' | null>(null);
   const [focusRequest, requestFocus] = useState(0);
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -225,6 +234,7 @@ function Journal({
     bad('');
   }
   function compose() {
+    setPinDialog(null);
     nav('inbox');
     requestFocus((v) => v + 1);
   }
@@ -450,7 +460,10 @@ function Journal({
                   onClick={compose}
                 >
                   <NotebookPen />
-                  随手记 <kbd>{formatShortcut(state.capture_key)}</kbd>
+                  随手记{' '}
+                  <kbd aria-hidden={width <= 230 || undefined}>
+                    {formatShortcut(state.capture_key)}
+                  </kbd>
                 </button>
                 <button
                   className="sidebar-search"
@@ -489,6 +502,8 @@ function Journal({
             <nav className="sidebar-space" aria-label="我的空间">
               <SidebarGroup
                 kind="projects"
+                customizing={pinDialog === 'projects'}
+                customize={(open) => setPinDialog(open ? 'projects' : null)}
                 scope={scope}
                 choices={projects}
                 selected={pid}
@@ -496,6 +511,8 @@ function Journal({
               />
               <SidebarGroup
                 kind="tags"
+                customizing={pinDialog === 'tags'}
+                customize={(open) => setPinDialog(open ? 'tags' : null)}
                 scope={scope}
                 choices={tags}
                 selected={tid}

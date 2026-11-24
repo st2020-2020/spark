@@ -453,6 +453,9 @@ mark {
 .detail p {
   color: var(--sp-fg-soft);
 }
+.detail-memberships {
+  overflow-wrap: anywhere;
+}
 .login-form {
   margin: 0 auto;
   width: min(100%, 420px);
@@ -619,6 +622,11 @@ h2 {
   text-align: center;
 }
 @media (prefers-reduced-motion: no-preference) {
+  .compose kbd {
+    transition:
+      opacity var(--sp-dur-fast, 160ms),
+      max-width var(--sp-dur-fast, 160ms);
+  }
   .searchbox {
     transition: flex-basis var(--sp-dur-fast, 160ms)
       var(--sp-ease-out, cubic-bezier(0.22, 1, 0.36, 1));
@@ -684,6 +692,14 @@ h2 {
   font-size: var(--sp-text-xs);
   color: inherit;
   opacity: 0.8;
+  overflow: hidden;
+  max-width: 5em;
+}
+.compose kbd[aria-hidden='true'] {
+  opacity: 0;
+  max-width: 0;
+  padding: 0;
+  border: 0;
 }
 .sidebar-search {
   gap: 3px;
@@ -859,7 +875,12 @@ h2 {
   width: 14px;
   color: var(--sp-muted);
 }
-.pins-options button[aria-pressed='true'] svg {
+.pins-options button.highlighted {
+  background: var(--sp-surface-muted);
+  outline: 1px solid var(--sp-focus-ring);
+  outline-offset: -1px;
+}
+.pins-options button[aria-selected='true'] svg {
   color: var(--sp-primary);
   fill: var(--sp-accent);
 }

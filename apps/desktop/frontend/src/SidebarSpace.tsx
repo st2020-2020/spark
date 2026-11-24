@@ -1,4 +1,11 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useId,
+  type KeyboardEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { ChevronDown, Pin, Search, X } from 'lucide-react';
 import type { Choice } from './bridge';
 import { Tool } from './shared';
@@ -33,12 +40,16 @@ export function SidebarGroup({
   scope,
   choices,
   selected,
+  customizing,
+  customize,
   onNavigate,
 }: {
   kind: 'projects' | 'tags';
   scope: string | null;
   choices: Choice[];
   selected: string;
+  customizing: boolean;
+  customize: (open: boolean) => void;
   onNavigate: (id: string) => void;
 }) {
   const projects = kind === 'projects';
@@ -46,7 +57,8 @@ export function SidebarGroup({
   const noun = projects ? '项目' : '标签';
   const key = scope && 'spark.desktop.sidebar.' + kind + '.' + scope;
   const [pins, setPins] = useState(() => readPins(key));
-  const [customizing, customize] = useState(false);
+  const listId = useId();
+  const [highlight, setHighlight] = useState<string>();
   const [expanded, expand] = useState(false);
   const [query, filter] = useState('');
   const [storageError, setStorageError] = useState(false);
@@ -79,7 +91,7 @@ export function SidebarGroup({
   const pickedIds = new Set(picked.map((c) => c.id));
   const shown = expanded
     ? [...picked, ...catalog.filter((c) => !pickedIds.has(c.id))]
-    : picked.slice(0, limit);
+    : picked;
   const term = query.trim().toLocaleLowerCase();
   const filtered =
     !customizing || !term
@@ -97,6 +109,36 @@ export function SidebarGroup({
     } catch {
       setStorageError(true);
     }
+  }
+  function toggle(id: string) {
+    const ids = picked.map((item) => item.id);
+    save(pickedIds.has(id) ? ids.filter((p) => p !== id) : [id, ...ids]);
+  }
+  const activeIndex = filtered.findIndex((choice) => choice.id === highlight);
+  function move(e: KeyboardEvent) {
+    if (e.nativeEvent.isComposing || e.keyCode === 229 || !filtered.length)
+      return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const choice = filtered[activeIndex < 0 ? 0 : activeIndex];
+      setHighlight(choice.id);
+      toggle(choice.id);
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const last = filtered.length - 1;
+    const index =
+      e.key === 'ArrowDown'
+        ? Math.min(activeIndex + 1, last)
+        : activeIndex < 0
+          ? last
+          : Math.max(0, activeIndex - 1);
+    setHighlight(filtered[index].id);
+    input.current?.focus();
+    document
+      .getElementById(listId + '-' + index)
+      ?.scrollIntoView({ block: 'nearest' });
   }
   useLayoutEffect(() => {
     if (!customizing || !dialog.current || !trigger.current) return;
@@ -122,6 +164,7 @@ export function SidebarGroup({
           aria-expanded={customizing}
           onClick={() => {
             filter('');
+            setHighlight(undefined);
             customize(true);
           }}
         >
@@ -155,7 +198,7 @@ export function SidebarGroup({
           {catalog.length ? '尚未置顶' + noun : '暂无' + noun}
         </small>
       )}
-      {catalog.length > Math.min(picked.length, limit) && (
+      {catalog.length > picked.length && (
         <button
           className="space-more"
           aria-expanded={expanded}
@@ -195,26 +238,46 @@ export function SidebarGroup({
           <label className="pins-filter">
             <Search />
             <input
+              role="combobox"
+              aria-expanded="true"
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={
+                activeIndex < 0 ? undefined : listId + '-' + activeIndex
+              }
+              onKeyDown={move}
               ref={input}
               aria-label={'筛选' + noun}
               placeholder={'筛选' + noun}
               value={query}
-              onChange={(e) => filter(e.target.value)}
+              onChange={(e) => {
+                filter(e.target.value);
+                setHighlight(undefined);
+              }}
             />
           </label>
-          <div className="pins-options">
-            {filtered.map((c) => (
+          <div
+            className="pins-options"
+            role="listbox"
+            aria-label={title}
+            aria-multiselectable="true"
+            id={listId}
+            onKeyDown={move}
+          >
+            {filtered.map((c, index) => (
               <button
                 key={c.id}
+                id={listId + '-' + index}
                 type="button"
-                aria-pressed={pickedIds.has(c.id)}
+                role="option"
+                tabIndex={-1}
+                aria-selected={pickedIds.has(c.id)}
+                className={activeIndex === index ? 'highlighted' : undefined}
+                onFocus={() => setHighlight(c.id)}
                 onClick={() => {
-                  const ids = picked.map((item) => item.id);
-                  save(
-                    pickedIds.has(c.id)
-                      ? ids.filter((id) => id !== c.id)
-                      : [c.id, ...ids],
-                  );
+                  setHighlight(c.id);
+                  toggle(c.id);
+                  input.current?.focus();
                 }}
               >
                 {projects && (
