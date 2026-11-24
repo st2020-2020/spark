@@ -1,0 +1,6 @@
+<resources>
+    <color name="spark_window_background">#0f1715</color>
+    <color name="spark_window_primary">#6fd1b2</color>
+    <bool name="spark_light_system_bars">false</bool>
+    <style name="Theme.Spark.Base" parent="android:style/Theme.Material.NoActionBar" />
+</resources>

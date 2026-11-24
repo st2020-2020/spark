@@ -110,6 +110,7 @@ describe('Spark Web key flows', () => {
   });
 
   it.each([
+    ['Android WebView SparkMobile/1', true],
     ['Android WebView SparkAndroid/2', true],
     ['Android WebView SparkAndroid/20', false],
     ['Android Chrome Mobile', false],
@@ -126,7 +127,36 @@ describe('Spark Web key flows', () => {
       await user.click(drawer.getByRole('link', { name: '待归类' }));
       await screen.findByRole('heading', { name: '待归类' });
       expect(screen.getByRole('button', { name: '更多导航' })).toHaveAttribute('aria-current', 'location');
+      if (ua.endsWith(' SparkMobile/1')) {
+        const pageNavigation = within(screen.getByRole('navigation', { name: '页内导航' }));
+        expect(pageNavigation.getByRole('link', { name: '返回收件箱' })).toHaveAttribute('href', '/inbox');
+        expect(screen.getByRole('main').closest('.sp-app-root')).not.toHaveClass('sp-app-root--android-subpage');
+      }
     } finally {
+      agent.mockRestore();
+    }
+  });
+
+  it('opens native drafts and signals the confirmed login and logout to SparkMobile', async () => {
+    const agent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('Android WebView SparkMobile/1');
+    const postMessage = vi.fn();
+    vi.stubGlobal('sparkMobileHost', { postMessage });
+    const sent = () => postMessage.mock.calls.map(([text]) => JSON.parse(text));
+    try {
+      const user = userEvent.setup();
+      await loginAsAdmin(user);
+      expect(sent()).toContainEqual({ version: 1, action: 'authStateChanged', payload: { authenticated: true } });
+      await user.click(screen.getByRole('button', { name: '更多导航' }));
+      const drawer = within(screen.getByRole('dialog', { name: '导航菜单' }));
+      expect(fireEvent.click(drawer.getByRole('link', { name: '本机草稿' }))).toBe(false);
+      expect(sent()).toContainEqual({ version: 1, action: 'openLocalDrafts', payload: {} });
+
+      await user.click(screen.getByRole('button', { name: '账号菜单' }));
+      await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
+      await screen.findByRole('button', { name: '登录' });
+      expect(sent()).toContainEqual({ version: 1, action: 'authStateChanged', payload: { authenticated: false } });
+    } finally {
+      vi.unstubAllGlobals();
       agent.mockRestore();
     }
   });

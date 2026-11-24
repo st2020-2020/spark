@@ -1,3 +1,5 @@
+import { notifyMobileAppearance, notifyMobileAuthChanged } from './mobileBridge';
+
 // Appearance = color palette × light/dark mode, from the account when signed in, otherwise from this browser.
 // The CSS side lives in styles/tokens.css and keys off <html data-palette> and <html data-mode>.
 
@@ -62,20 +64,34 @@ function resolveMode(pref: ThemePref): 'light' | 'dark' {
 /** Writes the resolved attributes to <html> and keeps the browser chrome color in step. */
 let accountAppearance: { palette: PaletteId; theme: ThemePref } | null = null;
 
+let previouslyAuthenticated = false;
+
 export function showAccountAppearance(value: typeof accountAppearance) {
   accountAppearance = value;
   syncDocument();
+  // AuthProvider briefly clears the appearance during effect cleanup and replaces it
+  // in the same turn when the account updates or React replays an effect.
+  if (value) previouslyAuthenticated = true;
+  else if (previouslyAuthenticated) queueMicrotask(() => {
+    if (!accountAppearance && previouslyAuthenticated) {
+      previouslyAuthenticated = false;
+      notifyMobileAuthChanged(false);
+    }
+  });
 }
 
 function syncDocument(): void {
   const root = document.documentElement;
-  root.setAttribute('data-palette', accountAppearance?.palette ?? readPalette());
-  root.setAttribute('data-mode', resolveMode(accountAppearance?.theme ?? readThemePref()));
+  const palette = accountAppearance?.palette ?? readPalette();
+  const mode = resolveMode(accountAppearance?.theme ?? readThemePref());
+  root.setAttribute('data-palette', palette);
+  root.setAttribute('data-mode', mode);
 
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (meta) {
-    const bg = getComputedStyle(root).getPropertyValue('--sp-bg').trim();
-    if (bg) meta.content = bg;
+  const bg = getComputedStyle(root).getPropertyValue('--sp-bg').trim();
+  if (bg) {
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (meta) meta.content = bg;
+    notifyMobileAppearance(palette, mode, bg);
   }
 }
 

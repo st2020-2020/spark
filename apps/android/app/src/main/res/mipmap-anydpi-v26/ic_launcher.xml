@@ -1,0 +1,5 @@
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/spark_launcher_background" />
+    <foreground android:drawable="@drawable/ic_jar" />
+    <monochrome android:drawable="@drawable/ic_jar_monochrome" />
+</adaptive-icon>

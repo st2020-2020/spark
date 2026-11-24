@@ -1,0 +1,35 @@
+<resources>
+    <color name="spark_launcher_background">#2a8369</color>
+    <color name="spark_window_background">#f2f8f6</color>
+    <color name="spark_window_primary">#2a8369</color>
+    <color name="spark_navigation_bar_background">#2c3e38</color>
+    <bool name="spark_light_system_bars">true</bool>
+    <item name="ic_launcher_round" type="mipmap">@mipmap/ic_launcher</item>
+    <string name="drafts_shortcut_label">本机草稿</string>
+
+    <style name="Theme.Spark.Base" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Spark" parent="Theme.Spark.Base">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:colorAccent">@color/spark_window_primary</item>
+        <item name="android:windowBackground">@color/spark_window_background</item>
+        <item name="android:statusBarColor">@color/spark_window_background</item>
+        <item name="android:navigationBarColor">@color/spark_navigation_bar_background</item>
+        <item name="android:windowLightStatusBar">@bool/spark_light_system_bars</item>
+        <item name="android:windowLightNavigationBar">@bool/spark_light_system_bars</item>
+    </style>
+    <style name="Theme.Spark.Starting" parent="Theme.SplashScreen.IconBackground">
+        <item name="windowSplashScreenBackground">@color/spark_window_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_jar</item>
+        <item name="windowSplashScreenIconBackgroundColor">@color/spark_launcher_background</item>
+        <item name="postSplashScreenTheme">@style/Theme.Spark</item>
+    </style>
+    <style name="Theme.Spark.TranslucentSheet" parent="Theme.Spark">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

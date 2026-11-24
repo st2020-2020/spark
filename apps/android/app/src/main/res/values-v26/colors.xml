@@ -1,0 +1,3 @@
+<resources>
+    <color name="spark_navigation_bar_background">@color/spark_window_background</color>
+</resources>

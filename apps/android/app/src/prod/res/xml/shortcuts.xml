@@ -1,0 +1,8 @@
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="local_drafts" android:icon="@mipmap/ic_launcher"
+        android:shortcutShortLabel="@string/drafts_shortcut_label">
+        <intent android:action="cloud.stwqy.spark.OPEN_LOCAL_DRAFTS"
+            android:targetPackage="cloud.stwqy.spark"
+            android:targetClass="cloud.stwqy.spark.feature.drafts.DraftsShortcutActivity" />
+    </shortcut>
+</shortcuts>

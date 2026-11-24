@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Collection } from '../api/types';
-import { ApiProvider } from '../context/ApiContext';
+import { useAuth } from '../context/AuthContext';
 import { AppProviders, AppRoutes } from '../App';
 import { createTestAdapter } from '../test-adapter/mockServer';
 import { shareText } from '../lib/shareCard';
@@ -18,6 +18,17 @@ async function setup(path: string, prepare?: (api: ReturnType<typeof createTestA
   await prepare?.(api);
   render(<MemoryRouter initialEntries={[path]}><AppProviders api={api}><AppRoutes /></AppProviders></MemoryRouter>);
   return api;
+}
+
+function SignedInShareCard({ collection }: { collection: Collection }) {
+  const { user } = useAuth();
+  return user ? <ShareCard collection={collection} onClose={() => {}} /> : null;
+}
+
+async function renderShareCard(collection: Collection, api = createTestAdapter()) {
+  const { user } = await api.login({ email: 'admin@spark.local', password: 'SparkAdmin1234!' });
+  const rendered = render(<AppProviders api={api}><SignedInShareCard collection={collection} /></AppProviders>);
+  return { ...rendered, user };
 }
 
 function paste(node: HTMLElement, text: string) {
@@ -199,7 +210,7 @@ describe('capture and recall', () => {
       attachments: [{ id: 'b', position: 1, filename: 'private-b' }, { id: 'a', position: 0, filename: 'private-a' }],
     } as unknown as Collection;
     try {
-      render(<ApiProvider api={api}><ShareCard collection={c} onClose={() => {}} /></ApiProvider>);
+      await renderShareCard(c, api);
       await screen.findByRole('alert');
       expect(screen.queryByRole('link', { name: '下载 PNG' })).toBeNull();
       expect(renderCard).not.toHaveBeenCalled();
@@ -213,7 +224,7 @@ describe('capture and recall', () => {
       expect(screen.queryByText(/private-/)).toBeNull();
       cleanup();
       thumbnail.mockRejectedValueOnce(new Error('offline'));
-      render(<ApiProvider api={api}><ShareCard collection={c} onClose={() => {}} /></ApiProvider>);
+      await renderShareCard(c, api);
       await userEvent.click(await screen.findByRole('button', { name: '仅文字' }));
       await screen.findByRole('link', { name: '下载 PNG' });
       expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), []);
@@ -221,6 +232,62 @@ describe('capture and recall', () => {
       cleanup();
       thumbnail.mockRestore(); decode.mockRestore(); renderCard.mockRestore();
       URL.createObjectURL = url; URL.revokeObjectURL = revoke;
+    }
+  });
+
+  it('sends PNG bytes to SparkMobile and keeps the preview after native share cancellation', async () => {
+    const agent = vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue('Android WebView SparkMobile/1');
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const renderCard = vi.spyOn(card, 'renderShareCard').mockResolvedValue(new Blob([bytes], { type: 'image/png' }));
+    const host = Object.assign(new EventTarget(), { postMessage: vi.fn<(message: string) => void>() });
+    vi.stubGlobal('sparkMobileHost', host);
+    const url = URL.createObjectURL;
+    const revoke = URL.revokeObjectURL;
+    URL.createObjectURL = () => 'blob:native-card';
+    URL.revokeObjectURL = vi.fn();
+    function reply(requestId: string, result: object) {
+      host.dispatchEvent(new MessageEvent('message', { data: JSON.stringify({ version: 1, request_id: requestId, ...result }) }));
+    }
+    try {
+      const { user, unmount } = await renderShareCard({
+        document: EMPTY_DOCUMENT, created_at: '2026-11-22', projects: [], attachments: [],
+      } as unknown as Collection);
+      const fileMessages = () => host.postMessage.mock.calls.map(([text]) => JSON.parse(text))
+        .filter(message => ['saveImage', 'shareImage', 'cancelFileAction'].includes(message.action));
+      const save = await screen.findByRole('button', { name: '下载 PNG' });
+      const share = screen.getByRole('button', { name: '系统分享' });
+      fireEvent.click(save);
+      expect(share).toBeDisabled();
+      await waitFor(() => expect(fileMessages()).toHaveLength(1));
+      const [savedRequest] = fileMessages();
+      expect(savedRequest).toMatchObject({ version: 1, action: 'saveImage', payload: {
+        mime: 'image/png', filename: 'Spark-收藏.png', base64: 'iVBORw0KGgo=', expected_user_id: user.id,
+      } });
+      act(() => reply(savedRequest.request_id, { ok: true, data: { filename: 'Spark-收藏.png', destination: 'gallery' } }));
+      expect(await screen.findByRole('status')).toHaveTextContent('已保存到系统相册');
+
+      fireEvent.click(share);
+      await waitFor(() => expect(fileMessages()).toHaveLength(2));
+      const [, shareRequest] = fileMessages();
+      expect(shareRequest).toMatchObject({ action: 'shareImage', payload: savedRequest.payload });
+      act(() => reply(shareRequest.request_id, { ok: false, error: { code: 'cancelled', message: '已取消。' } }));
+      await waitFor(() => expect(save).toBeEnabled());
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.getByRole('img', { name: '待导出的分享卡片' })).toBeVisible();
+      fireEvent.click(share);
+      await waitFor(() => expect(fileMessages()).toHaveLength(3));
+      const [, , abandoned] = fileMessages();
+      unmount();
+      expect(fileMessages()[3]).toEqual({
+        version: 1, action: 'cancelFileAction', payload: { request_id: abandoned.request_id },
+      });
+    } finally {
+      cleanup();
+      vi.unstubAllGlobals();
+      agent.mockRestore();
+      renderCard.mockRestore();
+      URL.createObjectURL = url;
+      URL.revokeObjectURL = revoke;
     }
   });
 
@@ -236,10 +303,10 @@ describe('capture and recall', () => {
     URL.createObjectURL = () => 'blob:local-card';
     URL.revokeObjectURL = vi.fn();
     try {
-      const { unmount } = render(<ShareCard onClose={() => {}} collection={{
+      const { unmount } = await renderShareCard({
         document: { ...EMPTY_DOCUMENT, content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '手稿' }] }] } },
         created_at: '2026-11-21', projects: [], attachments: [],
-      } as unknown as Collection} />);
+      } as unknown as Collection);
       await userEvent.click(await screen.findByRole('button', { name: '系统分享' }));
       expect(share).toHaveBeenCalledOnce();
       expect(screen.queryByRole('alert')).toBeNull();

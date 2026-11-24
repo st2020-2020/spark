@@ -61,6 +61,34 @@ jobs:
           npm test
           npm run build
 
+  android:
+    name: Android
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            apps/android/**/*.gradle.kts
+            apps/android/gradle/libs.versions.toml
+            apps/android/gradle/wrapper/gradle-wrapper.properties
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          # sdkmanager closes stdin after accepting the licenses. Ignore only yes's SIGPIPE.
+          sdkmanager --licenses < <(yes) > /dev/null
+          sdkmanager 'platforms;android-35' 'build-tools;34.0.0'
+      - run: ./gradlew :app:testProdDebugUnitTest :app:assembleProdDebug :app:assembleDevDebug :app:assembleProdRelease
+
   backend:
     name: API and PostgreSQL
     runs-on: ubuntu-latest

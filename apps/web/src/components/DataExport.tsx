@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Download } from 'lucide-react';
-import { ApiError } from '../api/errors';
+import { ApiError, isApiErrorCode } from '../api/errors';
+import { requestMobileExportData, supportsMobileFiles } from '../lib/mobileBridge';
 import { useApi } from '../context/ApiContext';
+import { useAuth } from '../context/AuthContext';
 import type { ExportFormat } from '../api/types';
 import { ErrorBanner } from './StateBlocks';
 
@@ -9,10 +11,12 @@ type DownloadFile = { href: string; name: string };
 
 export function DataExport() {
   const api = useApi();
+  const { user } = useAuth();
   const [format, setFormat] = useState<ExportFormat>('markdown');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [retryAt, setRetryAt] = useState<number | null>(null);
+  const [saved, setSaved] = useState('');
   const [file, setFile] = useState<DownloadFile | null>(null);
   const request = useRef<AbortController | null>(null);
   const objectUrl = useRef<string | null>(null);
@@ -32,6 +36,7 @@ export function DataExport() {
     if (objectUrl.current) URL.revokeObjectURL(objectUrl.current);
     objectUrl.current = null;
     setFile(null);
+    setSaved('');
   }
 
   async function download() {
@@ -42,6 +47,14 @@ export function DataExport() {
     setError(null);
     setPending(true);
     try {
+      if (supportsMobileFiles()) {
+        if (!user) throw new Error('请重新登录 Spark 后再导出。');
+        const receipt = await requestMobileExportData(format, user.id, controller.signal);
+        if (!controller.signal.aborted) {
+          setSaved(receipt.destination === 'documents' ? '已保存到所选位置。' : '已保存到系统下载目录。');
+        }
+        return;
+      }
       const { blob, filename: name } = await api.exportMyData(format, controller.signal);
       if (controller.signal.aborted) return;
       const href = URL.createObjectURL(blob);
@@ -54,7 +67,7 @@ export function DataExport() {
       link.click();
       link.remove();
     } catch (cause) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || isApiErrorCode(cause, 'cancelled')) return;
       if (cause instanceof ApiError) {
         const seconds = Number(cause.retryAfter);
         if (cause.status === 429 && Number.isInteger(seconds) && seconds > 0 && seconds <= 600) {
@@ -93,6 +106,7 @@ export function DataExport() {
         {retryAt !== null && <p className="sp-help" role="status">
           可在 {new Date(retryAt).toLocaleTimeString('zh-CN', { hour12: false })} 再次导出。
         </p>}
+        {saved && <p className="sp-help" role="status">{saved}</p>}
         {file && <p className="sp-help" role="status">文件已准备好。<a href={file.href} download={file.name}>再次下载此文件</a></p>}
         {error && <ErrorBanner error={error} />}
       </div>

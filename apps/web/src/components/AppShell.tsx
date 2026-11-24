@@ -29,6 +29,13 @@ import {
   SHEET_EXIT_MS,
   useSheetSwipeDismiss,
 } from '../lib/motion';
+import {
+  canOpenMobileDrafts,
+  hasLocalDraftsEntry,
+  isMobileHost,
+  notifyMobileAuthChanged,
+  openMobileLocalDrafts,
+} from '../lib/mobileBridge';
 import { projectToneClass } from '../lib/projectTone';
 import { formatShortcut, isTouchDevice } from '../lib/shortcuts';
 import { BrandLink, SparkGlyph } from './Brand';
@@ -133,6 +140,10 @@ export function AppShell({
     anyProjectsQuery.data.items.length === 0;
 
   useEffect(() => {
+    notifyMobileAuthChanged(Boolean(user?.id));
+  }, [user?.id]);
+
+  useEffect(() => {
     setDrawerOpen(false);
     setAccountMenuOpen(false);
     setCaptureOpen(false);
@@ -219,7 +230,10 @@ export function AppShell({
   const sidebarProjects = activeItems.slice(0, 5);
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
   const isInbox = location.pathname === '/inbox';
-  const androidWorkspace = navigator.userAgent.split(/\s+/).includes('SparkAndroid/2');
+  const mobileWorkspace = isMobileHost();
+  const localDraftsEntry = hasLocalDraftsEntry();
+  const nativeDrafts = canOpenMobileDrafts();
+  const hideSubpageTopbar = !isInbox && (nativeDrafts || (!mobileWorkspace && localDraftsEntry));
   const inMoreSection = !['inbox', 'projects', 'collections'].includes(location.pathname.split('/')[1]);
   const badgeText = formatBadgeCount(pendingSuggestionsCount);
 
@@ -315,10 +329,12 @@ export function AppShell({
               </li>
             );
           })}
-          {androidWorkspace && (
+          {localDraftsEntry && (
             <li className="sp-nav-item">
-              {/* A document navigation deliberately reaches the Android WebViewClient. */}
-              <a href="/android/local-drafts" className="sp-nav-link" onClick={() => setDrawerOpen(false)}>
+              <a href="/android/local-drafts" className="sp-nav-link" onClick={(event) => {
+                if (nativeDrafts && openMobileLocalDrafts()) event.preventDefault();
+                setDrawerOpen(false);
+              }}>
                 <Smartphone size={17} strokeWidth={2} aria-hidden="true" />
                 <span>本机草稿</span>
               </a>
@@ -390,7 +406,7 @@ export function AppShell({
   );
 
   return (
-    <div className={`sp-app-root${androidWorkspace && !isInbox ? ' sp-app-root--android-subpage' : ''}`}>
+    <div className={`sp-app-root${hideSubpageTopbar ? ' sp-app-root--android-subpage' : ''}`}>
       {api.isTestAdapter && (
         <div className="sp-adapter-banner" role="status">
           <span>测试适配器模式（仅本地内存模拟，非真实后端；邮件 / 模型未连接真实服务）</span>
@@ -517,6 +533,11 @@ export function AppShell({
         </aside>
 
         <main key={location.pathname} className="sp-main-column sp-page-stage">
+          {mobileWorkspace && !isInbox && (
+            <nav className="sp-row" aria-label="页内导航">
+              <Link className="sp-btn--quiet" to="/inbox">返回收件箱</Link>
+            </nav>
+          )}
           {children}
         </main>
       </div>
