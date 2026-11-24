@@ -122,8 +122,9 @@ describe('Desktop pairing (/desktop/pair) and Settings macOS device management',
     expect(within(extRow!).getByText('浏览器扩展')).toBeInTheDocument();
     expect(screen.getByText('当前设备')).toBeInTheDocument();
 
-    // Revoking macOS desktop session removes only the desktop device, preserving extension & web sessions
+    // Revoking macOS desktop session requires two-step confirmation and removes only the desktop device
     await user.click(within(desktopRow!).getByRole('button', { name: '撤销' }));
+    await user.click(within(desktopRow!).getByRole('button', { name: '确认撤销' }));
     await waitFor(() => {
       expect(screen.queryByText('Spark macOS 桌面端')).not.toBeInTheDocument();
     });

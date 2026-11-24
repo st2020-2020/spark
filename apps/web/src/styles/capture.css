@@ -13,13 +13,52 @@
 }
 .sp-mention p { color: var(--sp-muted); font-size: var(--sp-text-sm); padding-inline: 8px; }
 .sp-mention [role="option"], .sp-command-list [role="option"] {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   width: 100%;
   text-align: start;
   padding: 8px 12px;
   overflow-wrap: anywhere;
   border-radius: var(--sp-radius-xs);
   color: var(--sp-fg);
+  transition: background-color var(--sp-dur-instant) var(--sp-ease-out),
+    color var(--sp-dur-instant) var(--sp-ease-out);
+}
+.sp-command-row-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.sp-command-row-icon {
+  flex-shrink: 0;
+  color: var(--sp-muted);
+}
+.sp-command-list [aria-selected="true"] .sp-command-row-icon,
+.sp-command-list [role="option"]:hover .sp-command-row-icon {
+  color: var(--sp-accent-fg);
+}
+.sp-command-row-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+}
+.sp-command-row-meta {
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
+  flex-shrink: 0;
+}
+.sp-command-list [aria-selected="true"] .sp-command-row-meta,
+.sp-command-list [role="option"]:hover .sp-command-row-meta {
+  color: color-mix(in srgb, var(--sp-accent-fg) 80%, transparent);
+}
+.sp-command-row-check {
+  flex-shrink: 0;
+  color: var(--sp-primary);
 }
 .sp-mention [aria-selected="true"], .sp-command-list [aria-selected="true"],
 .sp-mention [role="option"]:hover, .sp-command-list [role="option"]:hover { background: var(--sp-accent); color: var(--sp-accent-fg); }

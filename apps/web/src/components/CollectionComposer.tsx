@@ -2,7 +2,7 @@ import { MoreProjectChoices, useProjectChoices } from './ProjectChoices';
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowUp, Check, Folder, ImagePlus, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
+import { ArrowUp, Check, Folder, ImagePlus, Link2, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
 import type { SparkDocument } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { useApi } from '../context/ApiContext';
@@ -23,12 +23,14 @@ import {
   useBeforeUnloadWarning,
   type CollectionDraft,
 } from '../lib/drafts';
+import { extractDomain } from '../lib/format';
 import {
   followUpDraftScope,
   selectInitialFollowUpProjects,
   type FollowUpSource,
 } from '../lib/followUp';
 import { generateIdempotencyKey, generateUuid } from '../lib/idempotency';
+import { shortcutHintText } from '../lib/shortcuts';
 import { MAX_ATTACHMENTS_PER_COLLECTION, useImageUploader } from '../lib/uploads';
 import { AIConsentModal } from './AIConsentModal';
 import { projectToneClass } from '../lib/projectTone';
@@ -138,6 +140,7 @@ export function CollectionComposer({
   const [showIntentField, setShowIntentField] = useState(Boolean(initialDraft.intent));
   const [showUrlField, setShowUrlField] = useState(Boolean(initialDraft.originalUrl));
   const [showTitleField, setShowTitleField] = useState(Boolean(initialDraft.manualTitle));
+  const [dismissedInferredUrl, setDismissedInferredUrl] = useState<string | null>(null);
 
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [projectSearch, setProjectSearch] = useState('');
@@ -261,6 +264,7 @@ export function CollectionComposer({
     [plainText, intent],
   );
   const inferredUrl = useMemo(() => extractFirstHttpUrl(documentValue), [documentValue]);
+  const inferredDomain = useMemo(() => extractDomain(inferredUrl ?? undefined), [inferredUrl]);
 
   const hasContent =
     plainText.trim().length > 0 ||
@@ -345,6 +349,7 @@ export function CollectionComposer({
     setProjectPickerOpen(false);
     setProjectSearch('');
     setSubmitError(null);
+    setDismissedInferredUrl(null);
     uploader.clearAll();
     removeDraft(userId, draftScope);
     setResetToken((n) => n + 1);
@@ -494,6 +499,33 @@ export function CollectionComposer({
     }
   };
 
+  const handleKeyDownCapture = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (
+      variant !== "card" ||
+      event.key !== "Escape" ||
+      event.nativeEvent.isComposing ||
+      event.keyCode === 229 ||
+      event.defaultPrevented ||
+      projectPickerOpen ||
+      isDirty ||
+      showIntentField ||
+      showUrlField ||
+      showTitleField ||
+      Boolean(submitError)
+    ) {
+      return;
+    }
+    if (document.querySelector("[role=\"menu\"], [role=\"listbox\"], [aria-modal=\"true\"]")) {
+      return;
+    }
+    pendingCollapseAfterSaveRef.current = false;
+    setIsActivated(false);
+    const activeEl = document.activeElement;
+    if (activeEl instanceof HTMLElement && composerRef.current?.contains(activeEl)) {
+      activeEl.blur();
+    }
+  };
+
   const effectiveActivated =
     isActivated ||
     hasContent ||
@@ -511,7 +543,7 @@ export function CollectionComposer({
     uploader.hasInFlight ||
     uploader.hasFailed ||
     totalChars > MAX_TEXT_AND_INTENT_CHARS;
-  const showCharCounter = totalChars > 0;
+  const showCharCounter = totalChars >= 300;
   const isNearLimit = totalChars > MAX_TEXT_AND_INTENT_CHARS - 5000;
 
   return (
@@ -537,7 +569,7 @@ export function CollectionComposer({
         </div>
       )}
 
-      <div ref={composerRef} onBlurCapture={handleBlurCapture}>
+      <div ref={composerRef} onBlurCapture={handleBlurCapture} onKeyDownCapture={handleKeyDownCapture}>
       <RichTextEditor
         suggestions={editor => <MentionPicker editor={editor} onBusy={setCreatingTag} onChoose={choice => {
           setNames(old => ({ ...old, [choice.id]: choice.name }));
@@ -676,6 +708,31 @@ export function CollectionComposer({
         betweenEditorAndToolbar={
           <>
             {hasLocalFiles && <p className="sp-help">上传完成前离开，未就绪的图片需要重新选择。</p>}
+            {inferredUrl && !originalUrl.trim() && dismissedInferredUrl !== inferredUrl && (
+              <div className="sp-composer-url-pill" role="status" aria-label="已从正文识别网址">
+                <Link2 size={13} strokeWidth={2} aria-hidden="true" />
+                <span className="sp-truncate">识别到网址：{inferredDomain ?? inferredUrl}</span>
+                <button
+                  type="button"
+                  className="sp-btn--quiet sp-btn--sm"
+                  onClick={() => {
+                    activateComposer();
+                    setOriginalUrl(inferredUrl);
+                    setShowUrlField(true);
+                  }}
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  className="sp-chip-remove"
+                  aria-label="收起网址识别提示"
+                  onClick={() => setDismissedInferredUrl(inferredUrl)}
+                >
+                  <X size={12} strokeWidth={2.4} aria-hidden="true" />
+                </button>
+              </div>
+            )}
             <UploadQueueTray
               pendingItems={uploader.items}
               validationError={uploader.validationError}
@@ -904,7 +961,7 @@ export function CollectionComposer({
               className={`sp-send-btn ${saveMutation.isPending ? 'sp-send-btn--pending' : ''}`}
               aria-label={saveMutation.isPending ? '正在保存收藏' : '保存收藏'}
               aria-busy={saveMutation.isPending}
-              data-tooltip="保存收藏 (⌘/Ctrl+Enter)"
+              data-tooltip={shortcutHintText("保存收藏", "Enter")}
               data-tooltip-placement="right"
               disabled={saveDisabled}
               onClick={handleSubmit}
@@ -922,20 +979,22 @@ export function CollectionComposer({
 
       {showAiEntry && user && aiPlatformEnabled && aiTrialEligible && (
         user.ai_enabled ? (
-          <div
-            className="sp-composer-ai-bar sp-composer-ai-bar--active"
-            role="status"
-            aria-label="AI 自动整理状态"
-          >
-            <div className="sp-composer-ai-status">
-              <span className="sp-ai-status-dot" aria-hidden="true" />
-              <Sparkles size={13} strokeWidth={2} aria-hidden="true" />
-              <span>{aiExcluded ? 'AI 已开启（本条暂不参与）' : 'AI 自动整理已开启'}</span>
+          aiExcluded ? (
+            <div
+              className="sp-composer-ai-bar sp-composer-ai-bar--active"
+              role="status"
+              aria-label="AI 自动整理状态"
+            >
+              <div className="sp-composer-ai-status">
+                <span className="sp-ai-status-dot" aria-hidden="true" />
+                <Sparkles size={13} strokeWidth={2} aria-hidden="true" />
+                <span>AI 已开启（本条暂不参与）</span>
+              </div>
+              <Link to="/settings" className="sp-composer-ai-link">
+                设置
+              </Link>
             </div>
-            <Link to="/settings" className="sp-composer-ai-link">
-              设置
-            </Link>
-          </div>
+          ) : null
         ) : (
           <div
             className="sp-composer-ai-bar sp-composer-ai-bar--invite"

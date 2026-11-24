@@ -68,8 +68,11 @@ button {
   background: none;
   border-radius: var(--sp-radius-control);
   touch-action: manipulation;
-  transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease,
-    box-shadow 140ms ease, transform 120ms ease;
+  transition: background-color var(--sp-dur-fast) var(--sp-ease-out),
+    color var(--sp-dur-fast) var(--sp-ease-out),
+    border-color var(--sp-dur-fast) var(--sp-ease-out),
+    box-shadow var(--sp-dur-fast) var(--sp-ease-out),
+    transform var(--sp-dur-instant) var(--sp-ease-out);
 }
 
 button:disabled {
@@ -98,7 +101,8 @@ button:disabled {
   /* Keep the drifting sparks visible at rest instead of ending on their faded keyframe. */
   .sp-art-drift,
   .sp-art-glow,
-  .sp-note--fresh {
+  .sp-note--fresh,
+  .sp-page-stage {
     animation: none !important;
   }
 }
@@ -145,6 +149,15 @@ button:disabled {
   }
 }
 
+@keyframes sp-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
 @keyframes sp-pop-in {
   from {
     opacity: 0;
@@ -153,6 +166,17 @@ button:disabled {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sp-pop-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
   }
 }
 
@@ -165,6 +189,15 @@ button:disabled {
   }
 }
 
+@keyframes sp-sheet-down {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
 @keyframes sp-drawer-in {
   from {
     transform: translateX(-100%);
@@ -172,6 +205,52 @@ button:disabled {
   to {
     transform: translateX(0);
   }
+}
+
+@keyframes sp-drawer-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes sp-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes sp-toast-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+  }
+}
+
+@keyframes sp-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sp-page-stage {
+  animation: sp-page-enter var(--sp-dur-fast) var(--sp-ease-out);
 }
 
 @keyframes sp-spin {
@@ -804,7 +883,12 @@ button:disabled {
   z-index: 60;
   background: var(--sp-scrim);
   display: flex;
-  animation: sp-fade-in 180ms ease;
+  animation: sp-fade-in var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-drawer-backdrop.is-closing {
+  animation: sp-fade-out var(--sp-dur-fast) var(--sp-ease-exit) forwards;
+  pointer-events: none;
 }
 
 .sp-drawer-panel {
@@ -818,7 +902,17 @@ button:disabled {
   overflow-y: auto;
   overscroll-behavior: contain;
   box-shadow: var(--sp-shadow-modal);
-  animation: sp-drawer-in 260ms var(--sp-ease-sheet);
+  animation: sp-drawer-in var(--sp-dur-sheet) var(--sp-ease-sheet);
+  transition: transform var(--sp-dur-normal) var(--sp-ease-spring);
+}
+
+.sp-drawer-panel.is-closing {
+  animation: sp-drawer-out var(--sp-dur-normal) var(--sp-ease-exit) forwards;
+}
+
+.sp-drawer-panel.is-dragging {
+  animation: none !important;
+  transition: none !important;
 }
 
 .sp-drawer-panel:focus {
@@ -926,7 +1020,11 @@ button:disabled {
     max-height: 88dvh;
     border-radius: 22px 22px 0 0;
     padding: 8px 14px calc(18px + env(safe-area-inset-bottom));
-    animation: sp-sheet-up 320ms var(--sp-ease-sheet);
+    animation: sp-sheet-up var(--sp-dur-sheet) var(--sp-ease-sheet);
+  }
+
+  .sp-drawer-panel.is-closing {
+    animation: sp-sheet-down var(--sp-dur-normal) var(--sp-ease-exit) forwards;
   }
 
   .sp-sheet-grabber {
@@ -1095,6 +1193,16 @@ button:disabled {
   user-select: none;
 }
 
+.sp-kbd-hint--nav {
+  margin-left: auto;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sp-kbd-hint {
+    display: none;
+  }
+}
+
 .sp-header-search-box:focus-within .sp-kbd-hint {
   display: none;
 }
@@ -1169,8 +1277,10 @@ button:disabled {
   text-decoration: none;
 }
 
-.sp-btn:active:not(:disabled) {
-  transform: translateY(0.5px);
+.sp-btn:active:not(:disabled),
+.sp-icon-btn:active:not(:disabled),
+.sp-tool-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .sp-btn:disabled {
@@ -1723,6 +1833,26 @@ button:disabled {
   background: color-mix(in srgb, currentColor 14%, transparent);
 }
 
+.sp-composer-url-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 10px;
+  padding: 4px 8px 4px 10px;
+  border-radius: var(--sp-radius-pill);
+  border: 1px solid var(--sp-border);
+  background: var(--sp-surface-muted);
+  color: var(--sp-fg-soft);
+  font-size: var(--sp-text-xs);
+  animation: sp-pop-in var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-composer-url-pill svg {
+  flex-shrink: 0;
+  color: var(--sp-primary);
+}
+
 .sp-composer-extra {
   display: flex;
   flex-direction: column;
@@ -1730,6 +1860,7 @@ button:disabled {
   padding-top: 14px;
   margin-top: 12px;
   border-top: 1px dashed var(--sp-border);
+  animation: sp-pop-in var(--sp-dur-fast) var(--sp-ease-out);
 }
 
 .sp-composer-error {
@@ -1805,17 +1936,24 @@ button:disabled {
   box-shadow: var(--sp-shadow-float);
   padding: 6px;
   z-index: 50;
-  animation: sp-pop-in 150ms var(--sp-ease-out);
+  transform-origin: top left;
+  animation: sp-pop-in var(--sp-dur-fast) var(--sp-ease-out);
 }
 
 .sp-popover--right {
   left: auto;
   right: 0;
+  transform-origin: top right;
 }
 
 .sp-popover--above {
   top: auto;
   bottom: calc(100% + 8px);
+  transform-origin: bottom left;
+}
+
+.sp-popover--above.sp-popover--right {
+  transform-origin: bottom right;
 }
 
 .sp-popover--form {
@@ -2025,6 +2163,7 @@ button:disabled {
   gap: 8px;
   flex-wrap: wrap;
   margin: 0 0 14px;
+  animation: sp-pop-in var(--sp-dur-fast) var(--sp-ease-out);
 }
 
 .sp-filter-panel-label {
@@ -2214,6 +2353,18 @@ a.sp-tape:hover {
   background: var(--sp-primary);
   box-shadow: 0 0 0 3px var(--sp-accent);
   flex-shrink: 0;
+  transition: transform var(--sp-dur-fast) var(--sp-ease-out),
+    opacity var(--sp-dur-fast) var(--sp-ease-out),
+    width var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-unread-dot.is-read {
+  width: 0;
+  opacity: 0;
+  transform: scale(0);
+  box-shadow: none;
+  margin-inline: -4px;
+  pointer-events: none;
 }
 
 .sp-note-more-wrap {
@@ -2572,6 +2723,41 @@ a.sp-tape:hover {
   border: 1px solid var(--sp-border);
   border-top: 1px dashed var(--sp-border);
   border-radius: 0 0 var(--sp-radius-card) var(--sp-radius-card);
+}
+
+.sp-classify-quick {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sp-classify-quick-label {
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
+  white-space: nowrap;
+}
+
+.sp-classify-quick-tapes {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.sp-classify-tape {
+  cursor: pointer;
+  transition: transform var(--sp-dur-instant) var(--sp-ease-out),
+    filter var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-classify-tape:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(0.97);
+}
+
+.sp-classify-tape:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .sp-classify-row {
@@ -3171,6 +3357,11 @@ p.sp-help {
   opacity: 0.85;
 }
 
+.sp-banner-detail--quiet {
+  font-size: 11px;
+  opacity: 0.68;
+}
+
 .sp-spaced {
   margin-bottom: 14px;
 }
@@ -3598,7 +3789,12 @@ a.sp-pill:hover {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  animation: sp-fade-in 160ms ease;
+  animation: sp-fade-in var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-modal-backdrop.is-closing {
+  animation: sp-fade-out var(--sp-dur-fast) var(--sp-ease-exit) forwards;
+  pointer-events: none;
 }
 
 .sp-modal {
@@ -3612,11 +3808,25 @@ a.sp-pill:hover {
   border-radius: 20px;
   box-shadow: var(--sp-shadow-modal);
   padding: 22px 24px 24px;
-  animation: sp-pop-in 200ms var(--sp-ease-out);
+  animation: sp-pop-in var(--sp-dur-normal) var(--sp-ease-spring);
+  transition: transform var(--sp-dur-normal) var(--sp-ease-spring);
+}
+
+.sp-modal.is-closing {
+  animation: sp-pop-out var(--sp-dur-fast) var(--sp-ease-exit) forwards;
+}
+
+.sp-modal.is-dragging {
+  animation: none !important;
+  transition: none !important;
 }
 
 .sp-modal:focus {
   outline: none;
+}
+
+.sp-sheet-swipe-zone {
+  display: block;
 }
 
 .sp-modal-head {
@@ -3650,7 +3860,15 @@ a.sp-pill:hover {
     border-radius: 22px 22px 0 0;
     border-bottom: 0;
     padding: 8px 18px calc(20px + env(safe-area-inset-bottom));
-    animation: sp-sheet-up 320ms var(--sp-ease-sheet);
+    animation: sp-sheet-up var(--sp-dur-sheet) var(--sp-ease-sheet);
+  }
+
+  .sp-modal.is-closing {
+    animation: sp-sheet-down var(--sp-dur-normal) var(--sp-ease-exit) forwards;
+  }
+
+  .sp-sheet-swipe-zone {
+    touch-action: none;
   }
 
   .sp-modal .sp-sheet-grabber {
@@ -3697,7 +3915,12 @@ a.sp-pill:hover {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  animation: sp-pop-in 200ms var(--sp-ease-out);
+  animation: sp-toast-in var(--sp-dur-normal) var(--sp-ease-spring);
+}
+
+.sp-toast.is-closing {
+  animation: sp-toast-out var(--sp-dur-fast) var(--sp-ease-exit) forwards;
+  pointer-events: none;
 }
 
 :root[data-mode="dark"] .sp-toast {
@@ -4177,6 +4400,10 @@ a.sp-pill:hover {
   background: var(--sp-bg);
 }
 
+.sp-attachment-img.is-loaded {
+  animation: sp-fade-in var(--sp-dur-fast) var(--sp-ease-out);
+}
+
 .sp-attachment-img--single {
   max-height: 440px;
   object-fit: contain;
@@ -4234,6 +4461,12 @@ a.sp-pill:hover {
   align-items: center;
   justify-content: center;
   padding: 20px;
+  animation: sp-fade-in var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-lightbox-backdrop.is-closing {
+  animation: sp-fade-out var(--sp-dur-fast) var(--sp-ease-exit) forwards;
+  pointer-events: none;
 }
 
 .sp-lightbox-dialog {
@@ -4249,6 +4482,11 @@ a.sp-pill:hover {
   flex-direction: column;
   gap: 12px;
   outline: none;
+  animation: sp-pop-in var(--sp-dur-normal) var(--sp-ease-spring);
+}
+
+.sp-lightbox-dialog.is-closing {
+  animation: sp-pop-out var(--sp-dur-fast) var(--sp-ease-exit) forwards;
 }
 
 .sp-lightbox-head {
@@ -4772,6 +5010,7 @@ a.sp-pill:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  animation: sp-pop-in var(--sp-dur-fast) var(--sp-ease-out);
 }
 
 .sp-pending-suggestion-item {
@@ -4947,8 +5186,13 @@ a.sp-pill:hover {
   z-index: 1;
   background: color-mix(in srgb, var(--sp-surface) 78%, var(--sp-bg));
   box-shadow: var(--sp-shadow-composer-rest);
-  transform: rotate(-1.1deg);
+  transform: translateY(6px) scale(0.97) rotate(-1.1deg);
   pointer-events: none;
+  transition: transform var(--sp-dur-normal) var(--sp-ease-spring);
+}
+
+.sp-triage-card--peek.is-dragging {
+  transition: none;
 }
 
 .sp-triage-card-meta {

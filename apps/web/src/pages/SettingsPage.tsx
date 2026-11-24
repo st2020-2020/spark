@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
@@ -21,7 +21,9 @@ import {
   type ThemePref,
 } from '../lib/appearance';
 import { resolveSessionKind } from '../lib/devicePair';
+import { confirmLeavingImageDraft } from '../lib/drafts';
 import { formatDateTime, formatDeviceLabel, formatUnitsToYuan } from '../lib/format';
+import { formatShortcut } from '../lib/shortcuts';
 
 export function SettingsPage() {
   const api = useApi();
@@ -35,6 +37,18 @@ export function SettingsPage() {
     void saveAppearance(patch).catch(error => pushToast({ message: getFriendlyErrorMessage(error), tone: 'error' }));
   }
   const [aiConsentOpen, setAiConsentOpen] = useState(false);
+  const [confirmRevokeId, setConfirmRevokeId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!confirmRevokeId) return;
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('[data-session-confirm]')) return;
+      setConfirmRevokeId(null);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    return () => document.removeEventListener('mousedown', onPointerDown);
+  }, [confirmRevokeId]);
 
   const usageQuery = useQuery({
     queryKey: ['me', 'usage'],
@@ -90,7 +104,13 @@ export function SettingsPage() {
               <span className="sp-strong sp-break-anywhere">{user?.email}</span>
               <span className="sp-help">{user?.role === 'admin' ? '管理员' : '个人用户'}</span>
             </div>
-            <button type="button" className="sp-btn" onClick={() => void logout()}>
+            <button
+              type="button"
+              className="sp-btn"
+              onClick={() => {
+                if (confirmLeavingImageDraft()) void logout();
+              }}
+            >
               退出登录
             </button>
           </div>
@@ -99,7 +119,7 @@ export function SettingsPage() {
         <section className="sp-card" aria-label="键盘快捷键">
           <h2 className="sp-card-title">键盘快捷键</h2>
           <p><kbd>J</kbd> / <kbd>K</kbd> 选择下一条或上一条收藏。纸条获得焦点后，<kbd>Enter</kbd> 打开，<kbd>E</kbd> 编辑，<kbd>R</kbd> 切换已读。</p>
-          <p><kbd>N</kbd> 记一条，<kbd>⌘/Ctrl K</kbd> 打开命令面板。编辑正文时用 <kbd>#</kbd> 选标签，<kbd>@</kbd> 选项目。</p>
+          <p><kbd>N</kbd> 记一条，<kbd>{formatShortcut('K')}</kbd> 打开命令面板，<kbd>{formatShortcut('Enter')}</kbd> 保存收藏。编辑正文时用 <kbd>#</kbd> 选标签，<kbd>@</kbd> 选项目。</p>
         </section>
         <ResurfaceSetting />
 
@@ -265,14 +285,38 @@ export function SettingsPage() {
                       </div>
                     </div>
                     {!sess.current && (
-                      <button
-                        type="button"
-                        className="sp-btn sp-btn--sm sp-btn--danger"
-                        disabled={revokeMutation.isPending}
-                        onClick={() => revokeMutation.mutate(sess.id)}
-                      >
-                        撤销
-                      </button>
+                      confirmRevokeId === sess.id ? (
+                        <div className="sp-session-confirm sp-row" data-session-confirm>
+                          <button
+                            type="button"
+                            className="sp-btn sp-btn--sm sp-btn--danger"
+                            disabled={revokeMutation.isPending}
+                            onClick={() => {
+                              setConfirmRevokeId(null);
+                              revokeMutation.mutate(sess.id);
+                            }}
+                          >
+                            确认撤销
+                          </button>
+                          <button
+                            type="button"
+                            className="sp-btn sp-btn--sm"
+                            disabled={revokeMutation.isPending}
+                            onClick={() => setConfirmRevokeId(null)}
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="sp-btn sp-btn--sm sp-btn--danger"
+                          disabled={revokeMutation.isPending}
+                          onClick={() => setConfirmRevokeId(sess.id)}
+                        >
+                          撤销
+                        </button>
+                      )
                     )}
                   </div>
                 );

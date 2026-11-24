@@ -37,6 +37,7 @@ export function PurgeConfirmModal({
         <div className="sp-modal-actions">
           <button
             type="button"
+            data-dialog-autofocus
             className="sp-btn"
             disabled={isSubmitting}
             onClick={onCancel}

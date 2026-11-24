@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Pencil, Search, X } from 'lucide-react';
@@ -25,6 +25,7 @@ export function ProjectDetailPage() {
   const unreadOnly = params.get('read') === 'false';
   const searchKeyword = params.get('q') ?? '';
   const [debouncedKeyword, setDebouncedKeyword] = useState(searchKeyword.trim());
+  const searchComposingRef = useRef(false);
   function updateFilter(name: string, value: string) {
     setParams(previous => {
       const next = new URLSearchParams(previous);
@@ -218,8 +219,34 @@ export function ProjectDetailPage() {
             aria-label="在当前项目内搜索"
             placeholder="在项目内搜索…"
             value={searchKeyword}
+            onCompositionStart={() => {
+              searchComposingRef.current = true;
+            }}
+            onCompositionEnd={(e) => {
+              searchComposingRef.current = false;
+              updateFilter('q', e.currentTarget.value);
+            }}
+            onKeyDown={(e) => {
+              if (searchComposingRef.current || e.nativeEvent.isComposing || e.keyCode === 229) {
+                return;
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                e.currentTarget.blur();
+              }
+            }}
             onChange={(e) => updateFilter('q', e.target.value)}
           />
+          {searchKeyword && (
+            <button
+              type="button"
+              className="sp-search-clear"
+              aria-label="清空项目内搜索"
+              onClick={() => updateFilter('q', '')}
+            >
+              <X size={14} strokeWidth={2.2} aria-hidden="true" />
+            </button>
+          )}
         </div>
         <button
           type="button"

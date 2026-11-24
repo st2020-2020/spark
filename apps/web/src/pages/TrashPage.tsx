@@ -286,7 +286,7 @@ export function TrashPage() {
           return (
             <article key={col.id} className="sp-note">
               <div className="sp-note-meta sp-trash-meta">
-                <time dateTime={col.updated_at}>删除/更新于 {formatDateTime(col.updated_at)}</time>
+                <time dateTime={col.updated_at}>移入于 {formatDateTime(col.updated_at)}</time>
                 {purgeEnabled && estExpiry && (
                   <span className="sp-trash-expiry">
                     预计到期：{formatDateTime(estExpiry)}（{formatRemainingTrashDays(estExpiry)}）

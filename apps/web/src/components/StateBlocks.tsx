@@ -64,7 +64,11 @@ export function ErrorBanner({
     <div className="sp-banner sp-banner--error sp-spaced" role="alert">
       <div>
         <div>{message}</div>
-        {requestId && <div className="sp-banner-detail sp-mono">请求标识：{requestId}</div>}
+        {requestId && (
+          <div className="sp-banner-detail sp-banner-detail--quiet sp-mono">
+            请求标识：{requestId}
+          </div>
+        )}
       </div>
       {onRetry && (
         <button type="button" className="sp-btn sp-btn--sm" onClick={onRetry}>

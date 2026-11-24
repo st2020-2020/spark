@@ -15,7 +15,7 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
-import type { Attachment, CollectionSummary, SearchHit } from '../api/types';
+import type { Attachment, Collection, CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
 import { useFollowUp } from '../context/FollowUpContext';
@@ -96,12 +96,74 @@ export function CollectionCard({
 
   const toggleReadMutation = useMutation({
     mutationFn: () => api.setReadState(collection.id, { read: !collection.read_at }),
-    onSuccess: () => {
+    onMutate: async () => {
       setMenuOpen(false);
+      await queryClient.cancelQueries({ queryKey: ['collections'] });
+      await queryClient.cancelQueries({ queryKey: ['project-collections'] });
+      await queryClient.cancelQueries({ queryKey: ['collection', collection.id] });
+
+      type InfiniteListCache = {
+        pages: Array<{ items: CollectionSummary[]; next_cursor?: string }>;
+        pageParams: unknown[];
+      };
+
+      const prevCollections = queryClient.getQueriesData<InfiniteListCache>({
+        queryKey: ['collections'],
+      });
+      const prevProjectCollections = queryClient.getQueriesData<InfiniteListCache>({
+        queryKey: ['project-collections'],
+      });
+      const prevDetail = queryClient.getQueryData<Collection>(['collection', collection.id]);
+
+      const nextReadAt = collection.read_at ? undefined : new Date().toISOString();
+      const patchList = (old: InfiniteListCache | undefined) => {
+        if (!old || !Array.isArray(old.pages)) return old;
+        let touched = false;
+        const pages = old.pages.map((page) => {
+          if (!Array.isArray(page.items)) return page;
+          let pageTouched = false;
+          const items = page.items.map((item) => {
+            if (item.id !== collection.id) return item;
+            pageTouched = true;
+            return { ...item, read_at: nextReadAt };
+          });
+          if (!pageTouched) return page;
+          touched = true;
+          return { ...page, items };
+        });
+        return touched ? { ...old, pages } : old;
+      };
+
+      queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections'] }, patchList);
+      queryClient.setQueriesData<InfiniteListCache>(
+        { queryKey: ['project-collections'] },
+        patchList,
+      );
+      queryClient.setQueryData<Collection>(['collection', collection.id], (old) =>
+        old ? { ...old, read_at: nextReadAt } : old,
+      );
+
+      return { prevCollections, prevProjectCollections, prevDetail };
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['collection', collection.id], updated);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
-    onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
+    onError: (err, _vars, context) => {
+      if (context) {
+        for (const [key, data] of context.prevCollections) {
+          queryClient.setQueryData(key, data);
+        }
+        for (const [key, data] of context.prevProjectCollections) {
+          queryClient.setQueryData(key, data);
+        }
+        if (context.prevDetail !== undefined) {
+          queryClient.setQueryData(['collection', collection.id], context.prevDetail);
+        }
+      }
+      pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
+    },
   });
 
   const trashMutation = useMutation({
@@ -187,7 +249,11 @@ export function CollectionCard({
             <ImageIcon size={13} strokeWidth={2.2} aria-hidden="true" />
           </span>
         )}
-        {isUnread && <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />}
+        {isUnread ? (
+          <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />
+        ) : (
+          <span className="sp-unread-dot is-read" aria-hidden="true" />
+        )}
 
         {showOrgStatus &&
           (collection.organization_status === 'failed' ||

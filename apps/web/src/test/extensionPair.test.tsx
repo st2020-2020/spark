@@ -108,6 +108,7 @@ describe('Extension pairing and Settings device management', () => {
     expect(within(extRow!).getByText(/到期于/)).toBeInTheDocument();
 
     await user.click(within(extRow!).getByRole('button', { name: '撤销' }));
+    await user.click(within(extRow!).getByRole('button', { name: '确认撤销' }));
     await waitFor(() => {
       expect(screen.queryByText('Spark 浏览器扩展 (Chrome)')).not.toBeInTheDocument();
     });

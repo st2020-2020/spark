@@ -37,6 +37,28 @@ export function PendingSuggestionsBanner() {
       queryClient.setQueryData(['collection', vars.collectionId], updated);
       pushToast({
         message: vars.action === 'include' ? '已确认归入项目' : '已忽略该条项目建议',
+        actionLabel: '撤销',
+        onAction: async () => {
+          try {
+            const restored = updated.undo_receipt
+              ? await api.undoProjectDecisions(updated.id, {
+                  operation_key: updated.undo_receipt.operation_key,
+                  base_decision_version: updated.undo_receipt.decision_version,
+                })
+              : await api.updateProjectDecisions(updated.id, {
+                  base_decision_version: updated.decision_version,
+                  operations: [{ id: vars.projectId, action: 'reset' }],
+                });
+            queryClient.setQueryData(['collection', restored.id], restored);
+            void queryClient.invalidateQueries({ queryKey: ['collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['projects'] });
+            void queryClient.invalidateQueries({ queryKey: ['project'] });
+            void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+            pushToast({ message: '已撤销该项目建议操作' });
+          } catch (undoErr) {
+            pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
+          }
+        },
       });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });

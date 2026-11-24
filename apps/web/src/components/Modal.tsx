@@ -1,5 +1,6 @@
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { canAnimateMotion, SHEET_EXIT_MS, useSheetSwipeDismiss } from '../lib/motion';
 
 /** Centered dialog on desktop, bottom sheet on phones (see .sp-modal in global.css). */
 export function Modal({
@@ -13,9 +14,47 @@ export function Modal({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const [rendered, setRendered] = useState(open);
+  const [closing, setClosing] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const exitTimerRef = useRef<number | null>(null);
+
+  const { isDragging, swipeStyle, swipeHandlers } = useSheetSwipeDismiss({
+    enabled: open && !closing,
+    onDismiss: () => onCloseRef.current(),
+  });
+
+  useEffect(() => {
+    if (exitTimerRef.current !== null) {
+      window.clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = null;
+    }
+    if (open) {
+      setRendered(true);
+      setClosing(false);
+      return;
+    }
+    if (!rendered) return;
+    if (!canAnimateMotion()) {
+      setClosing(false);
+      setRendered(false);
+      return;
+    }
+    setClosing(true);
+    exitTimerRef.current = window.setTimeout(() => {
+      exitTimerRef.current = null;
+      setClosing(false);
+      setRendered(false);
+    }, SHEET_EXIT_MS);
+    return () => {
+      if (exitTimerRef.current !== null) {
+        window.clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+      }
+    };
+  }, [open, rendered]);
 
   useEffect(() => {
     if (!open) return;
@@ -47,11 +86,11 @@ export function Modal({
     };
   }, [open]);
 
-  if (!open) return null;
+  if (!open && !rendered) return null;
 
   return (
     <div
-      className="sp-modal-backdrop"
+      className={`sp-modal-backdrop ${closing ? 'is-closing' : ''}`}
       role="presentation"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onCloseRef.current();
@@ -59,23 +98,26 @@ export function Modal({
     >
       <div
         ref={panelRef}
-        className="sp-modal"
+        className={`sp-modal ${closing ? 'is-closing' : ''} ${isDragging ? 'is-dragging' : ''}`}
+        style={swipeStyle}
         role="dialog"
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
       >
-        <span className="sp-sheet-grabber" aria-hidden="true" />
-        <div className="sp-modal-head">
-          <h2 className="sp-modal-title">{title}</h2>
-          <button
-            type="button"
-            className="sp-icon-btn"
-            onClick={() => onCloseRef.current()}
-            aria-label="关闭弹窗"
-          >
-            <X size={18} strokeWidth={2} aria-hidden="true" />
-          </button>
+        <div className="sp-sheet-swipe-zone" {...swipeHandlers}>
+          <span className="sp-sheet-grabber" aria-hidden="true" />
+          <div className="sp-modal-head">
+            <h2 className="sp-modal-title">{title}</h2>
+            <button
+              type="button"
+              className="sp-icon-btn"
+              onClick={() => onCloseRef.current()}
+              aria-label="关闭弹窗"
+            >
+              <X size={18} strokeWidth={2} aria-hidden="true" />
+            </button>
+          </div>
         </div>
         {children}
       </div>

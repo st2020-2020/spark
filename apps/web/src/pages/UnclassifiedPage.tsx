@@ -6,6 +6,7 @@ import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
 import type { CollectionSummary } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { pendingSuggestionOptions, decideCollectionProjectSafely, StaleSuggestionError } from '../lib/organization';
+import { projectToneClass } from '../lib/projectTone';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
@@ -47,6 +48,29 @@ export function UnclassifiedPage() {
       queryClient.setQueryData(['collection', vars.collectionId], updated);
       pushToast({
         message: vars.action === 'include' ? '已归入项目' : '已忽略建议关联',
+        actionLabel: '撤销',
+        onAction: async () => {
+          try {
+            const restored = updated.undo_receipt
+              ? await api.undoProjectDecisions(updated.id, {
+                  operation_key: updated.undo_receipt.operation_key,
+                  base_decision_version: updated.undo_receipt.decision_version,
+                })
+              : await api.updateProjectDecisions(updated.id, {
+                  base_decision_version: updated.decision_version,
+                  operations: [{ id: vars.projectId, action: 'reset' }],
+                });
+            queryClient.setQueryData(['collection', restored.id], restored);
+            void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
+            void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
+            void queryClient.invalidateQueries({ queryKey: ['projects'] });
+            void queryClient.invalidateQueries({ queryKey: ['project', vars.projectId] });
+            void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
+            pushToast({ message: '已撤销归类操作' });
+          } catch (undoErr) {
+            pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
+          }
+        },
       });
       void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
       void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
@@ -73,6 +97,7 @@ export function UnclassifiedPage() {
 
   const items = unclassifiedQuery.data?.pages.flatMap((p) => p.items) ?? [];
   const projects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
+  const activeQuickProjects = projects.filter((p) => p.state === 'active').slice(0, 6);
 
   const renderQuickClassify = (col: CollectionSummary) => {
     const suggested = col.projects.filter((p) => p.decision === 'suggested');
@@ -130,6 +155,32 @@ export function UnclassifiedPage() {
           </div>
         ))}
 
+        {activeQuickProjects.length > 0 && (
+          <div className="sp-classify-quick" role="group" aria-label={`快速将「${col.display_title}」归入进行中项目`}>
+            <span className="sp-classify-quick-label">一点即归入</span>
+            <div className="sp-classify-quick-tapes">
+              {activeQuickProjects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`sp-tape sp-classify-tape ${projectToneClass(p.id)}`}
+                  aria-label={`归入项目 ${p.name}`}
+                  disabled={decideMutation.isPending}
+                  onClick={() =>
+                    decideMutation.mutate({
+                      collectionId: col.id,
+                      projectId: p.id,
+                      action: 'include',
+                    })
+                  }
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {projects.length > 0 && (
           <div className="sp-classify-row">
             <select
@@ -173,7 +224,10 @@ export function UnclassifiedPage() {
         title="待归类"
         actions={
           <div className="sp-row">
-            <Link to="/unclassified/triage" className="sp-btn sp-btn--primary sp-btn--sm">
+            <Link
+              to="/unclassified/triage"
+              className={`sp-btn sp-btn--sm ${items.length > 0 ? 'sp-btn--primary' : ''}`}
+            >
               <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
               <span>开始整理</span>
             </Link>

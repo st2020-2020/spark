@@ -1,6 +1,7 @@
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { Check, FileText, Monitor, Moon, Palette, Search, Sun } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useApi } from '../context/ApiContext';
 import { useToast } from '../context/ToastContext';
@@ -8,9 +9,23 @@ import { PALETTES, type ThemePref } from '../lib/appearance';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useRecordOpened } from './CollectionLink';
 import { confirmLeavingImageDraft } from '../lib/drafts';
+import { projectToneClass } from '../lib/projectTone';
 import { Modal } from './Modal';
+import { HighlightText } from './StateBlocks';
 
-export function CommandPalette({ onClose }: { onClose: () => void }) {
+interface CommandOption {
+  ariaLabel: string;
+  content: ReactNode;
+  run: () => void;
+}
+
+export function CommandPalette({
+  open = true,
+  onClose,
+}: {
+  open?: boolean;
+  onClose: () => void;
+}) {
   const api = useApi();
   const { user, saveAppearance, appearancePending } = useAuth();
   const { pushToast } = useToast();
@@ -21,6 +36,14 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const [q, setQ] = useState('');
   const [index, setIndex] = useState(0);
   const [composing, setComposing] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setText('');
+    setQ('');
+    setIndex(0);
+  }, [open]);
+
   useEffect(() => {
     if (composing) return;
     const timer = setTimeout(() => setQ(text.trim()), 180);
@@ -29,11 +52,12 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
   const projects = useQuery({
     queryKey: ['projects', 'commands', user?.id, q],
     queryFn: () => api.listProjects({ q, limit: 5 }),
+    enabled: open,
   });
   const collections = useQuery({
     queryKey: ['collections-command', user?.id, q],
     queryFn: ({ signal }) => api.searchCollections({ q, scope: 'active', limit: 5 }, signal),
-    enabled: !!q,
+    enabled: open && !!q,
   });
   function go(path: string, collectionId?: string) {
     if (!confirmLeavingImageDraft()) return;
@@ -46,27 +70,102 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     catch (error) { pushToast({ message: getFriendlyErrorMessage(error), tone: 'error' }); }
   }
   const term = text.trim();
-  const options: { name: string; run: () => void }[] = [{
-    name: term ? `搜索全部收藏「${term}」` : '搜索全部收藏',
+  const currentPalette = user?.palette ?? 'mint';
+  const currentTheme = user?.theme ?? 'system';
+  const searchLabel = term ? `搜索全部收藏「${term}」` : '搜索全部收藏';
+  const options: CommandOption[] = [{
+    ariaLabel: searchLabel,
+    content: (
+      <>
+        <Search size={15} strokeWidth={2} className="sp-command-row-icon" aria-hidden="true" />
+        <span className="sp-command-row-main sp-truncate">{searchLabel}</span>
+      </>
+    ),
     run: () => go(term ? '/collections?q=' + encodeURIComponent(term) : '/collections?focus=search'),
   }];
   if (term === q && !composing) {
-    for (const { collection } of collections.data?.items ?? []) options.push({
-      name: '收藏 · ' + collection.display_title, run: () => go('/collections/' + collection.id, collection.id),
-    });
-    for (const p of projects.data?.items ?? []) options.push({ name: '项目 · ' + p.name, run: () => go('/projects/' + p.id) });
+    for (const { collection } of collections.data?.items ?? []) {
+      const label = '收藏 · ' + collection.display_title;
+      options.push({
+        ariaLabel: label,
+        content: (
+          <>
+            <FileText size={15} strokeWidth={2} className="sp-command-row-icon" aria-hidden="true" />
+            <span className="sp-command-row-main sp-truncate">
+              <span className="sp-command-row-meta">收藏 · </span>
+              <HighlightText text={collection.display_title} query={term} />
+            </span>
+          </>
+        ),
+        run: () => go('/collections/' + collection.id, collection.id),
+      });
+    }
+    for (const p of projects.data?.items ?? []) {
+      const label = '项目 · ' + p.name;
+      options.push({
+        ariaLabel: label,
+        content: (
+          <>
+            <span className={`sp-command-row-dot sp-tape ${projectToneClass(p.id)}`} aria-hidden="true" />
+            <span className="sp-command-row-main sp-truncate">
+              <span className="sp-command-row-meta">项目 · </span>
+              <HighlightText text={p.name} query={term} />
+            </span>
+          </>
+        ),
+        run: () => go('/projects/' + p.id),
+      });
+    }
   }
   for (const p of PALETTES) {
     const name = '配色 · ' + p.label;
-    if (name.includes(term)) options.push({ name, run: () => void appearance({ palette: p.id }) });
+    if (name.includes(term)) {
+      const activePalette = currentPalette === p.id;
+      options.push({
+        ariaLabel: name,
+        content: (
+          <>
+            <Palette size={15} strokeWidth={2} className="sp-command-row-icon" aria-hidden="true" />
+            <span className="sp-command-row-main sp-truncate">
+              <HighlightText text={name} query={term} />
+            </span>
+            {activePalette && (
+              <Check size={14} strokeWidth={2.2} className="sp-command-row-check" aria-hidden="true" />
+            )}
+          </>
+        ),
+        run: () => void appearance({ palette: p.id }),
+      });
+    }
   }
-  for (const [id, label] of [['system', '跟随系统'], ['light','浅色'], ['dark','深色']] as [ThemePref,string][]) {
+  for (const [id, label, Icon] of [
+    ['system', '跟随系统', Monitor],
+    ['light', '浅色', Sun],
+    ['dark', '深色', Moon],
+  ] as [ThemePref, string, typeof Sun][]) {
     const name = '明暗 · ' + label;
-    if (name.includes(term)) options.push({ name, run: () => void appearance({ theme: id }) });
+    if (name.includes(term)) {
+      const activeTheme = currentTheme === id;
+      options.push({
+        ariaLabel: name,
+        content: (
+          <>
+            <Icon size={15} strokeWidth={2} className="sp-command-row-icon" aria-hidden="true" />
+            <span className="sp-command-row-main sp-truncate">
+              <HighlightText text={name} query={term} />
+            </span>
+            {activeTheme && (
+              <Check size={14} strokeWidth={2.2} className="sp-command-row-check" aria-hidden="true" />
+            )}
+          </>
+        ),
+        run: () => void appearance({ theme: id }),
+      });
+    }
   }
   const active = Math.min(index, options.length - 1);
   useEffect(() => { document.getElementById(list + '-' + active)?.scrollIntoView?.({ block: 'nearest' }); }, [active, list]);
-  return <Modal open title="命令面板" onClose={onClose}>
+  return <Modal open={open} title="命令面板" onClose={onClose}>
     <input data-dialog-autofocus className="sp-input" role="combobox" aria-label="搜索收藏、项目或命令"
       aria-expanded aria-controls={list} aria-activedescendant={list + '-' + active} autoComplete="off"
       placeholder="搜索收藏、项目或外观设置…" value={text}
@@ -81,8 +180,9 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
       }} />
     <div className="sp-command-list" role="listbox" id={list} aria-label="可用命令">
       {options.map((o,i) => <button key={i} type="button" role="option" aria-selected={i === active}
+        aria-label={o.ariaLabel}
         id={list + '-' + i} tabIndex={-1} disabled={appearancePending} onMouseDown={e => e.preventDefault()}
-        onClick={o.run}>{o.name}</button>)}
+        onClick={o.run}>{o.content}</button>)}
     </div>
     {term && term === q && (collections.isLoading || projects.isLoading) && <p className="sp-help" role="status">正在查找…</p>}
     {term && term === q && !composing && collections.isSuccess && projects.isSuccess && options.length === 1 &&

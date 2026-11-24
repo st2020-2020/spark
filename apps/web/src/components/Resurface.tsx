@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useApi } from '../context/ApiContext';
@@ -5,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
 import type { ResurfaceResult } from '../api/types';
+import { canAnimateMotion } from '../lib/motion';
 import { useLocalCalendar, useResurfacePreferences } from '../lib/revisit';
 import { CollectionLink } from './CollectionLink';
 import { ErrorBanner } from './StateBlocks';
@@ -46,6 +48,15 @@ export function Resurface() {
   const { tz, today } = useLocalCalendar();
   const prefs = useResurfacePreferences();
   const key = ['collections', 'resurface', user?.id, tz, today];
+  const [hidingIds, setHidingIds] = useState<string[]>([]);
+  const hideTimersRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const timers = hideTimersRef.current;
+    return () => {
+      for (const t of timers.values()) window.clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
   const result = useQuery({
     queryKey: key, queryFn: ({ signal }) => api.getResurface(tz, signal),
     enabled: !prefs.isFetching && prefs.data?.enabled === true,
@@ -53,9 +64,23 @@ export function Resurface() {
   const hide = useMutation({
     mutationFn: ({ id, date }: { id: string; date: string }) => api.hideResurfaceItem(id, date, tz),
     onSuccess: async (_, { id, date }) => {
-      await client.cancelQueries({ queryKey: key });
-      client.setQueryData<ResurfaceResult>(key, old => old?.date === date
-        ? { ...old, items: old.items.filter(item => item.collection.id !== id) } : old);
+      const removeFromCache = async () => {
+        await client.cancelQueries({ queryKey: key });
+        client.setQueryData<ResurfaceResult>(key, old => old?.date === date
+          ? { ...old, items: old.items.filter(item => item.collection.id !== id) } : old);
+        setHidingIds(prev => prev.filter(itemId => itemId !== id));
+        pushToast({ message: '今天先收起这条回看' });
+      };
+      if (!canAnimateMotion()) {
+        await removeFromCache();
+        return;
+      }
+      setHidingIds(prev => (prev.includes(id) ? prev : [...prev, id]));
+      const timer = window.setTimeout(() => {
+        hideTimersRef.current.delete(id);
+        void removeFromCache();
+      }, 160);
+      hideTimersRef.current.set(id, timer);
     },
     onError: error => {
       if (error instanceof ApiError && error.status === 409) {
@@ -83,7 +108,7 @@ export function Resurface() {
             inactive_project: '来自久未回看的项目收藏',
             anniversary: years === 1 ? '一年前的今天' : `${years} 年前的今天`,
           };
-          return <article className="sp-resurface-note" key={collection.id}>
+          return <article className={`sp-resurface-note ${hidingIds.includes(collection.id) ? 'is-hiding' : ''}`} key={collection.id}>
             <p className="sp-help sp-break-anywhere">{labels[reason]}</p>
             <h3><CollectionLink id={collection.id} state={state}>{collection.display_title || collection.excerpt || '未命名收藏'}</CollectionLink></h3>
             {collection.excerpt && collection.excerpt !== collection.display_title && <p className="sp-resurface-excerpt">{collection.excerpt}</p>}
