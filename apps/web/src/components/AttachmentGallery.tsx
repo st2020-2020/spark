@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 import type { Attachment } from '../api/types';
 import { formatBytes } from '../lib/format';
@@ -65,6 +65,9 @@ export function AttachmentGallery({
   useEffect(() => {
     if (activeIndex === null) return;
     prevFocusedRef.current = document.activeElement as HTMLElement | null;
+    if (dialogRef.current) {
+      dialogRef.current.inert = false;
+    }
     dialogRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -92,7 +95,7 @@ export function AttachmentGallery({
     };
   }, [activeIndex, closing, sorted.length]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (dialogRef.current) {
       dialogRef.current.inert = closing;
     }

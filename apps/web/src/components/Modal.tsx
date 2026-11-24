@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { canAnimateMotion, SHEET_EXIT_MS, useSheetSwipeDismiss } from '../lib/motion';
 
@@ -26,7 +26,7 @@ export function Modal({
     onDismiss: () => onCloseRef.current(),
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const panel = panelRef.current;
     if (panel) {
       panel.inert = closing;
@@ -67,6 +67,9 @@ export function Modal({
     if (!open) return;
     const prevActive = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
+    if (panel) {
+      panel.inert = false;
+    }
     (panel?.querySelector<HTMLElement>('[data-dialog-autofocus]') ?? panel)?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';

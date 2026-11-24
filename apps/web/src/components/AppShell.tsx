@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -76,7 +76,7 @@ export function AppShell({
     onDismiss: () => setDrawerOpen(false),
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (drawerPanelRef.current) {
       drawerPanelRef.current.inert = drawerClosing;
     }
@@ -141,6 +141,9 @@ export function AppShell({
   useEffect(() => {
     if (!drawerOpen) return;
     const prevActive = document.activeElement as HTMLElement | null;
+    if (drawerPanelRef.current) {
+      drawerPanelRef.current.inert = false;
+    }
     drawerPanelRef.current?.focus();
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';

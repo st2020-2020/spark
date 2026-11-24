@@ -135,7 +135,14 @@ export function Resurface() {
             inactive_project: '来自久未回看的项目收藏',
             anniversary: years === 1 ? '一年前的今天' : `${years} 年前的今天`,
           };
-          return <article className={`sp-resurface-note ${isHiding ? 'is-hiding' : ''}`} aria-hidden={isHiding ? 'true' : undefined} key={collection.id}>
+          return <article
+            className={`sp-resurface-note ${isHiding ? 'is-hiding' : ''}`}
+            aria-hidden={isHiding ? 'true' : undefined}
+            ref={(el) => {
+              if (el) el.inert = isHiding;
+            }}
+            key={collection.id}
+          >
             <p className="sp-help sp-break-anywhere">{labels[reason]}</p>
             <h3><CollectionLink id={collection.id} state={state}>{collection.display_title || collection.excerpt || '未命名收藏'}</CollectionLink></h3>
             {collection.excerpt && collection.excerpt !== collection.display_title && <p className="sp-resurface-excerpt">{collection.excerpt}</p>}

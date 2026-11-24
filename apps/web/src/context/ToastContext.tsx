@@ -20,6 +20,7 @@ interface InternalToastItem extends ToastItem {
 interface ToastContextValue {
   pushToast: (toast: Omit<ToastItem, 'id'>, durationMs?: number) => void;
   dismissToast: (id: string) => void;
+  clearAllToasts: () => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -90,6 +91,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [clearTimer, dismissToast],
   );
 
+  const clearAllToasts = useCallback(() => {
+    for (const timer of timersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    timersRef.current.clear();
+    for (const timer of exitTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    exitTimersRef.current.clear();
+    consumedActionsRef.current.clear();
+    setToasts((prev) => (prev.length === 0 ? prev : []));
+  }, []);
+
   useEffect(() => {
     return () => {
       for (const timer of timersRef.current.values()) {
@@ -104,7 +118,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <ToastContext.Provider value={{ pushToast, dismissToast }}>
+    <ToastContext.Provider value={{ pushToast, dismissToast, clearAllToasts }}>
       {children}
       <div className="sp-toast-region" aria-live="polite" aria-atomic="false">
         {toasts.map((toast) => (

@@ -1,8 +1,12 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { AppProviders, AppRoutes } from '../App';
+import { AppProviders, AppRoutes, createAppQueryClient } from '../App';
+import { ApiProvider } from '../context/ApiContext';
+import { AuthProvider } from '../context/AuthContext';
+import { Modal } from '../components/Modal';
 import { PurgeConfirmModal } from '../components/PurgeConfirmModal';
 import { ToastProvider } from '../context/ToastContext';
 import { createTestAdapter, type TestAdapter } from '../test-adapter/mockServer';
@@ -597,5 +601,409 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
       configurable: true,
       value: prevPointerEvent,
     });
+  });
+
+  it('clears global Toasts on logout and drops late read/classify/undo responses without writing cleared cache', async () => {
+    const api = await admin();
+    const proj = await api.createProject(
+      { name: '跨会话项目', description: '', focus_points: [] },
+      'p-session-guard',
+    );
+    const col = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '登出守卫笔记' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'session-guard-col',
+    );
+
+    const queryClient = createAppQueryClient();
+    const realSetReadState = api.setReadState.bind(api);
+    let resolveLateRead!: (value: Awaited<ReturnType<typeof realSetReadState>>) => void;
+    vi.spyOn(api, 'setReadState').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveLateRead = resolve;
+        }),
+    );
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/unclassified']}>
+        <QueryClientProvider client={queryClient}>
+          <ApiProvider api={api}>
+            <ToastProvider>
+              <AuthProvider>
+                <AppRoutes />
+              </AuthProvider>
+            </ToastProvider>
+          </ApiProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    // 1. Trigger classify to display an undo Toast, then verify logout immediately clears Toasts
+    await screen.findByText('登出守卫笔记');
+    await user.click(screen.getByRole('button', { name: `归入项目 ${proj.name}` }));
+    expect(await screen.findByText('已归入项目')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '撤销' })).toBeInTheDocument();
+
+    // 2. Also navigate to /inbox with a new unread item and start an in-flight read toggle before logging out
+    const col2 = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '迟到响应测试' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'late-read-col',
+    );
+    const readSnapshot = await api.getCollection(col2.id);
+    await user.click(
+      within(screen.getByRole('complementary', { name: '主导航' })).getByRole('link', {
+        name: '收件箱',
+      }),
+    );
+    await screen.findByText('迟到响应测试');
+    const card2 = screen.getByText('迟到响应测试').closest('article')!;
+    await user.click(within(card2).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+
+    // Log out via sidebar account menu
+    const sidebar = within(screen.getByRole('complementary', { name: '主导航' }));
+    await user.click(sidebar.getByRole('button', { name: '账号菜单' }));
+    await user.click(screen.getByRole('menuitem', { name: '退出登录' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: '撤销' })).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('已归入项目')).not.toBeInTheDocument();
+
+    // Resolve late read after logout -> must NOT populate ['collection', col2.id]
+    act(() => {
+      resolveLateRead({
+        ...readSnapshot,
+        resource_version: readSnapshot.resource_version + 1,
+        read_at: new Date().toISOString(),
+      });
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(queryClient.getQueryData(['collection', col2.id])).toBeUndefined();
+    expect(col.id).toBeTruthy();
+  });
+
+  it('rejects AI suggestion confirmation when UI lacks run_id or project_version instead of blindly adopting v2', async () => {
+    const api = await admin();
+    const proj = await api.createProject(
+      { name: '快照项目', description: '', focus_points: [] },
+      'p-snap',
+    );
+    const col = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '缺快照建议笔记' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'no-snap-col',
+    );
+
+    // List returns suggestion WITHOUT suggestion_run_id / project_version,
+    // while getCollection returns newer v2 run.
+    const realList = api.listCollections.bind(api);
+    const realGet = api.getCollection.bind(api);
+    vi.spyOn(api, 'listCollections').mockImplementation(async (q, signal) => {
+      const res = await realList(q, signal);
+      return {
+        ...res,
+        items: res.items.map((item) =>
+          item.id === col.id
+            ? {
+                ...item,
+                projects: [
+                  {
+                    project_id: proj.id,
+                    name: proj.name,
+                    decision: 'suggested',
+                    evidence: [],
+                  },
+                ],
+              }
+            : item,
+        ),
+      };
+    });
+    vi.spyOn(api, 'getCollection').mockImplementation(async (id) => {
+      const detail = await realGet(id);
+      if (id !== col.id) return detail;
+      return {
+        ...detail,
+        projects: [
+          {
+            project_id: proj.id,
+            name: proj.name,
+            decision: 'suggested',
+            suggestion_run_id: 'run-v2',
+            project_version: 2,
+            evidence: [],
+          },
+        ],
+      };
+    });
+    const updateSpy = vi.spyOn(api, 'updateProjectDecisions');
+
+    const user = userEvent.setup();
+    mount(api, '/unclassified');
+
+    await screen.findByText(`建议归入：${proj.name}`);
+    await user.click(screen.getByRole('button', { name: '加入项目' }));
+
+    expect(
+      await screen.findByText(/当前建议缺少完整版本快照，已为你同步最新建议/),
+    ).toBeInTheDocument();
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
+
+  it('prevents stale setReadState response from overwriting newer resource_version detail cache and prevents concurrent cards from flashing unread', async () => {
+    const api = await admin();
+    const colA = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '并发防闪 卡片A' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'conc-a',
+    );
+    const colB = await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '并发防闪 卡片B' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'conc-b',
+    );
+
+    const queryClient = createAppQueryClient();
+    const realGet = api.getCollection.bind(api);
+    const baseDetailA = await realGet(colA.id);
+    // Seed newer v3 detail cache before delayed v2 read response returns
+    queryClient.setQueryData(['collection', colA.id], {
+      ...baseDetailA,
+      resource_version: baseDetailA.resource_version + 3,
+      display_title: '最新标题 v3',
+    });
+
+    const realSetRead = api.setReadState.bind(api);
+    let resolveA!: (val: Awaited<ReturnType<typeof realSetRead>>) => void;
+    let resolveB!: (val: Awaited<ReturnType<typeof realSetRead>>) => void;
+    vi.spyOn(api, 'setReadState').mockImplementation((id) => {
+      if (id === colA.id) {
+        return new Promise((resolve) => {
+          resolveA = resolve;
+        });
+      }
+      return new Promise((resolve) => {
+        resolveB = resolve;
+      });
+    });
+    const listSpy = vi.spyOn(api, 'listCollections');
+
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={['/inbox']}>
+        <QueryClientProvider client={queryClient}>
+          <ApiProvider api={api}>
+            <ToastProvider>
+              <AuthProvider>
+                <AppRoutes />
+              </AuthProvider>
+            </ToastProvider>
+          </ApiProvider>
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText('并发防闪 卡片A');
+    const cardA = screen.getByText('并发防闪 卡片A').closest('article')!;
+    const cardB = screen.getByText('并发防闪 卡片B').closest('article')!;
+
+    await user.click(within(cardA).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+    await user.click(within(cardB).getByRole('button', { name: '更多操作' }));
+    await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+
+    const listCallsBeforeB = listSpy.mock.calls.length;
+
+    // Resolve B while A is still in flight -> list MUST NOT invalidate yet so A stays optimistically read
+    const updatedB = await realSetRead(colB.id, { read: true });
+    act(() => {
+      resolveB(updatedB);
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(listSpy.mock.calls.length).toBe(listCallsBeforeB);
+    expect(within(cardA).queryByRole('img', { name: '未读' })).not.toBeInTheDocument();
+
+    // Now resolve A with an older resource_version (<= v1) -> newer v3 display_title stays intact and list refreshes now!
+    act(() => {
+      resolveA({
+        ...baseDetailA,
+        resource_version: baseDetailA.resource_version,
+        display_title: '旧标题 v1',
+        read_at: new Date().toISOString(),
+      });
+    });
+
+    await waitFor(() => {
+      expect(listSpy.mock.calls.length).toBeGreaterThan(listCallsBeforeB);
+    });
+    const cachedDetail = queryClient.getQueryData<typeof baseDetailA>(['collection', colA.id]);
+    expect(cachedDetail?.display_title).toBe('最新标题 v3');
+    expect(cachedDetail?.resource_version).toBe(baseDetailA.resource_version + 3);
+  });
+
+  it('reopens closing Modal cleanly (inert cleared before focus), marks exiting Resurface card inert, and transitions unread dot on the same DOM node', async () => {
+    const prevGetAnimations = Element.prototype.getAnimations;
+    Object.defineProperty(Element.prototype, 'getAnimations', {
+      configurable: true,
+      value: () => [],
+    });
+
+    try {
+      // 1. Modal reopen during closing clears inert synchronously before autofocus
+      function ModalReopenHarness() {
+        const [open, setOpen] = useState(true);
+        return (
+          <>
+            <button type="button" onClick={() => setOpen(false)}>
+              关弹窗
+            </button>
+            <button type="button" onClick={() => setOpen(true)}>
+              重开弹窗
+            </button>
+            <Modal open={open} title="重开焦点测试" onClose={() => setOpen(false)}>
+              <button type="button" data-dialog-autofocus>
+                焦点按钮
+              </button>
+            </Modal>
+          </>
+        );
+      }
+      const { useState } = await import('react');
+      const user = userEvent.setup();
+      const modalView = render(<ModalReopenHarness />);
+      const dialog = screen.getByRole('dialog', { name: '重开焦点测试' });
+      expect(dialog.inert).toBe(false);
+      await user.click(screen.getByRole('button', { name: '关弹窗' }));
+      expect(dialog.inert).toBe(true);
+      await user.click(screen.getByRole('button', { name: '重开弹窗' }));
+      expect(dialog.inert).toBe(false);
+      expect(screen.getByRole('button', { name: '焦点按钮' })).toHaveFocus();
+      modalView.unmount();
+
+      // 2. Resurface exiting clone is inert AND CollectionCard unread dot transitions on the exact same DOM node
+      const api = await admin();
+      await api.createCollection(
+        {
+          id: crypto.randomUUID(),
+          document: {
+            schema_version: 1,
+            content: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: '同节点红点与惰性重现' }] }],
+            },
+          },
+          intent: '',
+          upload_ids: [],
+          project_ids: [],
+          tag_ids: [],
+        },
+        'same-node-dot',
+      );
+      const { items } = await api.listCollections();
+      const today = new Intl.DateTimeFormat('sv-SE').format(new Date());
+      vi.spyOn(api, 'getResurface').mockResolvedValue({
+        date: today,
+        items: [{ collection: items[0], reason: 'unclassified' }],
+      });
+      const hideSpy = vi.spyOn(api, 'hideResurfaceItem');
+
+      mount(api, '/inbox');
+      const section = within(await screen.findByRole('region', { name: '今日重现' }));
+      const resurfaceBtn = section.getByRole('button', { name: '今天不再显示' });
+      const resurfaceArticle = resurfaceBtn.closest('article')!;
+      await user.click(resurfaceBtn);
+      expect(resurfaceArticle).toHaveClass('is-hiding');
+      expect(resurfaceArticle.inert).toBe(true);
+      expect(hideSpy).toHaveBeenCalledTimes(1);
+
+      const mainCard = screen.getAllByText('同节点红点与惰性重现')
+        .map((el) => el.closest('article'))
+        .find((el): el is HTMLElement => Boolean(el?.classList.contains('sp-note')))!;
+      const dotBefore = within(mainCard).getByRole('img', { name: '未读' });
+
+      await user.click(within(mainCard).getByRole('button', { name: '更多操作' }));
+      await user.click(screen.getByRole('menuitem', { name: '标为已读' }));
+
+      // Exact same DOM node remains connected with .is-read class immediately on transition
+      expect(dotBefore.isConnected).toBe(true);
+      expect(dotBefore).toHaveClass('sp-unread-dot', 'is-read');
+      expect(within(mainCard).queryByRole('img', { name: '未读' })).not.toBeInTheDocument();
+
+      await waitFor(
+        () => {
+          expect(dotBefore.isConnected).toBe(false);
+        },
+        { timeout: 1000 },
+      );
+    } finally {
+      Object.defineProperty(Element.prototype, 'getAnimations', {
+        configurable: true,
+        value: prevGetAnimations,
+      });
+    }
   });
 });

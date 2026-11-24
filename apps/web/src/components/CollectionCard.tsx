@@ -18,9 +18,9 @@ import {
 import type { Attachment, Collection, CollectionSummary, SearchHit } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { useApi } from '../context/ApiContext';
-import { useAuth } from '../context/AuthContext';
 import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
 import { canAnimateMotion } from '../lib/motion';
 import {
   formatDateTime,
@@ -34,6 +34,18 @@ import { projectToneClass } from '../lib/projectTone';
 import { AttachmentGallery } from './AttachmentGallery';
 import { LinkPreviewCard } from './LinkPreviewCard';
 import { HighlightText } from './StateBlocks';
+
+const inFlightReadsBySession = new Map<number, number>();
+
+function adjustInFlightReads(generation: number, delta: number): number {
+  const next = Math.max(0, (inFlightReadsBySession.get(generation) ?? 0) + delta);
+  if (next === 0) {
+    inFlightReadsBySession.delete(generation);
+  } else {
+    inFlightReadsBySession.set(generation, next);
+  }
+  return next;
+}
 
 function shouldShowDistinctTitle(collection: CollectionSummary): boolean {
   const title = collection.display_title?.trim();
@@ -59,7 +71,6 @@ export function CollectionCard({
   timeStyle?: 'relative' | 'clock';
 }) {
   const api = useApi();
-  const { user } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const recordOpened = useRecordOpened();
@@ -67,44 +78,27 @@ export function CollectionCard({
   const queryClient = useQueryClient();
   const { openFollowUp } = useFollowUp();
 
-  const userIdRef = useRef<string | undefined>(user?.id);
-  userIdRef.current = user?.id;
-
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapRef = useRef<HTMLDivElement | null>(null);
   const moreBtnRef = useRef<HTMLButtonElement | null>(null);
-  const wasUnreadRef = useRef(!collection.read_at);
+  const isUnread = !collection.read_at;
+  const [prevUnread, setPrevUnread] = useState(isUnread);
   const [justRead, setJustRead] = useState(false);
-  const justReadTimerRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    const isNowUnread = !collection.read_at;
-    if (wasUnreadRef.current && !isNowUnread && canAnimateMotion()) {
+  if (prevUnread !== isUnread) {
+    setPrevUnread(isUnread);
+    if (prevUnread && !isUnread && canAnimateMotion()) {
       setJustRead(true);
-      if (justReadTimerRef.current !== null) {
-        window.clearTimeout(justReadTimerRef.current);
-      }
-      justReadTimerRef.current = window.setTimeout(() => {
-        justReadTimerRef.current = null;
-        setJustRead(false);
-      }, 180);
-    } else if (isNowUnread) {
-      if (justReadTimerRef.current !== null) {
-        window.clearTimeout(justReadTimerRef.current);
-        justReadTimerRef.current = null;
-      }
+    } else if (isUnread) {
       setJustRead(false);
     }
-    wasUnreadRef.current = isNowUnread;
-  }, [collection.read_at]);
+  }
 
   useEffect(() => {
-    return () => {
-      if (justReadTimerRef.current !== null) {
-        window.clearTimeout(justReadTimerRef.current);
-      }
-    };
-  }, []);
+    if (!justRead) return;
+    const timer = window.setTimeout(() => setJustRead(false), 160);
+    return () => window.clearTimeout(timer);
+  }, [justRead]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -140,8 +134,11 @@ export function CollectionCard({
 
   const patchTargetReadAt = (
     targetReadAt: string | undefined,
-    expectedCurrentReadAt?: string | undefined,
-    enforceMatch = false,
+    options?: {
+      expectedCurrentReadAt?: string | undefined;
+      enforceMatch?: boolean;
+      maxResourceVersion?: number;
+    },
   ) => {
     const patchList = (old: InfiniteListCache | undefined) => {
       if (!old || !Array.isArray(old.pages)) return old;
@@ -152,7 +149,15 @@ export function CollectionCard({
         const items = page.items.map((row) => {
           const item = 'collection' in row ? row.collection : row;
           if (item.id !== collection.id) return row;
-          if (enforceMatch && item.read_at !== expectedCurrentReadAt) return row;
+          if (
+            options?.maxResourceVersion !== undefined &&
+            item.resource_version > options.maxResourceVersion
+          ) {
+            return row;
+          }
+          if (options?.enforceMatch && item.read_at !== options.expectedCurrentReadAt) {
+            return row;
+          }
           pageTouched = true;
           const updatedItem: CollectionSummary = { ...item, read_at: targetReadAt };
           return 'collection' in row ? { ...row, collection: updatedItem } : updatedItem;
@@ -169,42 +174,76 @@ export function CollectionCard({
     queryClient.setQueriesData<InfiniteListCache>({ queryKey: ['collections-command'] }, patchList);
     queryClient.setQueryData<Collection>(['collection', collection.id], (old) => {
       if (!old) return old;
-      if (enforceMatch && old.read_at !== expectedCurrentReadAt) return old;
+      if (
+        options?.maxResourceVersion !== undefined &&
+        old.resource_version > options.maxResourceVersion
+      ) {
+        return old;
+      }
+      if (options?.enforceMatch && old.read_at !== options.expectedCurrentReadAt) return old;
       return { ...old, read_at: targetReadAt };
     });
   };
 
-  const toggleReadMutation = useMutation({
+  const toggleReadMutation = useMutation<
+    Collection,
+    unknown,
+    void,
+    {
+      capturedSession: AuthSessionSnapshot;
+      prevReadAt: string | undefined;
+      optimisticReadAt: string | undefined;
+    }
+  >({
     mutationFn: () => api.setReadState(collection.id, { read: !collection.read_at }),
     onMutate: async () => {
       setMenuOpen(false);
+      const capturedSession = captureAuthSession();
+      adjustInFlightReads(capturedSession.generation, 1);
+
       await queryClient.cancelQueries({ queryKey: ['collections'] });
       await queryClient.cancelQueries({ queryKey: ['project-collections'] });
       await queryClient.cancelQueries({ queryKey: ['collections-command'] });
       await queryClient.cancelQueries({ queryKey: ['collection', collection.id] });
 
-      const capturedUserId = userIdRef.current;
       const prevReadAt = collection.read_at;
       const optimisticReadAt = prevReadAt ? undefined : new Date().toISOString();
-      patchTargetReadAt(optimisticReadAt);
+      if (isSameAuthSession(capturedSession)) {
+        patchTargetReadAt(optimisticReadAt);
+      }
 
-      return { capturedUserId, prevReadAt, optimisticReadAt };
+      return { capturedSession, prevReadAt, optimisticReadAt };
     },
     onSuccess: (updated, _vars, context) => {
-      if (context?.capturedUserId && userIdRef.current !== context.capturedUserId) return;
-      patchTargetReadAt(updated.read_at);
-      queryClient.setQueryData(['collection', collection.id], updated);
-      void queryClient.invalidateQueries({ queryKey: ['collections'] });
-      void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      if (!isSameAuthSession(context?.capturedSession)) return;
+      patchTargetReadAt(updated.read_at, { maxResourceVersion: updated.resource_version });
+      queryClient.setQueryData<Collection>(['collection', collection.id], (existing) => {
+        if (!existing) return updated;
+        if (existing.resource_version > updated.resource_version) {
+          return existing;
+        }
+        return updated;
+      });
     },
     onError: (err, _vars, context) => {
-      if (context && (!context.capturedUserId || userIdRef.current === context.capturedUserId)) {
-        patchTargetReadAt(context.prevReadAt, context.optimisticReadAt, true);
-        void queryClient.invalidateQueries({ queryKey: ['collections'] });
-        void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      if (!context || !isSameAuthSession(context.capturedSession)) return;
+      patchTargetReadAt(context.prevReadAt, {
+        expectedCurrentReadAt: context.optimisticReadAt,
+        enforceMatch: true,
+      });
+      pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
+    },
+    onSettled: (_data, err, _vars, context) => {
+      if (!context) return;
+      const remaining = adjustInFlightReads(context.capturedSession.generation, -1);
+      if (!isSameAuthSession(context.capturedSession)) return;
+      if (err) {
         void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
       }
-      pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
+      if (remaining === 0) {
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      }
     },
   });
 
@@ -241,7 +280,6 @@ export function CollectionCard({
     onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
   });
 
-  const isUnread = !collection.read_at;
   const effectiveProjects = collection.projects.filter(
     (p) => p.decision === 'manual' || p.decision === 'confirmed' || p.decision === 'auto',
   );
@@ -291,11 +329,15 @@ export function CollectionCard({
             <ImageIcon size={13} strokeWidth={2.2} aria-hidden="true" />
           </span>
         )}
-        {isUnread ? (
-          <span className="sp-unread-dot" role="img" aria-label="未读" title="未读" />
-        ) : justRead ? (
-          <span className="sp-unread-dot is-read" aria-hidden="true" />
-        ) : null}
+        {(isUnread || justRead) && (
+          <span
+            className={`sp-unread-dot ${isUnread ? '' : 'is-read'}`}
+            role={isUnread ? 'img' : undefined}
+            aria-label={isUnread ? '未读' : undefined}
+            title={isUnread ? '未读' : undefined}
+            aria-hidden={isUnread ? undefined : 'true'}
+          />
+        )}
 
         {showOrgStatus &&
           (collection.organization_status === 'failed' ||

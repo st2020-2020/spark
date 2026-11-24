@@ -11,6 +11,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { LoginRequest, RegisterRequest, SessionResult, User } from '../api/types';
 import { isApiErrorCode } from '../api/errors';
 import { showAccountAppearance, type PaletteId, type ThemePref } from '../lib/appearance';
+import { advanceAuthSession } from '../lib/authSession';
 import { clearUserDrafts } from '../lib/drafts';
 import { useApi } from './ApiContext';
 import { useToast } from './ToastContext';
@@ -41,7 +42,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const api = useApi();
-  const { pushToast } = useToast();
+  const { pushToast, clearAllToasts } = useToast();
   const activeToken = useRef<string | null>(null);
   const exitingToken = useRef<string | null>(null);
   const queryClient = useQueryClient();
@@ -73,7 +74,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (currentUserIdRef.current && currentUserIdRef.current !== session.user.id) {
         appearanceRequest.current = null;
         setAppearancePending(false);
+        clearAllToasts();
         queryClient.clear();
+      }
+      if (currentUserIdRef.current !== session.user.id) {
+        advanceAuthSession(session.user.id);
       }
       sessionGeneration.current += 1;
       currentUserIdRef.current = session.user.id;
@@ -91,13 +96,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         sessionError: null,
       });
     },
-    [api, queryClient],
+    [api, clearAllToasts, queryClient],
   );
 
   const clearSessionState = useCallback(
     (message: string | null = null) => {
       sessionGeneration.current += 1;
       currentUserIdRef.current = null;
+      advanceAuthSession(null);
+      clearAllToasts();
       activeToken.current = null;
       api.setCsrfToken(null);
       appearanceRequest.current = null;
@@ -115,8 +122,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         sessionError: message,
       });
     },
-    [api, queryClient],
+    [api, clearAllToasts, queryClient],
   );
+
+  useEffect(() => {
+    return () => {
+      advanceAuthSession(null);
+    };
+  }, []);
 
   useEffect(() => {
     api.setUnauthorizedHandler(() => {
@@ -155,21 +168,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(
     async (body: LoginRequest) => {
       const session = await api.login(body);
+      clearAllToasts();
       queryClient.clear();
+      advanceAuthSession(session.user.id);
       applySession(session);
       return session;
     },
-    [api, applySession, queryClient],
+    [api, applySession, clearAllToasts, queryClient],
   );
 
   const register = useCallback(
     async (body: RegisterRequest) => {
       const session = await api.register(body);
+      clearAllToasts();
       queryClient.clear();
+      advanceAuthSession(session.user.id);
       applySession(session);
       return session;
     },
-    [api, applySession, queryClient],
+    [api, applySession, clearAllToasts, queryClient],
   );
 
   const logout = useCallback(

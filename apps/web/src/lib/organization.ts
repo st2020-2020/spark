@@ -1018,6 +1018,7 @@ export async function decideCollectionProjectSafely(
     projectId: string;
     action: 'include' | 'exclude';
     requireSuggested?: boolean;
+    requireSuggestionSnapshot?: boolean;
     expectedSuggestion?: ExpectedProjectSuggestion;
     idempotencyKey?: string;
   },
@@ -1027,7 +1028,10 @@ export async function decideCollectionProjectSafely(
     throw new StaleSuggestionError('该收藏已移入回收站，列表已为你同步最新状态。', fresh);
   }
   const assoc = fresh.projects.find((p) => p.project_id === params.projectId);
-  if (params.requireSuggested) {
+  if (params.requireSuggestionSnapshot && !params.expectedSuggestion) {
+    throw new StaleSuggestionError('当前建议缺少完整版本快照，已为你同步最新建议，请核对后再操作。', fresh);
+  }
+  if (params.requireSuggested || params.requireSuggestionSnapshot) {
     if (!assoc || assoc.decision !== 'suggested') {
       throw new StaleSuggestionError('该条建议已在其他页面处理完成，列表已为你同步最新状态。', fresh);
     }
@@ -1039,9 +1043,11 @@ export async function decideCollectionProjectSafely(
       throw new StaleSuggestionError('项目建议已更新，请核对最新建议与依据后再操作。', fresh);
     }
   }
-  const expected = params.requireSuggested
-    ? (params.expectedSuggestion ?? toExpectedSuggestion(assoc))
-    : undefined;
+  const expected = params.requireSuggestionSnapshot
+    ? params.expectedSuggestion
+    : params.requireSuggested
+      ? (params.expectedSuggestion ?? toExpectedSuggestion(assoc))
+      : undefined;
   return api.updateProjectDecisions(
     params.collectionId,
     {

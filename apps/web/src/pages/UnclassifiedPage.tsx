@@ -5,6 +5,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
 import type { CollectionSummary, ExpectedProjectSuggestion } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
 import {
   pendingSuggestionOptions,
   decideCollectionProjectSafely,
@@ -18,13 +19,11 @@ import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
-import { useAuth } from '../context/AuthContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { useToast } from '../context/ToastContext';
 
 export function UnclassifiedPage() {
   const api = useApi();
-  const { user } = useAuth();
   const { pushToast } = useToast();
   const { pendingSuggestionsCount, markSuggestionPromptHandled } = useOrganizationEvents();
   const queryClient = useQueryClient();
@@ -43,16 +42,24 @@ export function UnclassifiedPage() {
 
   const projectsQuery = useProjectChoices();
 
-  const decideMutation = useMutation({
-    mutationFn: (params: {
+  const decideMutation = useMutation<
+    Awaited<ReturnType<typeof decideCollectionProjectSafely>>,
+    unknown,
+    {
       collectionId: string;
       projectId: string;
       action: 'include' | 'exclude';
       requireSuggested?: boolean;
+      requireSuggestionSnapshot?: boolean;
       expectedSuggestion?: ExpectedProjectSuggestion;
-      accountId?: string;
-    }) => decideCollectionProjectSafely(api, params),
-    onSuccess: (updated, vars) => {
+    },
+    { capturedSession: AuthSessionSnapshot }
+  >({
+    onMutate: () => ({ capturedSession: captureAuthSession() }),
+    mutationFn: (params) => decideCollectionProjectSafely(api, params),
+    onSuccess: (updated, vars, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
+      const capturedSession = context.capturedSession;
       setActionError(null);
       markSuggestionPromptHandled(vars.collectionId);
       queryClient.setQueryData(['collection', vars.collectionId], updated);
@@ -63,9 +70,10 @@ export function UnclassifiedPage() {
           ? {
               actionLabel: '撤销',
               onAction: async () => {
-                if (vars.accountId && user?.id && user.id !== vars.accountId) return;
+                if (!isSameAuthSession(capturedSession)) return;
                 try {
                   const restored = await undoCollectionProjectReceipt(api, updated.id, receipt);
+                  if (!isSameAuthSession(capturedSession)) return;
                   queryClient.setQueryData(['collection', restored.id], restored);
                   void queryClient.invalidateQueries({ queryKey: ['collections'], refetchType: 'none' });
                   void queryClient.invalidateQueries({ queryKey: ['collections', 'unclassified'] });
@@ -74,6 +82,7 @@ export function UnclassifiedPage() {
                   void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
                   pushToast({ message: '已撤销归类操作' });
                 } catch (undoErr) {
+                  if (!isSameAuthSession(capturedSession)) return;
                   pushToast({ message: getFriendlyErrorMessage(undoErr), tone: 'error' });
                 }
               },
@@ -88,7 +97,8 @@ export function UnclassifiedPage() {
         void queryClient.invalidateQueries({ queryKey: ['project-collections', vars.projectId] });
       }
     },
-    onError: (err, vars) => {
+    onError: (err, vars, context) => {
+      if (!isSameAuthSession(context?.capturedSession)) return;
       if (err instanceof StaleSuggestionError) {
         markSuggestionPromptHandled(vars.collectionId);
         queryClient.setQueryData(['collection', vars.collectionId], err.freshCollection);
@@ -135,8 +145,8 @@ export function UnclassifiedPage() {
                       projectId: sug.project_id,
                       action: 'include',
                       requireSuggested: true,
+                      requireSuggestionSnapshot: true,
                       expectedSuggestion: toExpectedSuggestion(sug),
-                      accountId: user?.id,
                     })
                   }
                 >
@@ -153,8 +163,8 @@ export function UnclassifiedPage() {
                       projectId: sug.project_id,
                       action: 'exclude',
                       requireSuggested: true,
+                      requireSuggestionSnapshot: true,
                       expectedSuggestion: toExpectedSuggestion(sug),
-                      accountId: user?.id,
                     })
                   }
                 >
@@ -183,7 +193,6 @@ export function UnclassifiedPage() {
                       collectionId: col.id,
                       projectId: p.id,
                       action: 'include',
-                      accountId: user?.id,
                     })
                   }
                 >
@@ -220,7 +229,6 @@ export function UnclassifiedPage() {
                   collectionId: col.id,
                   projectId: chosenId,
                   action: 'include',
-                  accountId: user?.id,
                 })
               }
             >
