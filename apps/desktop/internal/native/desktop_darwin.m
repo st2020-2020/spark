@@ -245,6 +245,18 @@ void sparkPositionPanel(void *pointer) {
     }
 }
 
+// Keep the menu-bar anchor stationary as the sheet grows downwards.
+void sparkResizePanel(void *pointer, int height) {
+    NSWindow *window = (__bridge NSWindow *)pointer;
+    if (!window) return;
+    NSRect frame = window.frame;
+    frame.origin.y = NSMaxY(frame) - height;
+    frame.size = NSMakeSize(460, height);
+    if (NSEqualRects(frame, window.frame)) return;
+    BOOL animate = window.isVisible && !NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+    [window setFrame:frame display:YES animate:animate];
+}
+
 int sparkRequestScreenAccess(void) { return CGRequestScreenCaptureAccess(); }
 int sparkCopyImage(void *ptr, size_t length) {
  @autoreleasepool {

@@ -7,14 +7,14 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
 } from 'react';
-import { BookOpen, RotateCw } from 'lucide-react';
+import { BookOpen, Check, Copy, Link2, RotateCw } from 'lucide-react';
 import {
   bridge,
   message,
   type State,
   type Request,
   type Detail,
-  plain,
+  detailText,
   phase,
 } from './bridge';
 
@@ -85,7 +85,7 @@ export function Login({
     if (!panel || !form.current) return;
     const element = form.current;
     const observer = new ResizeObserver(() => {
-      const height = Math.ceil(element.getBoundingClientRect().height) + 10;
+      const height = Math.ceil(element.getBoundingClientRect().height);
       void bridge()('window/resize?height=' + height, 'POST').catch(() => {});
     });
     observer.observe(element);
@@ -216,10 +216,12 @@ export function ImageView({
 }) {
   const [src, setSrc] = useState(''),
     [failed, setFailed] = useState(false),
+    [loaded, setLoaded] = useState(false),
     [seq, retry] = useState(0);
   useEffect(() => {
     const ctrl = new AbortController();
     setFailed(false);
+    setLoaded(false);
     setSrc('');
     req<{ mime: string; data: string }>(
       'image/' + id + (owner ? '?outbox=' + owner : ''),
@@ -233,8 +235,15 @@ export function ImageView({
       });
     return () => ctrl.abort();
   }, [req, id, owner, seq]);
-  return src ? (
-    <img className="attachment" alt={name} src={src} />
+  return src && !failed ? (
+    <img
+      className="attachment"
+      data-loaded={loaded}
+      alt={name}
+      src={src}
+      onLoad={() => setLoaded(true)}
+      onError={() => setFailed(true)}
+    />
   ) : failed ? (
     <button onClick={() => retry(seq + 1)}>
       <RotateCw />
@@ -244,9 +253,56 @@ export function ImageView({
     <span className="muted">正在读取图片…</span>
   );
 }
+function CopyAction({
+  req,
+  link = false,
+  text,
+  onError,
+}: {
+  req: Request;
+  link?: boolean;
+  text: string;
+  onError: (error: string) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const copyRequest = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      copyRequest.current?.abort();
+      clearTimeout(timer.current);
+    },
+    [],
+  );
+  async function copy() {
+    copyRequest.current?.abort();
+    const request = new AbortController();
+    copyRequest.current = request;
+    try {
+      await req('clipboard/copy', 'POST', { text }, request.signal);
+      if (request.signal.aborted) return;
+      onError('');
+      setCopied(true);
+      clearTimeout(timer.current);
+      timer.current = setTimeout(() => setCopied(false), 1400);
+    } catch (e) {
+      if (!request.signal.aborted) onError(message(e));
+    }
+  }
+  const Icon = copied ? Check : link ? Link2 : Copy;
+  return (
+    <button onClick={copy}>
+      <Icon />
+      <span aria-live="polite">
+        {copied ? '已复制' : link ? '复制链接' : '复制正文'}
+      </span>
+    </button>
+  );
+}
 export function Preview({ req, id }: { req: Request; id: string }) {
   const [d, set] = useState<Detail>(),
     [err, bad] = useState(''),
+    [actionError, setActionError] = useState(''),
     [version, retry] = useState(0);
   useEffect(() => {
     const c = new AbortController();
@@ -269,6 +325,7 @@ export function Preview({ req, id }: { req: Request; id: string }) {
   if (!d) return <p role="status">正在读取…</p>;
   const item = d.item,
     col = d.collection;
+  const { url, body } = detailText(d);
   return (
     <article className="detail">
       <small>
@@ -277,12 +334,8 @@ export function Preview({ req, id }: { req: Request; id: string }) {
       <h2>
         {col?.display_title || item?.raw_text.split('\n')[0] || '图片收藏'}
       </h2>
-      <p className="multiline">
-        {item?.raw_text || plain(col?.document?.content) || col?.plain_text}
-      </p>
-      {(item?.original_url || col?.original_url) && (
-        <p className="linktext">{item?.original_url || col?.original_url}</p>
-      )}
+      <p className="multiline">{body}</p>
+      {url && <p className="linktext">{url}</p>}
       {(col?.attachments || item?.attachments)?.map((f) => (
         <ImageView
           key={f.id}
@@ -300,16 +353,25 @@ export function Preview({ req, id }: { req: Request; id: string }) {
       )}
       {col?.image_notes?.map((n, i) => <p key={i}>{n.text}</p>)}
       {item && <Notice text={item.last_error_message} />}
-      {col && (
-        <button
-          onClick={() =>
-            req('window/web?id=' + id, 'POST').catch((e) => bad(message(e)))
-          }
-        >
-          <BookOpen />
-          在网页版打开 ↗
-        </button>
-      )}
+      <Notice text={actionError} />
+      <div className="detail-actions">
+        {body && <CopyAction req={req} text={body} onError={setActionError} />}
+        {url && (
+          <CopyAction req={req} link text={url} onError={setActionError} />
+        )}
+        {col && (
+          <button
+            onClick={() =>
+              req('window/web?id=' + id, 'POST').catch((e) =>
+                setActionError(message(e)),
+              )
+            }
+          >
+            <BookOpen />
+            在网页版打开 ↗
+          </button>
+        )}
+      </div>
     </article>
   );
 }

@@ -178,20 +178,14 @@ export function Capture({
         editor.current.style.height =
           Math.min(220, editor.current.scrollHeight) + 'px';
     }
-  }, [text, search, expanded]);
+  }, [text, search, signingIn, expanded, editor]);
   useLayoutEffect(() => {
     const el = root.current;
-    const wrapper = el?.parentElement;
-    if (!floating || !el || !wrapper) return;
+    if (!floating || !el) return;
     const resize = () => {
-      const border = el.offsetHeight - el.clientHeight;
-      const cap = parseFloat(getComputedStyle(el).maxHeight);
-      const visible = el.getBoundingClientRect().height;
-      const content = Math.max(visible, el.scrollHeight + border);
-      const outerSpacing = wrapper.getBoundingClientRect().height - visible;
-      const height = Math.ceil(
-        Math.min(content, Number.isFinite(cap) ? cap : content) + outerSpacing,
-      );
+      // The layout box already includes the CSS height cap. Animated children
+      // can temporarily extend scrollHeight beyond the actual paper edge.
+      const height = el.offsetHeight;
       if (!height || height === requestedHeight.current) return;
       requestedHeight.current = height;
       // While the panel reopens, a late compact size must not overwrite the error layout.
@@ -315,6 +309,10 @@ export function Capture({
     );
     return () => clearTimeout(timeout);
   }, [last]);
+  function leaveLogin() {
+    setLoginOpen(false);
+    requestAnimationFrame(() => editor.current?.focus());
+  }
   function leaveSearch() {
     find(false);
     requestAnimationFrame(() => editor.current?.focus());
@@ -333,7 +331,7 @@ export function Capture({
         if (e.nativeEvent.isComposing || e.keyCode === 229 || ime.current)
           return;
         if (signingIn) {
-          if (e.key === 'Escape') setLoginOpen(false);
+          if (e.key === 'Escape') leaveLogin();
           return;
         }
         if (e.metaKey && e.key.toLowerCase() === 'k') {
@@ -382,14 +380,8 @@ export function Capture({
     >
       {signingIn ? (
         <>
-          <Login
-            state={state}
-            onSuccess={() => {
-              setLoginOpen(false);
-              requestAnimationFrame(() => editor.current?.focus());
-            }}
-          />
-          <button className="sub" onClick={() => setLoginOpen(false)}>
+          <Login state={state} onSuccess={leaveLogin} />
+          <button className="sub" onClick={leaveLogin}>
             返回随手记
           </button>
         </>
@@ -422,12 +414,24 @@ export function Capture({
           }}
         >
           <div className="tape" aria-hidden="true" />
+          {floating && (
+            <div className="panel-top">
+              {status && <small role="status">{status}</small>}
+              <button
+                onClick={() =>
+                  req('window/main', 'POST').catch((e) => bad(message(e)))
+                }
+              >
+                打开手帐 <kbd>⌘O</kbd>
+              </button>
+            </div>
+          )}
           <textarea
             ref={editor}
             aria-label="记录灵感"
             className="capture-editor resize-none"
             placeholder="记下想法、粘贴链接或截图…"
-            rows={expanded ? 3 : 1}
+            rows={floating ? 1 : expanded ? 3 : 1}
             value={text}
             disabled={busy}
             onCompositionStart={() => {
@@ -550,6 +554,40 @@ export function Capture({
               placeholder="补一句用途，方便归类…"
             />
           )}
+          {text.length + intent.length > 40000 && (
+            <small>{Array.from(text + intent).length} / 50,000</small>
+          )}
+          {last && Date.now() - last.at < 3000 && (
+            <button
+              className="sub"
+              onClick={() =>
+                inline
+                  ? inline.openRecord(last.id)
+                  : req('window/main?id=' + last.id, 'POST')
+              }
+            >
+              <NotebookPen />
+              本机已收下 · 查看刚才的记录 <ArrowUpRight />
+            </button>
+          )}
+          <Notice text={err}>
+            {err.includes('屏幕录制') && (
+              <button
+                type="button"
+                onClick={() =>
+                  req('window/settings', 'POST').catch((e) => bad(message(e)))
+                }
+              >
+                前往系统设置
+              </button>
+            )}
+          </Notice>
+          {floating && state.session.expired && (
+            <div className="sub">
+              同步已暂停{' '}
+              <button onClick={() => setLoginOpen(true)}>重新登录</button>
+            </div>
+          )}
           {expanded && (
             <div className="toolbar">
               {floating && (
@@ -608,52 +646,6 @@ export function Capture({
               >
                 {busy ? '保存中' : '收下'} <kbd>⌘↵</kbd>
               </button>
-            </div>
-          )}
-          {text.length + intent.length > 40000 && (
-            <small>{Array.from(text + intent).length} / 50,000</small>
-          )}
-          {last && Date.now() - last.at < 3000 && (
-            <button
-              className="sub"
-              onClick={() =>
-                inline
-                  ? inline.openRecord(last.id)
-                  : req('window/main?id=' + last.id, 'POST')
-              }
-            >
-              <NotebookPen />
-              本机已收下 · 查看刚才的记录 <ArrowUpRight />
-            </button>
-          )}
-          {floating && (
-            <div className="panel-footer">
-              {status && <small>{status}</small>}
-              <button
-                onClick={() =>
-                  req('window/main', 'POST').catch((e) => bad(message(e)))
-                }
-              >
-                打开手帐 <kbd>⌘O</kbd>
-              </button>
-            </div>
-          )}
-          <Notice text={err}>
-            {err.includes('屏幕录制') && (
-              <button
-                type="button"
-                onClick={() =>
-                  req('window/settings', 'POST').catch((e) => bad(message(e)))
-                }
-              >
-                前往系统设置
-              </button>
-            )}
-          </Notice>
-          {floating && state.session.expired && (
-            <div className="sub">
-              同步已暂停{' '}
-              <button onClick={() => setLoginOpen(true)}>重新登录</button>
             </div>
           )}
           {drag && (

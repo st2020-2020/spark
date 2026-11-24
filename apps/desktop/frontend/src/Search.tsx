@@ -9,7 +9,7 @@ import {
   type Detail,
   message,
   phase,
-  plain,
+  detailText,
 } from './bridge';
 import { Tool, Notice, Preview } from './shared';
 export function useSearch(req: Request, q: string, enabled = true) {
@@ -188,12 +188,8 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
     if (!hit) return;
     try {
       const d = await req<Detail>('collections/' + hit.id);
-      const text =
-        d.item?.original_url ||
-        d.collection?.original_url ||
-        d.item?.raw_text ||
-        plain(d.collection?.document?.content) ||
-        d.collection?.plain_text;
+      const { url, body } = detailText(d);
+      const text = url || body;
       if (!text) {
         await req('clipboard/copy-image?id=' + hit.id, 'POST');
       } else await req('clipboard/copy', 'POST', { text });
@@ -284,7 +280,7 @@ export function Search({ req, back }: { req: Request; back: () => void }) {
             show(true);
           }}
         />
-        {preview && hit && <Preview req={req} id={hit.id} />}
+        {preview && hit && <Preview key={hit.id} req={req} id={hit.id} />}
       </div>
       <footer>
         <button disabled={!hit} onClick={() => show(!preview)}>

@@ -9,7 +9,7 @@ import {
 } from '@testing-library/react';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { Book } from '../src/Book';
-import { Login } from '../src/shared';
+import { Login, Preview } from '../src/shared';
 import { Capture } from '../src/Panel';
 import type { Request, State } from '../src/bridge';
 
@@ -44,6 +44,14 @@ function host() {
 }
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  // jsdom does not implement native dialog focus or the Escape cancel event.
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+    this.querySelector('button')?.focus();
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
   vi.stubGlobal('matchMedia', () => ({ matches: true }));
   vi.stubGlobal(
     'ResizeObserver',
@@ -272,10 +280,20 @@ it('截屏权限提示随浮窗扩高，提示内可以打开系统设置，重�
   expect(req).toHaveBeenCalledWith('window/screenshot', 'POST');
   const panel = camera.closest('.panel')!;
   // jsdom has no layout. Model the taller content reported by WebKit after the event.
-  Object.defineProperty(panel, 'scrollHeight', { configurable: true, value: 252 });
-  fireEvent(window, new CustomEvent('spark-error', {
-    detail: '需要开启系统“屏幕录制”权限才能使用选区截屏。',
-  }));
+  Object.defineProperty(panel, 'offsetHeight', {
+    configurable: true,
+    value: 252,
+  });
+  Object.defineProperty(panel, 'scrollHeight', {
+    configurable: true,
+    value: 256,
+  });
+  fireEvent(
+    window,
+    new CustomEvent('spark-error', {
+      detail: '需要开启系统“屏幕录制”权限才能使用选区截屏。',
+    }),
+  );
   const notice = await screen.findByRole('status');
   expect(notice.textContent).toContain('屏幕录制');
   expect(req).toHaveBeenCalledWith('window/resize?height=252', 'POST');
@@ -283,7 +301,160 @@ it('截屏权限提示随浮窗扩高，提示内可以打开系统设置，重�
   expect(req).toHaveBeenCalledWith('window/settings', 'POST');
   fireEvent.click(camera);
   expect(screen.queryByRole('status')).toBeNull();
-  fireEvent(window, new CustomEvent('spark-error', { detail: '系统截屏未完成' }));
-  expect((await screen.findByRole('status')).textContent).toBe('系统截屏未完成');
+  fireEvent(
+    window,
+    new CustomEvent('spark-error', { detail: '系统截屏未完成' }),
+  );
+  expect((await screen.findByRole('status')).textContent).toBe(
+    '系统截屏未完成',
+  );
   expect(screen.queryByRole('button', { name: '前往系统设置' })).toBeNull();
+});
+
+it('手帐搜索分层退出，重选当前侧栏也能从搜索或详情返回', async () => {
+  const req = host();
+  const searchHost: Request = (path, ...args) => {
+    if (path.startsWith('search/local'))
+      return Promise.resolve([
+        {
+          id: 'one',
+          display_title: '步道',
+          snippet: '参考',
+          sync_state: 'synced',
+        },
+      ] as never);
+    if (path === 'collections/one')
+      return Promise.resolve({
+        collection: { display_title: '步道', plain_text: '河岸参考' },
+      } as never);
+    return (req as Request)(path, ...args);
+  };
+  render(<Book req={searchHost} state={state} refresh={() => {}} />);
+  const input = screen.getByRole('textbox', {
+    name: '搜索手帐',
+  }) as HTMLInputElement;
+  const inbox = screen.getByRole('button', { name: '收件箱' });
+  input.focus();
+  fireEvent.change(input, { target: { value: '河岸' } });
+  fireEvent.keyDown(input, { key: 'Escape', isComposing: true });
+  expect(input.value).toBe('河岸');
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(input.value).toBe('');
+  expect(document.activeElement).toBe(input);
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(document.activeElement).not.toBe(input);
+  fireEvent.change(input, { target: { value: '参考' } });
+  await screen.findByRole('heading', { name: '搜索结果' });
+  fireEvent.click(inbox);
+  expect(screen.getByRole('heading', { name: '收件箱' })).toBeTruthy();
+  fireEvent.change(input, { target: { value: '参考' } });
+  fireEvent.click(await screen.findByRole('button', { name: /步道/ }));
+  await screen.findByRole('heading', { name: '步道' });
+  fireEvent.click(inbox);
+  expect(input.value).toBe('');
+  expect(screen.getByRole('heading', { name: '收件箱' })).toBeTruthy();
+});
+
+it('详情分别复制链接与正文，仅在写入成功时短暂确认', async () => {
+  const req = host();
+  const detailHost: Request = (path, ...args) =>
+    path === 'collections/one'
+      ? Promise.resolve({
+          collection: {
+            display_title: '参考',
+            original_url: 'https://example.test/',
+            plain_text: '河岸参考',
+          },
+        } as never)
+      : (req as Request)(path, ...args);
+  render(<Preview req={detailHost} id="one" />);
+  const body = await screen.findByRole('button', { name: '复制正文' });
+  const link = screen.getByRole('button', { name: '复制链接' });
+  req.mockRejectedValueOnce(new Error('无法复制'));
+  fireEvent.click(link);
+  await screen.findByText('无法复制');
+  expect(screen.queryByText('已复制')).toBeNull();
+  fireEvent.click(link);
+  await screen.findByRole('button', { name: '已复制' });
+  expect(req).toHaveBeenCalledWith(
+    'clipboard/copy',
+    'POST',
+    { text: 'https://example.test/' },
+    expect.any(AbortSignal),
+  );
+  fireEvent.click(body);
+  await waitFor(() =>
+    expect(screen.getAllByRole('button', { name: '已复制' })).toHaveLength(2),
+  );
+  expect(req).toHaveBeenCalledWith(
+    'clipboard/copy',
+    'POST',
+    { text: '河岸参考' },
+    expect.any(AbortSignal),
+  );
+  await screen.findByRole('button', { name: '复制正文' }, { timeout: 2400 });
+});
+
+it('两种确认操作均从取消开始，Esc 恢复入口焦点和原稿', async () => {
+  const req = host();
+  const item = {
+    id: 'draft',
+    raw_text: '画册参考',
+    state: 'needs_review',
+    project_ids: [],
+    tag_ids: [],
+  };
+  const draftHost: Request = (path, ...args) => {
+    if (path === 'outbox') return Promise.resolve([item] as never);
+    if (path === 'collections/draft') return Promise.resolve({ item } as never);
+    return (req as Request)(path, ...args);
+  };
+  render(<Book req={draftHost} state={state} refresh={() => {}} />);
+  fireEvent.click(await screen.findByRole('button', { name: /画册参考/ }));
+  for (const label of ['删除本地稿', '断开此设备']) {
+    if (label === '断开此设备')
+      fireEvent.click(screen.getByRole('button', { name: /设备与外观/ }));
+    const trigger = await screen.findByRole('button', { name: label });
+    fireEvent.click(trigger);
+    const cancel = screen.getByRole('button', { name: '取消' });
+    expect(document.activeElement).toBe(cancel);
+    fireEvent(
+      screen.getByRole('alertdialog'),
+      new Event('cancel', { cancelable: true }),
+    );
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  }
+  expect(
+    req.mock.calls.some(
+      ([p, m]) => p === 'session/disconnect' || m === 'DELETE',
+    ),
+  ).toBe(false);
+});
+
+it('手动同步等待刷新完成，期间不能重复触发', async () => {
+  let finish: (() => void) | undefined;
+  const req = host();
+  const syncHost: Request = (path, ...args) =>
+    path === 'sync/now'
+      ? new Promise((resolve) => {
+          finish = () => resolve(undefined as never);
+        })
+      : (req as Request)(path, ...args);
+  // An expired session skips the automatic refresh on mount.
+  render(
+    <Book
+      state={{ ...state, session: { ...state.session, expired: true } }}
+      req={syncHost}
+      refresh={() => {}}
+    />,
+  );
+  const sync = screen.getByRole('button', {
+    name: '立即同步',
+  }) as HTMLButtonElement;
+  fireEvent.click(sync);
+  expect(sync.disabled).toBe(true);
+  expect(sync.getAttribute('aria-busy')).toBe('true');
+  finish!();
+  await waitFor(() => expect(sync.disabled).toBe(false));
 });

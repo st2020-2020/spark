@@ -90,6 +90,16 @@ export function plain(n?: DocNode): string {
     ''
   );
 }
+export function detailText(d: Detail) {
+  return {
+    body:
+      d.item?.raw_text ||
+      plain(d.collection?.document?.content) ||
+      d.collection?.plain_text ||
+      '',
+    url: d.item?.original_url || d.collection?.original_url || '',
+  };
+}
 export type Request = <T>(
   path: string,
   method?: string,

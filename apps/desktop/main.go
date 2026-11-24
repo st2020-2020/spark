@@ -271,7 +271,7 @@ func run() error {
 			if e != nil {
 				return e
 			}
-			application.InvokeAsync(func() { panel.SetSize(460, min(560, max(n, 80))) })
+			application.InvokeAsync(func() { native.ResizePanel(panel.NativeWindow(), min(560, max(n, 80))) })
 		}
 		return nil
 	}

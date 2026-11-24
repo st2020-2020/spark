@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useMemo } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useMemo } from 'react';
 import {
   Archive,
   ArrowLeft,
@@ -74,6 +74,20 @@ function EntryCard({
     </button>
   );
 }
+function SyncTool({ busy, onClick }: { busy: boolean; onClick: () => void }) {
+  const [turning, setTurning] = useState(false);
+  return (
+    <Tool label="立即同步" aria-busy={busy} disabled={busy} onClick={onClick}>
+      <RefreshCw
+        className={busy || turning ? 'spinning' : undefined}
+        onAnimationStart={() => setTurning(true)}
+        onAnimationIteration={() => {
+          if (!busy) setTurning(false);
+        }}
+      />
+    </Tool>
+  );
+}
 type Props = { state: State; req: Request; refresh: () => void };
 export function Book({ state, req, refresh }: Props) {
   const [tab, tabTo] = useState('inbox'),
@@ -94,6 +108,7 @@ export function Book({ state, req, refresh }: Props) {
     [cursor, next] = useState(''),
     [rev, update] = useState(0),
     [confirm, ask] = useState(''),
+    [syncing, setSyncing] = useState(false),
     [working, work] = useState(false);
   const editor = useRef<HTMLTextAreaElement>(null);
   const [focusRequest, requestFocus] = useState(0);
@@ -129,7 +144,23 @@ export function Book({ state, req, refresh }: Props) {
   // Older sessions may serialize a missing expiry as Go’s zero time.
   const expiresAt = Date.parse(state.session.expires_at ?? '');
   const count = Object.values(state.counts).reduce((a, b) => a + (b || 0), 0);
+  const dialog = useRef<HTMLDialogElement>(null);
+  useLayoutEffect(() => {
+    if (confirm) dialog.current?.showModal();
+  }, [confirm]);
+  const confirmTrigger = useRef<HTMLButtonElement>(null);
+  function requestConfirmation(action: string, trigger: HTMLButtonElement) {
+    bad('');
+    confirmTrigger.current = trigger;
+    ask(action);
+  }
+  function cancelConfirmation() {
+    dialog.current?.close();
+    ask('');
+    confirmTrigger.current?.focus();
+  }
   function nav(t: string) {
+    ask('');
     tabTo(t);
     open('');
     type('');
@@ -154,7 +185,13 @@ export function Book({ state, req, refresh }: Props) {
     const change = () => update((r) => r + 1),
       select = (e: Event) => open((e as CustomEvent).detail);
     const key = (e: KeyboardEvent) => {
-      if (!e.metaKey || e.isComposing || e.keyCode === 229) return;
+      if (
+        dialog.current?.open ||
+        !e.metaKey ||
+        e.isComposing ||
+        e.keyCode === 229
+      )
+        return;
       if (e.key === '\\') {
         e.preventDefault();
         collapse((v) => !v);
@@ -266,7 +303,7 @@ export function Book({ state, req, refresh }: Props) {
     }
   }
   async function sync() {
-    work(true);
+    setSyncing(true);
     bad('');
     try {
       await req('sync/now', 'POST');
@@ -276,7 +313,7 @@ export function Book({ state, req, refresh }: Props) {
       bad(message(e));
       off(true);
     } finally {
-      work(false);
+      setSyncing(false);
     }
   }
   useEffect(() => {
@@ -459,6 +496,19 @@ export function Book({ state, req, refresh }: Props) {
                 value={q}
                 placeholder="搜索手帐"
                 aria-label="搜索手帐"
+                onKeyDown={(e) => {
+                  if (
+                    e.key !== 'Escape' ||
+                    ime.current ||
+                    e.nativeEvent.isComposing ||
+                    e.keyCode === 229
+                  )
+                    return;
+                  e.preventDefault();
+                  open('');
+                  if (q) clear();
+                  else e.currentTarget.blur();
+                }}
                 onCompositionStart={() => (ime.current = true)}
                 onCompositionEnd={(e) => {
                   ime.current = false;
@@ -478,9 +528,7 @@ export function Book({ state, req, refresh }: Props) {
                 <kbd aria-hidden="true">⌘K</kbd>
               )}
             </div>
-            <Tool label="立即同步" disabled={working} onClick={sync}>
-              <RefreshCw />
-            </Tool>
+            <SyncTool busy={syncing || !!state.counts.syncing} onClick={sync} />
             {status && (
               <button
                 className="sync-status"
@@ -494,12 +542,17 @@ export function Book({ state, req, refresh }: Props) {
           </header>
           <main className="journal">
             <div className="column">
-              <Notice text={err || error} />
+              {!confirm && <Notice text={err || error} />}
               {confirm && (
-                <div
+                <dialog
+                  ref={dialog}
                   role="alertdialog"
                   aria-label="确认操作"
                   className="confirmation"
+                  onCancel={(e) => {
+                    e.preventDefault();
+                    if (!working) cancelConfirmation();
+                  }}
                 >
                   <strong>
                     {confirm === 'disconnect'
@@ -513,7 +566,12 @@ export function Book({ state, req, refresh }: Props) {
                         : '断开后，这台 Mac 需要重新登录才能继续使用 Spark。'
                       : '本机原文和暂存图片会一并删除。'}
                   </p>
-                  <button autoFocus onClick={() => ask('')}>
+                  <Notice text={err} />
+                  <button
+                    autoFocus
+                    disabled={working}
+                    onClick={cancelConfirmation}
+                  >
                     取消
                   </button>
                   <button
@@ -523,7 +581,7 @@ export function Book({ state, req, refresh }: Props) {
                   >
                     确认{confirm === 'disconnect' ? '断开' : '删除'}
                   </button>
-                </div>
+                </dialog>
               )}
               <section hidden={tab !== 'inbox' || !!detail || !!query}>
                 <div className="journal-heading">
@@ -545,7 +603,7 @@ export function Book({ state, req, refresh }: Props) {
                 />
               </section>
               {detail ? (
-                <>
+                <div className="journal-view" key={detail}>
                   <button onClick={() => open('')}>
                     <ArrowLeft />
                     返回{title}
@@ -556,22 +614,18 @@ export function Book({ state, req, refresh }: Props) {
                     <div className="review">
                       <small>原编号 {detail}</small>
                       <button
-                        onClick={() =>
-                          req('clipboard/copy', 'POST', {
-                            text: outbox.find((o) => o.id === detail)?.raw_text,
-                          })
+                        className="danger"
+                        onClick={(e) =>
+                          requestConfirmation(detail, e.currentTarget)
                         }
                       >
-                        复制原稿
-                      </button>
-                      <button className="danger" onClick={() => ask(detail)}>
                         删除本地稿
                       </button>
                     </div>
                   )}
-                </>
+                </div>
               ) : query ? (
-                <>
+                <div className="journal-view" key="search">
                   <h1>搜索结果</h1>
                   <div className="journal-results">
                     <SearchResults
@@ -581,9 +635,9 @@ export function Book({ state, req, refresh }: Props) {
                       offline={searchOffline}
                     />
                   </div>
-                </>
+                </div>
               ) : tab === 'settings' ? (
-                <>
+                <div className="journal-view" key="settings">
                   <h1>{title}</h1>
                   <section className="card settings">
                     <h2>外观</h2>
@@ -718,14 +772,16 @@ export function Book({ state, req, refresh }: Props) {
                     )}
                     <button
                       className="disconnect"
-                      onClick={() => ask('disconnect')}
+                      onClick={(e) =>
+                        requestConfirmation('disconnect', e.currentTarget)
+                      }
                     >
                       断开此设备
                     </button>
                   </section>
-                </>
+                </div>
               ) : (
-                <>
+                <div className="journal-view" key={tab}>
                   {tab !== 'inbox' && <h1>{title}</h1>}
                   {visiblePending.length > 0 && (
                     <section className="pending-list">
@@ -789,7 +845,7 @@ export function Book({ state, req, refresh }: Props) {
                         )}
                       </div>
                     )}
-                </>
+                </div>
               )}
             </div>
           </main>

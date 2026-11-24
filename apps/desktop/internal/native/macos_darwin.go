@@ -17,6 +17,7 @@ int sparkCopyImage(void *,size_t);
 int sparkRequestScreenAccess(void);
 int sparkClipboardCount(void);
 void sparkPositionPanel(void *);
+void sparkResizePanel(void *,int);
 */
 import "C"
 
@@ -226,6 +227,8 @@ func OpenSystemBrowser(rawURL string) error {
 }
 
 func PositionPanel(win unsafe.Pointer) { C.sparkPositionPanel(win) }
+
+func ResizePanel(win unsafe.Pointer, height int) { C.sparkResizePanel(win, C.int(height)) }
 
 func CopyImage(data []byte) error {
 	if len(data) == 0 || C.sparkCopyImage(unsafe.Pointer(&data[0]), C.size_t(len(data))) == 0 {
