@@ -1,0 +1,22 @@
+# Replaces the file archive mount. Apply before compose.v0.3-purge-oss.yaml,
+# which attaches the separate storage for uploaded images.
+services:
+  purge-worker:
+    environment:
+      SPARK_DELETION_LEDGER_BACKEND: oss
+      SPARK_DELETION_LEDGER_DIR: !reset null
+      SPARK_DELETION_LEDGER_OSS_CONFIG_FILE: /run/spark-deletion-ledger/oss.json
+      SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE: /run/secrets/spark-deletion-ledger-oss
+    volumes: !override
+      - type: bind
+        source: ${SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH:-/etc/spark/deletion-receipts/oss.json}
+        target: /run/spark-deletion-ledger/oss.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPARK_DELETION_LEDGER_OSS_CREDENTIALS_HOST_PATH:-/etc/spark/deletion-receipts/writer.json}
+        target: /run/secrets/spark-deletion-ledger-oss
+        read_only: true
+        bind:
+          create_host_path: false

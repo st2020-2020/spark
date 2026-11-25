@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 umask 077
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$script_dir/ledger-settings.sh"
 
 usage() {
   cat <<'EOF'
@@ -13,7 +15,8 @@ to the spark database. For optional off-host upload, set SPARK_BACKUP_REMOTE
 and SPARK_BACKUP_RCLONE_CONFIG to an authorized remote prefix and private config.
 Restore requires an empty project started with
 compose.recovery.yaml. A schema v8+ restore also requires the matching tool
-image loaded on the recovery host. Restore makes no external connections.
+image loaded on the recovery host. OSS ledger restores verify the known probe
+with a read-only identity before import and replay receipts before finishing.
 EOF
 }
 
@@ -102,6 +105,40 @@ case "$command" in
     [[ "$(psql -Atqc "SELECT NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname NOT IN ('information_schema','public'))
       AND NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public')")" == t ]] ||
       die "recovery database is not empty"
+
+    ledger_env="$(read_ledger_environment "$env_file" docker)" || die "could not resolve ledger settings"
+    ledger_backend="$(ledger_val SPARK_DELETION_LEDGER_BACKEND)"
+    binding="$(ledger_val SPARK_DELETION_LEDGER_OSS_BINDING_HOST_PATH)"
+    recovery_compose=(-f "$script_dir/compose.recovery.yaml")
+    case "${ledger_backend:-file}" in
+      oss)
+        [[ "$binding" = /* ]] && read_oss_ledger_binding "$binding" ||
+          die "restore requires the verified OSS binding from the deployment"
+        ledger_config="$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)"
+        ledger_credentials="$(ledger_val SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH)"
+        check_oss_ledger_files "${ledger_config:-/etc/spark/deletion-receipts/oss.json}" \
+          "${ledger_credentials:-/etc/spark/deletion-receipts/reader.json}" ||
+          die "OSS recovery requires the dedicated reader identity"
+        recovery_compose+=(-f "$script_dir/compose.recovery-ledger-oss.yaml")
+        ;;
+      file)
+        [[ -z "$binding" && -z "$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)" &&
+           -z "$(ledger_val SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH)" ]] ||
+          die "OSS recovery settings require SPARK_DELETION_LEDGER_BACKEND=oss"
+        ;;
+      *) die "unknown deletion ledger backend" ;;
+    esac
+    recovery_tool() (
+      unset SPARK_RECOVERY_DB_PASSWORD SPARK_RECOVERY_IMAGE "${!SPARK_DELETION_LEDGER_@}"
+      docker compose --env-file "$env_file" "${recovery_compose[@]}" -p "$project" \
+        run --rm --no-deps -T tools "$@" </dev/null
+    )
+    if [[ "$ledger_backend" == oss ]]; then
+      verified_namespace="$(recovery_tool verify-deletion-ledger "$ledger_probe_id")" &&
+        [[ "$verified_namespace" == "$ledger_namespace" ]] ||
+        die "OSS receipt namespace or known probe could not be verified; database left empty"
+    fi
+
     scratch="$(mktemp -d "${TMPDIR:-/tmp}/spark-recovery.XXXXXXXX")"
     if ! gpg --homedir "$keyring" --batch --no-tty --decrypt --output "$scratch/spark.dump" "$archive" 2>/dev/null; then
       die "could not decrypt backup or verify its ciphertext integrity"
@@ -113,14 +150,7 @@ case "$command" in
     schema="$(psql -Atqc 'SELECT max(version) FROM schema_migrations')"
     [[ "$schema" =~ ^[1-9][0-9]*$ ]] || die "restored database has no Spark schema version"
     if (( schema >= 8 )); then
-      script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-      if ! (
-        unset SPARK_RECOVERY_DB_PASSWORD SPARK_RECOVERY_IMAGE
-        docker compose --env-file "$env_file" -f "$script_dir/compose.recovery.yaml" -p "$project" \
-          run --rm --no-deps -T tools invalidate-restored-mail
-      ); then
-        die "mail invalidation failed, keep recovery offline"
-      fi
+      recovery_tool invalidate-restored-mail || die "mail invalidation failed, keep recovery offline"
     else
       psql -q <<'SQL'
 BEGIN;
@@ -130,6 +160,10 @@ COMMIT;
 SQL
     fi
     psql -q -c 'UPDATE sessions SET revoked_at=now() WHERE revoked_at IS NULL;'
+    if [[ "$ledger_backend" == oss ]]; then
+      recovery_tool replay-deletions || die "OSS receipt replay failed; keep the restored database offline"
+      printf 'OSS receipt replay complete. Verify pending object cleanup before opening traffic.\n'
+    fi
     printf 'Restored schema v%s. Sessions and mail challenges invalidated. Recovery remains offline.\n' "$schema"
     ;;
   *) usage >&2; exit 2 ;;
