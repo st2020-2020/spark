@@ -24,7 +24,7 @@
     - `--with-oss`：校验 `SPARK_OSS_ENABLED=true`、`config.json` 存在、平台凭证权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-oss.yaml` 并启停 `asset-worker`。
     - `--with-url-extract`：校验 `SPARK_URL_EXTRACT_ENABLED=true`，叠加 `compose.v0.3-url-extract.yaml` 并启停 `url-worker`（仅在审批出站规则后开启）。
     - `--with-image-analysis`：必须同时传 `--with-oss`，校验 `SPARK_IMAGE_ANALYSIS_ENABLED=true`、单个管理员 UUID `SPARK_IMAGE_ANALYSIS_ADMIN_ID` 与模型密钥权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-image-analysis.yaml` 并启停 `image-worker`。
-    - `--with-purge`：校验 `SPARK_PURGE_ENABLED=true` 与独立故障域的删除回执目录（`SPARK_DELETION_LEDGER_HOST_PATH`，默认 `/var/lib/spark-deletion-ledger`）存在且权限严格为 `0700`（UID `65532` 拥有），叠加 `compose.v0.3-purge.yaml`（若同时 `--with-oss` 则追加 `compose.v0.3-purge-oss.yaml`）并启停 `purge-worker`。
+    - `--with-purge`：校验 `SPARK_PURGE_ENABLED=true` 与独立故障域的删除回执目录（`SPARK_DELETION_LEDGER_HOST_PATH`，默认 `/var/lib/spark-deletion-ledger`）存在且权限严格为 `0700`（UID `65532` 拥有），叠加 `compose.v0.3-purge.yaml`（若同时 `--with-oss` 则追加 `compose.v0.3-purge-oss.yaml`）并启停 `purge-worker`。首次启用还须设置固定的 UTC 到期切线 `SPARK_PURGE_EXPIRY_START_AT`。
 
 ## 生产发布入口：`deploy/release-prod.sh`
 
@@ -46,6 +46,11 @@
 | `SPARK_URL_EXTRACT_ENABLED` | 可选，默认 `false` |
 | `SPARK_IMAGE_ANALYSIS_ENABLED` / `SPARK_IMAGE_ANALYSIS_KEY_HOST_PATH` | 可选，默认 `false`；需同时开启 OSS |
 | `SPARK_PURGE_ENABLED` / `SPARK_DELETION_LEDGER_HOST_PATH` | 可选，默认 `false`；启用时须提前备好 `0700` 独立账本目录（UID `65532`） |
+| `SPARK_PURGE_EXPIRY_START_AT` | 首次生产启用永久删除时必填，只传给 `purge-worker`。填写已确认的 UTC 切换时刻，格式为 `YYYY-MM-DDTHH:MM:SSZ`，后续发布、重启均沿用这一值。 |
+
+启用切线后，Worker 只自动登记已经到期且到期时间在切线及之后的笔记。切线以前已到期的笔记仍可从回收站手动恢复或显式永久删除。显式删除和已登记清理的重试继续正常处理。已经启用永久删除且没有设置切线的旧安装沿用原到期策略。
+
+启用前核实回执目录和数据库备份分属独立故障域。回执写入依赖同目录硬链接、文件 `fsync` 和目录 `fsync`。首次使用该存储前，在隔离环境验证这些操作及重连后读回。若同时启用 OSS，按生产前缀核对既有凭据的对象删除权限和桶版本控制策略。
 
 ### 2. 只读预检（不改动目标环境）
 
@@ -104,6 +109,8 @@
 ```
 
 回退时指定发布日志打印的完整备份目录。脚本读取快照 `api.overlays` 和 Worker 运行标记，以及当前 `--env-file` 的能力开关。只有快照的 API 开关有效、对应 Worker 当时运行且当前开关明确为 `true`，才选择该能力的叠加文件、注入对应开关并启动 Worker。较旧的备份没有文字 AI 开关记录时，以文字 Worker 的运行标记作为快照依据。图片理解需要 OSS。回退缺少原有或当前获准的 OSS 时，也会暂停需要 OSS 的永久删除，以保留待清理任务。
+
+已使用固定到期切线的部署回退时，只有快照保存了相同切线且快照的 Compose 支持该配置，脚本才会恢复永久删除。回退到使用全量到期扫描的快照时，API 与永久删除 Worker 的该能力保持关闭，数据库和独立删除回执继续保留。
 
 当前环境文件、密钥路径和试用账号范围继续生效。冲突的开关保持关闭，逐项输出原因。手动回退恢复运行时后，如有能力差异，返回状态码 `3`。只有运行时验证通过且能力无差异时输出 `Rollback complete`。
 

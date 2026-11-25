@@ -17,6 +17,7 @@ services:
       SPARK_ENV: ${SPARK_ENV:-production}
       DATABASE_URL: ${SPARK_PURGE_WORKER_DATABASE_URL:-postgres://spark:${SPARK_DB_PASSWORD:-${SPARK_DEV_DB_PASSWORD:-missing}}@postgres:5432/${SPARK_DB_NAME:-spark}?sslmode=disable}
       SPARK_PURGE_ENABLED: ${SPARK_PURGE_ENABLED:-false}
+      SPARK_PURGE_EXPIRY_START_AT: ${SPARK_PURGE_EXPIRY_START_AT:-}
       SPARK_DELETION_LEDGER_DIR: /run/spark-deletion-ledger
     volumes:
       - type: bind
