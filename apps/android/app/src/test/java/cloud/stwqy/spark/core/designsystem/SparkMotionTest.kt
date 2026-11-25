@@ -17,8 +17,8 @@ class SparkMotionTest {
     @Test fun motionDurationsMatchWebSystemTokens() {
         assertEquals(100, SparkMotion.Instant)
         assertEquals(160, SparkMotion.Fast)
-        assertEquals(220, SparkMotion.Normal)
-        assertEquals(300, SparkMotion.Sheet)
+        assertEquals(240, SparkMotion.Normal)
+        assertEquals(320, SparkMotion.Sheet)
         // EaseOut curves must start at 0, finish at 1, and decelerate smoothly.
         assertEquals(0f, SparkMotion.EaseOut.transform(0f), 1e-4f)
         assertEquals(1f, SparkMotion.EaseOut.transform(1f), 1e-4f)

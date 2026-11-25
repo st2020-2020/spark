@@ -32,14 +32,17 @@ import cloud.stwqy.spark.R
  */
 object SparkMotion {
     val EaseOut: Easing = CubicBezierEasing(0.22f, 1f, 0.36f, 1f)
-    val EaseSpring: Easing = CubicBezierEasing(0.175f, 0.885f, 0.32f, 1.15f)
+    /** Small settle for things that appear in place (chips, checks); overshoot stays under 2%. */
+    val EaseSpring: Easing = CubicBezierEasing(0.3f, 1.18f, 0.5f, 1f)
+    /** Things that change position: a list item gliding to its new slot, an indicator sliding. */
+    val EaseMove: Easing = CubicBezierEasing(0.32f, 0.72f, 0.24f, 1f)
     val EaseSheet: Easing = CubicBezierEasing(0.32f, 0.72f, 0f, 1f)
     val EaseExit: Easing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
 
     const val Instant: Int = 100
     const val Fast: Int = 160
-    const val Normal: Int = 220
-    const val Sheet: Int = 300
+    const val Normal: Int = 240
+    const val Sheet: Int = 320
 
     val SpringSnappy: SpringSpec<Float> = spring(dampingRatio = 0.78f, stiffness = 520f)
     val SpringGentle: SpringSpec<IntOffset> = spring(dampingRatio = 0.86f, stiffness = 360f)
