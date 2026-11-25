@@ -73,7 +73,7 @@ func (s *Server) projectDecisions(c *gin.Context) (any, error) {
 			if string(response) == idempotentCurrentMarker {
 				return row.Collection, nil
 			}
-			return response, nil
+			return s.replayCollectionProjects(c.Request.Context(), tx, current(c).User.ID, c.Param("id"), response)
 		})
 	}
 	tx, err := s.userTx(c)
@@ -309,8 +309,12 @@ func (s *Server) undoProjectDecisions(c *gin.Context) (any, error) {
 		return nil, conflict("decision_conflict", "current_decision_version", int64(row.DecisionVersion))
 	}
 	if receipt.Response != nil {
+		result, err := s.replayCollectionProjects(ctx, tx, uid, id, jsonBytes(receipt.Response))
+		if err != nil {
+			return nil, err
+		}
 		c.Header("Idempotent-Replayed", "true")
-		return *receipt.Response, nil
+		return result, nil
 	}
 	if row.DecisionVersion != receipt.DecisionVersion {
 		return nil, conflict("decision_conflict", "current_decision_version", int64(row.DecisionVersion))

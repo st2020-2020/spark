@@ -1,0 +1,26 @@
+# PostgreSQL remains on the unexposed internal network. Only the one-off
+# recovery tool receives OSS egress and credentials.
+services:
+  tools:
+    networks: [offline, ledger-egress]
+    environment:
+      SPARK_DELETION_LEDGER_BACKEND: oss
+      SPARK_DELETION_LEDGER_OSS_PREFIX: "${SPARK_DELETION_LEDGER_OSS_PREFIX:-}"
+      SPARK_DELETION_LEDGER_OSS_CONFIG_FILE: /run/spark-deletion-ledger/oss.json
+      SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE: /run/secrets/spark-deletion-ledger-oss
+    volumes:
+      - type: bind
+        source: ${SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH:-${SPARK_OSS_CONFIG_HOST_PATH:-/etc/spark/oss/config.json}}
+        target: /run/spark-deletion-ledger/oss.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH:-${SPARK_OSS_CREDENTIALS_HOST_PATH:-/etc/spark/oss/credentials.json}}
+        target: /run/secrets/spark-deletion-ledger-oss
+        read_only: true
+        bind:
+          create_host_path: false
+
+networks:
+  ledger-egress:

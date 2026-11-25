@@ -120,6 +120,7 @@ export interface SparkApi {
   listProjects(query?: ListProjectsQuery): Promise<ProjectPage>;
   getProject(id: string): Promise<Project>;
   updateProject(id: string, body: ProjectUpdate): Promise<Project>;
+  deleteProject(id: string, baseVersion: number, idempotencyKey: string): Promise<void>;
 
   createTag(body: TagCreate, idempotencyKey: string): Promise<Tag>;
   listTags(query?: ListTagsQuery): Promise<TagPage>;
@@ -452,6 +453,15 @@ export function createRealApiClient(): SparkApi {
         body,
         requiresCsrf: true,
       }),
+    deleteProject: (id, baseVersion, idempotencyKey) =>
+      request<void>(
+        'DELETE',
+        `/projects/${encodeURIComponent(id)}${buildQuery({ base_version: baseVersion })}`,
+        {
+          requiresCsrf: true,
+          idempotencyKey,
+        },
+      ),
 
     createTag: (body, idempotencyKey) =>
       request<Tag>('POST', '/tags', { body, requiresCsrf: true, idempotencyKey }),

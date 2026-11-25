@@ -21,7 +21,7 @@ func main() {
 }
 func run() error {
 	if len(os.Args) < 2 {
-		return errors.New("usage: spark migrate | admin EMAIL | dev-mail CHALLENGE_ID | maintenance | retry-upload-cleanup | replay-deletions | invalidate-restored-mail")
+		return errors.New("usage: spark migrate | admin EMAIL | dev-mail CHALLENGE_ID | maintenance | retry-upload-cleanup | replay-deletions | check-deletion-ledger | verify-deletion-ledger [PROBE_UUID] | probe-deletion-ledger PROBE_UUID | invalidate-restored-mail")
 	}
 	if os.Args[1] == "healthcheck" && len(os.Args) == 2 {
 		client := &http.Client{Timeout: 2 * time.Second}
@@ -35,8 +35,14 @@ func run() error {
 		}
 		return nil
 	}
-	if len(os.Args) == 2 && os.Args[1] == "replay-deletions" {
+	switch os.Args[1] {
+	case "replay-deletions":
+		if len(os.Args) != 2 {
+			return errors.New("usage: spark replay-deletions")
+		}
 		return runDeletionReplay()
+	case "check-deletion-ledger", "verify-deletion-ledger", "probe-deletion-ledger":
+		return runDeletionLedger(os.Args[1], os.Args[2:])
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

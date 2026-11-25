@@ -56,11 +56,44 @@ dc ps
 
 `SPARK_PURGE_ENABLED` 默认关闭。启用时，API 在同一事务登记删除、记录变更并写入 River，收藏立即离开回收站。独立的 `/spark-worker purge` 每日扫描已到 30 天的回收站记录，并重入队未完成的清理。手动及到期删除使用同一流程。已经接受的请求可通过 [清理状态接口](../docs/design/API.md#永久删除与状态) 查到。
 
-启用前为 `purge-worker` 挂载和 PostgreSQL 备份分属不同故障域的独立持久存储。创建专用目录，归运行 UID 65532 所有，权限 `0700`。使用 [删除 Compose 叠加](../deploy/compose.v0.3-purge.yaml)，设置 `SPARK_DELETION_LEDGER_HOST_PATH` 和同库的 `SPARK_PURGE_WORKER_DATABASE_URL`，并以 `SPARK_PURGE_ENABLED=true` 启动 `api purge-worker`。开发镜像用 `SPARK_API_IMAGE=spark-api:dev` 和 `SPARK_ENV=development`。保存过图片时追加 [清理 OSS 叠加](../deploy/compose.v0.3-purge-oss.yaml)，沿用图片存储的专属前缀与最小删除权限。文字收藏清理可独立运行。
+启用前为 `purge-worker` 配置与 PostgreSQL 备份分属不同故障域的持久回执存储。使用 [删除 Compose 叠加](../deploy/compose.v0.3-purge.yaml) 并指定同库的 `SPARK_PURGE_WORKER_DATABASE_URL`。`SPARK_DELETION_LEDGER_BACKEND` 未设或为 `file` 时沿用文件账本。设置 `SPARK_DELETION_LEDGER_HOST_PATH`，目录归运行 UID 65532 所有，权限 `0700`。文件回执采用 `0600`，同步文件及目录后才开始清除。保存过图片时追加 [清理 OSS 叠加](../deploy/compose.v0.3-purge-oss.yaml)，沿用独立的附件存储配置。文字收藏清理可独立运行。
 
-Worker 先把只含操作 ID、归属、时间和对象清理计划的回执写入独立目录。回执采用 `0600` 权限，文件和目录条目持久化后才删数据。清理顺序与重试见 [数据设计](../docs/design/DATA.md#删除与恢复)。独立回执留存覆盖最早可恢复备份及其校验期。
+可选 `SPARK_PURGE_EXPIRY_START_AT` 仅由清理 Worker 读取。未设置时每日扫描沿用既有规则。首次在生产开启时，在部署配置持久写入固定 UTC 时间（`YYYY-MM-DDTHH:MM:SSZ`）。到期时间早于切换时间的收藏仍留在回收站。显式删除和未完成回执的重试照常进行。格式无效时 Worker 拒绝启动。
 
-恢复时先在隔离环境还原 PostgreSQL 备份与对应对象数据并执行迁移。在 API 和处理任务停止时，向 `tools` 只读挂载完整独立账本目录，设置 `SPARK_DELETION_LEDGER_DIR`，在恢复库上执行 `/spark replay-deletions`。该命令还原墓碑、删除恢复库中的旧数据并持久排队对象清理。然后只对恢复环境启动清理 Worker，核对所有已重放操作完成、撤销旧会话与授权并检查附件引用后再开放流量。重复重放可继续恢复流程。 如果回执含对象而恢复库缺少对应账号，命令会以非零退出并输出操作 ID。保持环境离线，核对 PostgreSQL 与对象备份是否配对，解决该回执涉及的对象后再开放流量。
+### OSS 回执
+
+`SPARK_DELETION_LEDGER_BACKEND=oss` 时，`purge-worker` 只读挂载以下两个文件。离线工具使用相同的容器路径和独立的只读身份。API 无需挂载这两个文件。
+
+| 变量 | 默认容器路径 | 内容 |
+| --- | --- | --- |
+| `SPARK_DELETION_LEDGER_OSS_CONFIG_FILE` | `/run/spark-deletion-ledger/oss.json` | `region`、`endpoint`、`bucket`、`prefix`、`object_prefix` |
+| `SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE` | `/run/secrets/spark-deletion-ledger-oss` | `access_key_id`、`access_key_secret` |
+
+归档也可读取与附件相同的 `oss-v2` 配置文件。此模式必须显式设置 `SPARK_DELETION_LEDGER_OSS_PREFIX` 为同桶的专用回执前缀。归档从原配置取得区域、区域端点、桶和附件前缀，继续从 `SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE` 读取凭据。该文件可复用平台凭据 JSON，并允许附加元数据。附件配置自身的 `credentials_file` 与签名配置不参与归档。回执端点仍使用区域地址；归档不使用 CNAME。
+
+专用回执 JSON 和预检输出的固定位置 JSON 可直接使用。恢复时可清空 `SPARK_DELETION_LEDGER_OSS_PREFIX`。如同时提供该变量，其值必须与固定位置的 `prefix` 相同。
+
+例如 `{"region":"cn-hangzhou","endpoint":"https://oss-cn-hangzhou.aliyuncs.com","bucket":"example-private","prefix":"spark/deletion-ledger/prod/","object_prefix":"spark/prod/"}`。正式环境使用相应区域的阿里云官方 HTTPS 地址，也可用该区域的 `-internal` 地址。两个前缀以 `/` 结尾且不能互为子路径。配置有附件存储时，`object_prefix` 必须与附件的专属前缀相同。纯文字安装可将其设为空字符串，此时拒绝含对象的回执。开发可用本机回环 HTTP 替身。
+
+归档桶必须为私有且从未启用版本控制。运行期间保持该状态，因为开启和暂停都会使 `x-oss-forbid-overwrite` 失效。Worker 启动及每次写入前检查桶状态。回执用带防覆盖条件的 `PutObject` 创建于 `<prefix>receipts/<uuid>.json`。收到冲突或写入结果不明时，用同一键读回与该次请求核对。只有读回身份、对象计划、时间和顺序一致时才开始不可逆清除。版本化响应和不一致回执均使清理保持待重试。连接和服务报错只记录阶段或 HTTP 状态。回执只包含操作、账号、收藏的标识、时间及对象清理计划。独立回执留存覆盖最早可恢复备份及其校验期。
+
+| 身份 | 最小 OSS 授权 |
+| --- | --- |
+| 清理 Worker 的归档身份 | 指定桶 `oss:GetBucketVersioning`，以及 `<prefix>receipts/*` 的 `oss:GetObject`、`oss:PutObject` |
+| 离线恢复身份 | 指定桶 `oss:GetBucketVersioning`，同桶 `oss:ListObjects` 并将 `oss:Prefix` 精确限定至 `<prefix>receipts/`，以及 `<prefix>receipts/*` 的 `oss:GetObject` |
+| 合成探针身份 | 指定桶 `oss:GetBucketVersioning`，同桶 `oss:ListObjects` 并将 `oss:Prefix` 精确限定至 `<prefix>probes/`，以及 `<prefix>probes/*` 的 `oss:GetObject`、`oss:PutObject` |
+
+启用前核验实际 RAM 策略。归档身份无需对象删除、ACL、桶管理或附件写权限。离线恢复身份若要核对已知探针，再授予 `<prefix>probes/*` 的读取和精确 probes 前缀枚举。保护前缀内的回执及已知探针，避免被生命周期过早移除。附加的桶级禁止覆盖规则可以限制其他写入，单次请求仍使用条件头。[阿里云 PutObject](https://www.alibabacloud.com/help/en/oss/developer-reference/putobject) [RAM 前缀权限](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)
+
+- `/spark check-deletion-ledger` 用运行身份检查桶版本状态，无需枚举。
+- `/spark probe-deletion-ledger PROBE_UUID` 使用全新的合成 UUID，要求两次并行条件创建中恰好一次成功、另一次收到 `409 FileAlreadyExists`，再验证异体写入被拒绝、原内容可读且可枚举。探针留在单独的 `probes/` 前缀，重放只扫描 `receipts/`。
+- `/spark verify-deletion-ledger [PROBE_UUID]` 只读核对所有回执。指定已经验证过的探针 UUID 时，还检查该探针的内容及枚举结果。三个命令均无需数据库。OSS 模式成功时输出一行非秘密位置 JSON，失败返回非零。记录实际验证的位置和合成 UUID 供恢复比对。
+
+### 离线恢复
+
+在隔离环境恢复 PostgreSQL、对象备份并运行迁移。保持 API 和 Worker 停止。文件模式向 `tools` 只读挂载完整账本目录。OSS 模式用离线读取身份挂载配置，先运行 `/spark verify-deletion-ledger PROBE_UUID` 并核对已验证的位置，再在恢复库执行 `/spark replay-deletions`。命令按页读取回执，逐条还原墓碑、清除恢复库中的旧数据并持久排队对象清理。读取、格式、配对或事务出错即停止并返回非零，已成功处理的回执保留。核对失败原因后在离线状态重跑。若含对象的回执缺少相应账号，核对 PostgreSQL 与对象备份配对及对象清理计划。
+
+随后只对恢复环境启动读取同一账本的清理 Worker，确认全部重放操作及对象清理完成，撤销旧会话与授权并核对附件引用后再开放流量。既有文件部署保持原配置。若已有历史回执，切换归档后端前持久保留旧账本和恢复配置，离线恢复时必须处理所有存续账本的回执；每个阶段用对应账本完成对象清理再切换。清理顺序见 [数据设计](../docs/design/DATA.md#删除与恢复)。
 
 ## 文本自动整理 Worker 与 AI 路由（默认关闭）
 

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path"
 	"slices"
 	"strings"
@@ -30,16 +29,16 @@ type purgeObjectStore interface {
 type purgeWorker struct {
 	river.WorkerDefaults[purgeArgs]
 	pool    *pgxpool.Pool
-	archive *purgearchive.Archive
+	archive purgearchive.Archive
 	objects purgeObjectStore
 }
 
-func StartPurgeWorker(ctx context.Context, pool *pgxpool.Pool, archive *purgearchive.Archive, objects purgeObjectStore) (*river.Client[pgx.Tx], error) {
+func StartPurgeWorker(ctx context.Context, pool *pgxpool.Pool, archive purgearchive.Archive, objects purgeObjectStore, expiryStart pgtype.Timestamptz) (*river.Client[pgx.Tx], error) {
 	if archive == nil {
 		return nil, errors.New("purge worker requires an independent deletion ledger")
 	}
 	workers := river.NewWorkers()
-	sweep := &purgeSweepWorker{pool: pool}
+	sweep := &purgeSweepWorker{pool: pool, expiryStart: expiryStart}
 	river.AddWorker(workers, &purgeWorker{pool: pool, archive: archive, objects: objects})
 	river.AddWorker(workers, sweep)
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
@@ -152,33 +151,29 @@ func (w *purgeWorker) eraseObjects(ctx context.Context, conn *pgxpool.Conn, row 
 	return err
 }
 
-func durableReceipt(ctx context.Context, archive *purgearchive.Archive, conn *pgxpool.Conn, row store.DeletionLedger) (purgearchive.Receipt, error) {
+func durableReceipt(ctx context.Context, archive purgearchive.Archive, conn *pgxpool.Conn, row store.DeletionLedger) (purgearchive.Receipt, error) {
 	var keys []string
 	if err := json.Unmarshal(row.ObjectKeys, &keys); err != nil {
 		return purgearchive.Receipt{}, errors.New("invalid deletion object list")
 	}
 	slices.Sort(keys)
-	receipt, err := archive.Read(uuid.UUID(row.ID.Bytes))
-	if errors.Is(err, os.ErrNotExist) && !row.ReplicatedAt.Valid {
-		receipt, err = buildReceipt(ctx, conn, row, keys)
+	if !row.ReplicatedAt.Valid {
+		receipt, err := buildReceipt(ctx, conn, row, keys)
 		if err != nil {
 			return receipt, err
 		}
-		if err := archive.Put(receipt); err != nil {
+		if err := archive.Put(ctx, receipt); err != nil {
 			return receipt, fmt.Errorf("replicate deletion receipt: %w", err)
 		}
 		return receipt, nil
 	}
+	receipt, err := archive.Read(ctx, uuid.UUID(row.ID.Bytes))
 	if err != nil {
 		return receipt, fmt.Errorf("read independent deletion receipt: %w", err)
 	}
 	if receipt.UserID != uuid.UUID(row.UserID.Bytes) || receipt.CollectionID != uuid.UUID(row.CollectionID.Bytes) ||
 		!receipt.RequestedAt.Equal(row.RequestedAt.Time) || !slices.Equal(receiptKeys(receipt), keys) {
 		return receipt, errors.New("independent deletion receipt does not match the database")
-	}
-	if !row.ReplicatedAt.Valid {
-		// A previous process may have linked the receipt before syncing the directory.
-		return receipt, archive.Sync()
 	}
 	return receipt, nil
 }

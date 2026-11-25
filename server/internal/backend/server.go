@@ -152,6 +152,7 @@ func (s *Server) Router() *gin.Engine {
 	secured.GET("/projects", s.handle(s.listProjects))
 	secured.GET("/projects/:id", s.handle(s.getProject))
 	secured.PATCH("/projects/:id", s.handle(s.updateProject))
+	secured.DELETE("/projects/:id", s.handle(s.deleteProject))
 	secured.POST("/uploads", s.handle(s.createUpload))
 	secured.GET("/uploads/:id", s.handle(s.getUpload))
 	secured.POST("/uploads/:id/complete", s.handle(s.completeUpload))

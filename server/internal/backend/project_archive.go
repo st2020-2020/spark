@@ -89,6 +89,24 @@ func applyAutomaticProject(ctx context.Context, tx pgx.Tx, r runSnapshot, input 
 			if rejected {
 				return "", false, nil
 			}
+			// A model can echo a deleted or renamed candidate as a new
+			// topic. Keep that stale snapshot from recreating the project.
+			if len(input.Projects) > 0 {
+				candidateNames := make([]string, 0, len(input.Projects))
+				for _, candidate := range input.Projects {
+					candidateNames = append(candidateNames, candidate.Name)
+				}
+				var stale bool
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (
+					SELECT 1 FROM unnest($1::text[]) AS candidate(name)
+					WHERE spark_project_topic(candidate.name)=spark_project_topic($2))`,
+					candidateNames, name).Scan(&stale); err != nil {
+					return "", false, err
+				}
+				if stale {
+					return "", true, nil
+				}
+			}
 			project, projectVersion, archive = uuid.NewString(), 1, "created"
 			if _, err := tx.Exec(ctx, `INSERT INTO projects(id,user_id,name,description,focus_points) VALUES($1,$2,$3,'','[]')`,
 				project, r.UID, name); err != nil {

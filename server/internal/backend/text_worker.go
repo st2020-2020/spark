@@ -808,7 +808,9 @@ func (w *TextWorker) complete(ctx context.Context, r runSnapshot, route AIRoute,
 						return false, err
 					}
 					if archive != "" {
-						staleProject = changed
+						staleProject = false
+					} else {
+						staleProject = staleProject || changed
 					}
 				}
 			}

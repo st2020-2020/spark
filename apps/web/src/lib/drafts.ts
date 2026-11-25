@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import type { SparkDocument } from '../api/types';
-import { inspectSparkDocumentSupport } from './document';
+import { derivePlainText, inspectSparkDocumentSupport } from './document';
 
 export interface DraftImage {
   uploadId?: string;
@@ -84,6 +84,130 @@ export function clearUserDrafts(userId: string): void {
   } catch {
     // Ignore storage failure during logout cleanup
   }
+}
+
+export function isDraftMeaningful(draft: Partial<CollectionDraft> | null | undefined): boolean {
+  if (!draft) return false;
+  const text = draft.document ? derivePlainText(draft.document).trim() : '';
+  const hasImages = Array.isArray(draft.images) && draft.images.length > 0;
+  return Boolean(
+    text ||
+      draft.intent?.trim() ||
+      draft.originalUrl?.trim() ||
+      draft.manualTitle?.trim() ||
+      hasImages ||
+      (Array.isArray(draft.tagIds) && draft.tagIds.length > 0),
+  );
+}
+
+function stripProjectReferenceFromDraft(
+  draft: CollectionDraft,
+  projectId: string,
+): CollectionDraft {
+  const nextProjectIds = Array.isArray(draft.projectIds)
+    ? draft.projectIds.filter((pid) => pid !== projectId)
+    : [];
+  const nextNames = draft.associationNames ? { ...draft.associationNames } : undefined;
+  if (nextNames) delete nextNames[projectId];
+  return {
+    ...draft,
+    projectIds: nextProjectIds,
+    ...(nextNames ? { associationNames: nextNames } : {}),
+  };
+}
+
+export function removeProjectFromUserDrafts(
+  userId: string | undefined,
+  projectId: string,
+  options?: { removeProjectScope?: boolean },
+): void {
+  if (!userId || !projectId || typeof window === 'undefined') return;
+  const projectScope = `project:${projectId}`;
+  const projectStorageKey = buildKey(userId, projectScope);
+
+  // Strip deleted project references from all other drafts without touching their content/images.
+  try {
+    const prefix = `${DRAFT_PREFIX}:${userId}:`;
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (!key || !key.startsWith(prefix) || key === projectStorageKey) continue;
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as Partial<CollectionDraft>;
+        if (!Array.isArray(parsed.projectIds) || !parsed.projectIds.includes(projectId)) continue;
+        const nextNames = parsed.associationNames ? { ...parsed.associationNames } : undefined;
+        if (nextNames) delete nextNames[projectId];
+        window.localStorage.setItem(
+          key,
+          JSON.stringify({
+            ...parsed,
+            projectIds: parsed.projectIds.filter((pid) => pid !== projectId),
+            ...(nextNames ? { associationNames: nextNames } : {}),
+          }),
+        );
+      } catch {
+        // Skip malformed individual draft entries
+      }
+    }
+  } catch {
+    // Ignore storage failure during reference cleanup
+  }
+
+  if (options?.removeProjectScope !== false) {
+    removeDraft(userId, projectScope);
+  }
+}
+
+export function moveProjectDraftToInboxSafely(
+  userId: string | undefined,
+  projectId: string,
+  activeSnapshotDraft?: CollectionDraft | null,
+): { ok: true } | { ok: false; reason: 'empty' | 'inbox_occupied' | 'storage_failed'; error: string } {
+  if (!userId || !projectId || typeof window === 'undefined') {
+    return { ok: false, reason: 'storage_failed', error: '未登录账号，无法转存草稿。' };
+  }
+  const projectScope = `project:${projectId}`;
+  const diskDraft = loadDraft<CollectionDraft>(userId, projectScope).data;
+  const sourceDraft =
+    activeSnapshotDraft && isDraftMeaningful(activeSnapshotDraft) ? activeSnapshotDraft : diskDraft;
+
+  if (!sourceDraft || !isDraftMeaningful(sourceDraft)) {
+    removeDraft(userId, projectScope);
+    return { ok: false, reason: 'empty', error: '当前没有需要转存的草稿。' };
+  }
+
+  const readyImages = (sourceDraft.images ?? []).filter((img) => Boolean(img.uploadId));
+  const sanitized = stripProjectReferenceFromDraft(
+    { ...sourceDraft, images: readyImages },
+    projectId,
+  );
+  if (!isDraftMeaningful(sanitized)) {
+    removeDraft(userId, projectScope);
+    return { ok: false, reason: 'empty', error: '当前仅包含未完成的临时图片，无法转存。' };
+  }
+
+  const existingInbox = loadDraft<CollectionDraft>(userId, 'inbox').data;
+  if (isDraftMeaningful(existingInbox)) {
+    return {
+      ok: false,
+      reason: 'inbox_occupied',
+      error: '收件箱已有未保存草稿，无法自动转存；请先点击「取消」保存或清空。',
+    };
+  }
+
+  const saved = saveDraft(userId, 'inbox', sanitized);
+  if (!saved.ok) {
+    // Keep original project draft untouched when storage fails.
+    return {
+      ok: false,
+      reason: 'storage_failed',
+      error: saved.error ?? '转存到收件箱失败，已保留原项目草稿，请先点击「取消」保存或复制内容。',
+    };
+  }
+
+  removeDraft(userId, projectScope);
+  return { ok: true };
 }
 
 /** File objects in an open upload queue cannot be recovered from the text draft. */

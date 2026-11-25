@@ -1,5 +1,5 @@
-# Optional permanent deletion capability. The ledger must be outside the
-# database backup's failure domain and owned by the worker UID with mode 0700.
+# Optional permanent deletion with a file ledger. For an OSS ledger, add
+# compose.v0.10-purge-ledger-oss.yaml before the attachment storage overlay.
 services:
   api:
     environment:
@@ -17,6 +17,8 @@ services:
       SPARK_ENV: ${SPARK_ENV:-production}
       DATABASE_URL: ${SPARK_PURGE_WORKER_DATABASE_URL:-postgres://spark:${SPARK_DB_PASSWORD:-${SPARK_DEV_DB_PASSWORD:-missing}}@postgres:5432/${SPARK_DB_NAME:-spark}?sslmode=disable}
       SPARK_PURGE_ENABLED: ${SPARK_PURGE_ENABLED:-false}
+      SPARK_PURGE_EXPIRY_START_AT: ${SPARK_PURGE_EXPIRY_START_AT:-}
+      SPARK_DELETION_LEDGER_BACKEND: file
       SPARK_DELETION_LEDGER_DIR: /run/spark-deletion-ledger
     volumes:
       - type: bind

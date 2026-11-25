@@ -257,7 +257,7 @@ func testDeletionStorage(t *testing.T, pool *pgxpool.Pool, q *store.Queries, own
 		t.Fatalf("active collection accepted permanent deletion: %v", err)
 	}
 	execTestSQL(t, pool, "UPDATE collections SET deleted_at=now(), purge_after=now(), resource_version=2 WHERE user_id=$1 AND id=$2", owner, collection)
-	due, err := q.ListDueCollectionsForPurge(ctx, 10)
+	due, err := q.ListDueCollectionsForPurge(ctx, store.ListDueCollectionsForPurgeParams{BatchSize: 10})
 	if err != nil || len(due) != 1 || due[0].UserID != owner || due[0].ID != collection || due[0].ResourceVersion != 2 {
 		t.Fatalf("select only due trash with its current version: %v", err)
 	}
@@ -295,7 +295,7 @@ func testDeletionStorage(t *testing.T, pool *pgxpool.Pool, q *store.Queries, own
 	if _, err := q.RequestCollectionPurge(ctx, req); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("repeat purge changed resource again: %v", err)
 	}
-	if due, err := q.ListDueCollectionsForPurge(ctx, 10); err != nil || len(due) != 0 {
+	if due, err := q.ListDueCollectionsForPurge(ctx, store.ListDueCollectionsForPurgeParams{BatchSize: 10}); err != nil || len(due) != 0 {
 		t.Fatalf("purge-pending collection selected again: %v", err)
 	}
 	ledger, err := q.GetCollectionDeletion(ctx, retry)

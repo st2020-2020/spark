@@ -38,12 +38,20 @@ import { MentionPicker } from './MentionPicker';
 import { RichTextEditor } from './RichTextEditor';
 import { UploadQueueTray } from './UploadQueueTray';
 
+export interface ComposerDraftSnapshot {
+  hasUnsavedContent: boolean;
+  hasPendingImageFiles: boolean;
+  readyImageCount: number;
+  currentDraft: CollectionDraft | null;
+}
+
 export function CollectionComposer({
   defaultProjectId,
   followUpSource,
   autoFocus = false,
   showAiEntry = !defaultProjectId && !followUpSource,
   variant = 'card',
+  draftSnapshotRef,
   onCreated,
   onCancel,
 }: {
@@ -53,6 +61,7 @@ export function CollectionComposer({
   showAiEntry?: boolean;
   /** "sheet" drops the outer card chrome when the composer lives inside the quick-capture sheet. */
   variant?: 'card' | 'sheet';
+  draftSnapshotRef?: React.MutableRefObject<ComposerDraftSnapshot | null>;
   onCreated?: () => void;
   onCancel?: () => void;
 }) {
@@ -151,6 +160,7 @@ export function CollectionComposer({
         initialDraft.intent.trim() ||
         initialDraft.originalUrl.trim() ||
         initialDraft.manualTitle.trim() ||
+        (initialDraft.images?.some((img) => Boolean(img.uploadId)) ?? false) ||
         autoFocus,
     );
   });
@@ -282,6 +292,41 @@ export function CollectionComposer({
     intent.trim().length > 0 ||
     manualTitle.trim().length > 0 ||
     aiExcluded;
+
+  if (draftSnapshotRef) {
+    const readyImages = images.filter((img) => Boolean(img.uploadId));
+    const hasPendingImageFiles = uploader.items.some(
+      (item) => !item.restored && item.status !== 'ready',
+    );
+    const hasUnsavedContent =
+      hasContent ||
+      hasPendingImageFiles ||
+      tagIds.length > 0 ||
+      intent.trim().length > 0 ||
+      manualTitle.trim().length > 0;
+    draftSnapshotRef.current = {
+      hasUnsavedContent,
+      hasPendingImageFiles,
+      readyImageCount: readyImages.length,
+      currentDraft: hasUnsavedContent
+        ? {
+            followUpSourceId: followUpSource?.id,
+            collectionId,
+            idempotencyKey,
+            document: documentValue,
+            intent,
+            originalUrl,
+            manualTitle,
+            projectIds,
+            tagIds,
+            associationNames: names,
+            images: readyImages,
+            aiExcluded,
+            updatedAt: new Date().toISOString(),
+          }
+        : null,
+    };
+  }
 
   useBeforeUnloadWarning(isDirty);
 

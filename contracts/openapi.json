@@ -1209,6 +1209,101 @@
             }
           }
         }
+      },
+      "delete": {
+        "operationId": "deleteProject",
+        "summary": "按项目版本删除项目",
+        "description": "解除项目关联并保留所有收藏和附件。以原幂等键和原版本重试返回相同的 204。项目版本冲突返回 resource_conflict，同键改版本返回 idempotency_mismatch，其他账号的项目返回 not_found。",
+        "tags": [
+          "projects"
+        ],
+        "security": [
+          {
+            "sessionCookie": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "项目已删除",
+            "headers": {
+              "Idempotent-Replayed": {
+                "description": "响应来自已完成的相同请求",
+                "schema": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "项目不存在或不属于当前账号",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "项目版本冲突、幂等请求参数不符或同键正在执行",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "错误码和对应 HTTP 状态见 docs/design/API.md",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-CSRF-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 128
+            }
+          },
+          {
+            "name": "base_version",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 1
+            }
+          }
+        ]
       }
     },
     "/tags": {

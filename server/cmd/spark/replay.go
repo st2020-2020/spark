@@ -15,7 +15,7 @@ import (
 func runDeletionReplay() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	archive, err := purgearchive.Open(os.Getenv("SPARK_DELETION_LEDGER_DIR"))
+	archive, err := purgearchive.OpenConfigured(ctx)
 	if err != nil {
 		return err
 	}

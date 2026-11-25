@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"spark/server/internal/purgearchive"
 )
 
@@ -204,7 +205,7 @@ func TestCollectionThreadSurvivesTrashAndPurge(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer archive.Close()
-	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, nil)
+	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, nil, pgtype.Timestamptz{})
 	if err != nil {
 		t.Fatal(err)
 	}

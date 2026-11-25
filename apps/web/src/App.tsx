@@ -82,6 +82,11 @@ function CollectionDetailRoute() {
   return <CollectionDetailPage key={id} />;
 }
 
+function ProjectDetailRoute() {
+  const { id } = useParams();
+  return <ProjectDetailPage key={id} />;
+}
+
 export function AppRoutes() {
   return (
     <Routes>
@@ -115,7 +120,7 @@ export function AppRoutes() {
       <Route element={<AuthenticatedShell />}>
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/projects/:id" element={<ProjectDetailPage />} />
+        <Route path="/projects/:id" element={<ProjectDetailRoute />} />
         <Route path="/collections" element={<CollectionsPage />} />
         <Route path="/unclassified" element={<UnclassifiedPage />} />
         <Route path="/unclassified/triage" element={<TriagePage />} />

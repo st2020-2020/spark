@@ -24,7 +24,7 @@
     - `--with-oss`：校验 `SPARK_OSS_ENABLED=true`、`config.json` 存在、平台凭证权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-oss.yaml` 并启停 `asset-worker`。
     - `--with-url-extract`：校验 `SPARK_URL_EXTRACT_ENABLED=true`，叠加 `compose.v0.3-url-extract.yaml` 并启停 `url-worker`（仅在审批出站规则后开启）。
     - `--with-image-analysis`：必须同时传 `--with-oss`，校验 `SPARK_IMAGE_ANALYSIS_ENABLED=true`、单个管理员 UUID `SPARK_IMAGE_ANALYSIS_ADMIN_ID` 与模型密钥权限 `0400/0440/0600/0640`，叠加 `compose.v0.3-image-analysis.yaml` 并启停 `image-worker`。
-    - `--with-purge`：校验 `SPARK_PURGE_ENABLED=true` 与独立故障域的删除回执目录（`SPARK_DELETION_LEDGER_HOST_PATH`，默认 `/var/lib/spark-deletion-ledger`）存在且权限严格为 `0700`（UID `65532` 拥有），叠加 `compose.v0.3-purge.yaml`（若同时 `--with-oss` 则追加 `compose.v0.3-purge-oss.yaml`）并启停 `purge-worker`。
+    - `--with-purge`：校验 `SPARK_PURGE_ENABLED=true`、独立的删除回执存储及首次启用的固定 UTC 到期切线。回执配置只传给 `purge-worker`，默认复用后台 OSS 配置与凭据。见 [删除回执存储](#删除回执存储)。
 
 ## 生产发布入口：`deploy/release-prod.sh`
 
@@ -45,7 +45,17 @@
 | `SPARK_OSS_ENABLED` / `SPARK_OSS_CONFIG_HOST_PATH` / `SPARK_OSS_CREDENTIALS_HOST_PATH` | 可选，默认 `false`；启用私有 OSS 时配置（凭证文件须为 `0400/0440/0600/0640`） |
 | `SPARK_URL_EXTRACT_ENABLED` | 可选，默认 `false` |
 | `SPARK_IMAGE_ANALYSIS_ENABLED` / `SPARK_IMAGE_ANALYSIS_KEY_HOST_PATH` | 可选，默认 `false`；需同时开启 OSS |
-| `SPARK_PURGE_ENABLED` / `SPARK_DELETION_LEDGER_HOST_PATH` | 可选，默认 `false`；启用时须提前备好 `0700` 独立账本目录（UID `65532`） |
+| `SPARK_PURGE_ENABLED` | 可选，默认 `false` |
+| `SPARK_DELETION_LEDGER_BACKEND` | 缺省为 `file`，沿用原文件回执。首次使用阿里云 OSS 回执时设为 `oss`。 |
+| `SPARK_DELETION_LEDGER_HOST_PATH` | 文件模式专用，默认 `/var/lib/spark-deletion-ledger`，要求独立故障域、UID `65532` 拥有、`0700` |
+| `SPARK_DELETION_LEDGER_OSS_PREFIX` | 复用附件配置时必填。已获准的同桶专用前缀，以 `/` 结尾，须与附件前缀不重叠。 |
+| `SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH` | 可选配置覆盖，默认沿用 `SPARK_OSS_CONFIG_HOST_PATH` |
+| `SPARK_DELETION_LEDGER_OSS_CREDENTIALS_HOST_PATH` | 可选独立写入凭据，默认沿用 `SPARK_OSS_CREDENTIALS_HOST_PATH` |
+| `SPARK_PURGE_EXPIRY_START_AT` | 首次生产启用永久删除时必填，只传给 `purge-worker`。填写已确认的 UTC 切换时刻，格式为 `YYYY-MM-DDTHH:MM:SSZ`，后续发布、重启均沿用这一值。 |
+
+启用切线后，Worker 只自动登记已经到期且到期时间在切线及之后的笔记。切线以前已到期的笔记仍可从回收站手动恢复或显式永久删除。显式删除和已登记清理的重试继续正常处理。已经启用永久删除且没有设置切线的旧安装沿用原到期策略。
+
+文件模式的回执存储与数据库及其备份分属独立故障域。首次使用时在隔离环境验证同目录硬链接、文件和目录 `fsync`、重连后读回。已有文件回执的部署先安排历史回执的离线恢复和重放演练，再切换回执存储。
 
 ### 2. 只读预检（不改动目标环境）
 
@@ -105,15 +115,19 @@
 
 回退时指定发布日志打印的完整备份目录。脚本读取快照 `api.overlays` 和 Worker 运行标记，以及当前 `--env-file` 的能力开关。只有快照的 API 开关有效、对应 Worker 当时运行且当前开关明确为 `true`，才选择该能力的叠加文件、注入对应开关并启动 Worker。较旧的备份没有文字 AI 开关记录时，以文字 Worker 的运行标记作为快照依据。图片理解需要 OSS。回退缺少原有或当前获准的 OSS 时，也会暂停需要 OSS 的永久删除，以保留待清理任务。
 
+已使用固定到期切线的部署回退时，只有快照保存了相同切线且快照的 Compose 支持该配置，脚本才会恢复永久删除。回退到使用全量到期扫描的快照时，API 与永久删除 Worker 的该能力保持关闭，数据库和独立删除回执继续保留。
+
+启用 OSS 回执后的快照会保存 `deletion-ledger.oss`。同版本回退只有在快照与当前绑定一致、候选镜像可读取同一命名空间且支持 OSS 回执时才恢复永久删除。旧版快照或回执存储不可达时，回退保持永久删除关闭并返回能力差异。
+
 当前环境文件、密钥路径和试用账号范围继续生效。冲突的开关保持关闭，逐项输出原因。手动回退恢复运行时后，如有能力差异，返回状态码 `3`。只有运行时验证通过且能力无差异时输出 `Rollback complete`。
 
 邮件只有在快照的模式与当前授权一致、当时有邮件 Worker，且对应叠加文件和凭据就绪时才恢复。v3/v7 旧快照或模式不一致时，API 以 `disabled` 启动并按需报告能力差异。还原 v8 或更新版本的数据库快照时，先用快照镜像使旧邮件挑战及任务失效，再启动 API。手动还原同时撤销复原的登录会话。
 
 从 schema v7 回退到 v0.2.x 的 schema v3 快照时，旧版 API 要求数据库匹配 v3，须显式追加 `--restore-db`。脚本停下 API 和 Worker，将 v7 库保存到 `${BDIR}/pre-rollback-<release_id>.dump`，然后从 `${BDIR}/spark.dump` 还原 v3 并启动旧版服务。原快照之后的写入可从回退前转储中恢复。
 
-跨版本手动还原会检查活库删除账本和独立回执目录，并在停写后复查。发现删除记录或无法检查回执时，须转入隔离恢复流程；若在停写后发现新回执，数据库仍保留原状，API 与 Worker 等待运维处置。
+文件回执模式的跨版本手动还原会检查活库删除账本和独立回执目录，并在停写后复查。发现删除记录或无法检查回执时，须转入隔离恢复流程；若在停写后发现新回执，数据库仍保留原状，API 与 Worker 等待运维处置。已配置或留下 OSS 回执绑定的部署只允许离线还原数据库，包含发布失败的自动回退。普通同版本回退保留现库。
 
-若在启用永久删除（T08）后发生数据库时间点回滚，务必在恢复数据库并执行迁移后、开放用户流量前，按 [永久删除与备份重放](../server/README.md#永久删除与备份重放v03-t08) 向 `tools` 只读挂载独立账本目录执行 `/spark replay-deletions`，并单独启动 `purge-worker` 核对墓碑、对象清理和撤销旧会话/授权。
+若在启用永久删除后发生数据库时间点回滚，先在隔离环境校验完整回执并重放，再单独启动 `purge-worker` 核对墓碑与对象清理。OSS 模式按 [删除回执存储](#删除回执存储) 操作。文件模式按 [永久删除与备份重放](../server/README.md#永久删除与备份重放v03-t08) 向 `tools` 只读挂载独立回执目录，执行 `/spark replay-deletions`。
 
 ### 5. 管理员与运维命令
 
@@ -183,7 +197,7 @@ docker compose --env-file /opt/spark/.env -f /opt/spark/deploy/compose.prod.yaml
 
 生产可沿用现有 systemd。资产就绪后，以 `Type=oneshot` 的专用服务运行备份，服务的 `EnvironmentFile` 指向只读的受控上传配置。配套 timer 设置 `OnCalendar=daily` 与 `Persistent=true`。启用前须确认脚本报告异机上传成功，并从恢复身份独立取回一份归档。将上传失败和最近异机备份超过 24 小时纳入告警。
 
-离线恢复在另一台受控主机上执行。用只读身份取回密文，备妥对应 PostgreSQL 主版本、受审版本的工具镜像和可恢复的应用配置。恢复环境文件只包含独立的 `SPARK_RECOVERY_DB_PASSWORD`（建议 URL 安全字符）及 `SPARK_RECOVERY_IMAGE`，权限 `0600`。先启动内部网络中的空 PostgreSQL，保持 API、全部 Worker 和流量关闭。备份完整解密验证后才恢复到数据库，恢复脚本会撤销旧会话、作废验证码、清除待发密文、取消旧邮件任务。恢复端临时工作目录须在受控的加密卷上，必要时通过 `TMPDIR` 指定。
+离线恢复在另一台受控主机上执行。用只读备份身份取回密文，备妥对应 PostgreSQL 主版本、受审版本的工具镜像和可恢复的应用配置。恢复环境文件权限为 `0600`，配置独立的 `SPARK_RECOVERY_DB_PASSWORD`（建议 URL 安全字符）及 `SPARK_RECOVERY_IMAGE`。使用 OSS 回执时还需配置有权读取回执的凭据和正式命名空间绑定。先启动内部网络中的空 PostgreSQL，保持 API、全部 Worker 和流量关闭。备份完整解密验证后才恢复到数据库，恢复脚本会撤销旧会话、作废验证码、清除待发密文、取消旧邮件任务。恢复端临时工作目录须在受控的加密卷上，必要时通过 `TMPDIR` 指定。
 
 ```sh
 docker compose --env-file /secure/recovery.env -f deploy/compose.recovery.yaml \
@@ -193,6 +207,110 @@ docker compose --env-file /secure/recovery.env -f deploy/compose.recovery.yaml \
 ```
 
 保持隔离并核对账号、收藏、项目及附件关联。若曾启用永久删除，从独立存储取回删除回执并按原流程重放，再核对已删对象和数据均未复活。随后按 [恢复验收](../docs/design/DELIVERY.md#测试用例矩阵) 核验应用配置和新登录，记录实际可恢复时间点以及服务重新可用耗时。数据库备份只覆盖数据库，附件与删除回执的恢复依赖各自的独立存储。
+
+### 删除回执存储
+
+OSS 回执默认复用附件 `oss-v2` 配置的桶、地域、官方 HTTPS 端点和附件前缀。用 `SPARK_DELETION_LEDGER_OSS_PREFIX` 明确指定同桶的私有并列前缀。例如附件使用 `spark/prod/` 时，`spark-deletion-ledger/` 可作为待核对的候选。配置实测通过后固定该前缀。附件与回执都由 Spark 后端使用受控凭据，账号之间的笔记和附件权限仍由 Spark 校验。
+
+写入和恢复可复用现有后台 OSS 凭据文件，也可各自设置覆盖。凭据 JSON 至少含 `access_key_id` 和 `access_key_secret`，文件为 `root:65532 0440` 或 `65532 0400`，容器只读挂载。单独配置也可用，显式指定 `SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH` 并提供 `region`、`endpoint`、`bucket`、`prefix`、`object_prefix` 五个字段。只有完全无 OSS 附件时 `object_prefix` 才留空。
+
+首次启用前由云管理员核对私有访问、Bucket Policy、有效 RAM 授权、版本和生命周期。桶须处于从未启用版本控制的状态。已启用和已暂停的桶都会忽略条件拒绝覆盖头。回执须在数据库备份可恢复期限内保留且可立即读取。云端有效规则须禁止回执被覆盖（含不带条件头的覆盖）或删除，并限制现有宽授权的外部主体访问该前缀。服务仍发送条件创建请求，发布探针验证并发与异体覆盖结果。[阿里云 OSS 条件写](https://www.alibabacloud.com/help/en/oss/developer-reference/putobject) · [前缀防覆盖规则](https://www.alibabacloud.com/help/en/oss/user-guide/prevent-file-overwrite)
+
+| 操作 | 所需范围 |
+| --- | --- |
+| 永久删除 Worker 归档回执 | 指定桶 `oss:GetBucketVersioning`，仅 `<prefix>receipts/*` 的 `oss:GetObject`、`oss:PutObject` |
+| 离线恢复读取回执 | 指定桶 `oss:GetBucketVersioning`，`oss:ListObjects` 分别按精确的 `oss:Prefix` 限定 `<prefix>receipts/` 和 `<prefix>probes/`，以及对应前缀的 `oss:GetObject` |
+| 合成探针身份 | 指定桶 `oss:GetBucketVersioning`，对 `<prefix>probes/*` 的 `oss:GetObject`、`oss:PutObject`，列表严格限定 `oss:Prefix=<prefix>probes/` |
+
+共用身份时合并实际需要的授权。保留附件前缀的清理权限，对回执前缀逐项验证禁止覆盖、删除对象、删除版本和修改 ACL。采用独立回执凭据时，另核对附件身份在回执前缀没有写入权限。恢复工具只检查、列举和读取回执，共用的云端身份可以有其他获准权限。探针结果单独记录，正式 `receipts/*` 的有效策略由控制面核验。桶级列表权限用精确的 `oss:Prefix` 限定。[阿里云 OSS RAM 前缀授权](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)
+
+<details>
+<summary>使用独立凭据时的 RAM 策略示例（含探针）</summary>
+
+以下按写入、恢复两种操作列出所需的 RAM 授权。复用现有后台身份时，在同一身份上核对两组权限；选择独立身份时分别授权。将 `YOUR_BUCKET` 和示例前缀替换为实际值。示例包含合成探针权限，前缀的防覆盖、防删除还须结合桶策略和其他有效授权核验。
+
+**回执写入身份**
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketVersioning"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:PutObject", "oss:GetObject"],
+      "Resource": [
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/receipts/*",
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/probes/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"],
+      "Condition": {"StringEquals": {"oss:Prefix": ["spark-deletion-ledger/probes/"]}}
+    }
+  ]
+}
+```
+
+**恢复只读身份**
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketVersioning"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetObject"],
+      "Resource": [
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/receipts/*",
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/probes/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"],
+      "Condition": {"StringEquals": {"oss:Prefix": [
+        "spark-deletion-ledger/receipts/", "spark-deletion-ledger/probes/"
+      ]}}
+    }
+  ]
+}
+```
+
+</details>
+
+用已审候选镜像与获准凭据运行一次 `/spark probe-deletion-ledger <新的随机UUID>`。命令只操作 `<prefix>probes/`，检查并发创建、防覆盖、内容未变和前缀限定列表。由受控恢复主机使用恢复时实际挂载的凭据运行 `verify-deletion-ledger`，回读同一探针并生成绑定。示例在 Bash 中执行，`LEDGER_CONFIG` 指向复用的附件配置或显式回执配置，`LEDGER_PREFIX` 为复用配置时的专用前缀：
+
+```bash
+umask 077
+docker run --rm --read-only --pull never \
+  -e SPARK_DELETION_LEDGER_BACKEND=oss \
+  -e "SPARK_DELETION_LEDGER_OSS_PREFIX=${LEDGER_PREFIX:-}" \
+  -v "$LEDGER_CONFIG:/run/spark-deletion-ledger/oss.json:ro" \
+  -v "$PROBE_CREDENTIALS:/run/secrets/spark-deletion-ledger-oss:ro" \
+  --entrypoint /spark "$REVIEWED_SPARK_IMAGE" probe-deletion-ledger "$PROBE_UUID" || exit 1
+namespace="$(docker compose --env-file "$RECOVERY_ENV" \
+  -f deploy/compose.recovery.yaml -f deploy/compose.recovery-ledger-oss.yaml \
+  -p spark-restore-ledger-check run --rm --no-deps -T tools \
+  verify-deletion-ledger "$PROBE_UUID")" || exit 1
+(set -o noclobber; printf '%s\n%s\n' "$PROBE_UUID" "$namespace" > "$BINDING_FILE")
+```
+
+绑定文件两行依次保存探针 UUID 与已验证的单行命名空间 JSON。将同一文件以 `0600` 保存在部署根目录的 `deletion-ledger.oss`，并独立随恢复配置保留。保留该已验证探针供后续恢复，不重新生成探针来放行旧库。运行版本升级后发布脚本用 Worker 身份检查桶版本，并比较实际命名空间和绑定。
+
+OSS 模式恢复环境设置 `SPARK_DELETION_LEDGER_BACKEND=oss` 及 `SPARK_DELETION_LEDGER_OSS_BINDING_HOST_PATH`（绑定文件绝对路径）。复用模式设置 `SPARK_OSS_CONFIG_HOST_PATH`、`SPARK_OSS_CREDENTIALS_HOST_PATH` 和 `SPARK_DELETION_LEDGER_OSS_PREFIX`。可通过 `SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH` 和 `SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH` 显式覆盖配置或凭据。只启动内部网络的 PostgreSQL。恢复脚本用短时 `tools` 容器读取并验证已知探针和绑定，再导入数据库，并使用校验时固定的配置重放回执。探针缺失、命名空间不符或 OSS 不可达时在导入前停止。若重放过程中失联，恢复库继续隔离。完成后验证删除队列、对象状态和已撤销会话，再开放流量。
 
 每日备份即使每次成功，故障发生在下一次备份前也可能丢失近 24 小时写入；漏跑或上传失败会延长窗口。数据库 RPO 15 分钟与 RTO 2 小时仍是设计目标。RPO 需要基础备份、持续异机 WAL 归档、归档延迟监控和时间点恢复演练来证明。[数据库恢复目标](../docs/ARCHITECTURE.md#部署恢复与运行目标)
 
@@ -221,7 +339,7 @@ docker compose --env-file /secure/recovery.env -f deploy/compose.recovery.yaml \
 | 私有 OSS | [compose.v0.3-oss.yaml](compose.v0.3-oss.yaml) | `asset-worker`（`--with-oss`） | `/etc/spark/oss/config.json`（只读）、`/etc/spark/oss/credentials.json`（`root:65532` 加 `0440`，或 UID `65532` 加 `0400`，只读挂载至 `/run/secrets/spark-oss-credentials.json`） |
 | 网页提取 | [compose.v0.3-url-extract.yaml](compose.v0.3-url-extract.yaml) | `url-worker`（`--with-url-extract`） | 无外部密钥（仅在审批出站策略后启用） |
 | 图片理解 | [compose.v0.3-image-analysis.yaml](compose.v0.3-image-analysis.yaml) | `image-worker`（`--with-image-analysis`，须同时 `--with-oss`） | `/etc/spark/image-analysis/api-key`（`root:65532`、`0440`/`0400`、`create_host_path: false`） |
-| 永久删除 | [compose.v0.3-purge.yaml](compose.v0.3-purge.yaml)（有 OSS 时叠加 [compose.v0.3-purge-oss.yaml](compose.v0.3-purge-oss.yaml)） | `purge-worker`（`--with-purge`） | `/var/lib/spark-deletion-ledger`（与数据库备份分属不同故障域，UID `65532` 拥有且权限 `0700`） |
+| 永久删除 | [compose.v0.3-purge.yaml](compose.v0.3-purge.yaml) → OSS 回执时 [compose.v0.10-purge-ledger-oss.yaml](compose.v0.10-purge-ledger-oss.yaml) → 有附件时 [compose.v0.3-purge-oss.yaml](compose.v0.3-purge-oss.yaml) | `purge-worker`（`--with-purge`） | 文件目录或私有 OSS 回执前缀。默认复用后台配置与凭据，可选独立覆盖。 |
 
 OSS 使用现有平台 AK/SK 由服务端直连，同一私有桶按前缀隔离测试与生产。平台密钥通过私有文件只读挂载，`.env` 仅配置开关和宿主路径。[`oss-v2` 配置](../server/README.md#私有-oss-的外部配置与联调)
 

@@ -179,8 +179,38 @@ func (s *Server) createCollection(c *gin.Context) (any, error) {
 		if err := checkCollectionTombstone(ctx, tx, uid, id); err != nil {
 			return nil, err
 		}
-		return response, nil
+		return s.replayCollectionProjects(ctx, tx, uid, id, response)
 	})
+}
+
+// Replay the saved response unless it refers to a since-deleted project.
+// In that case return the live collection, including current decision versions.
+func (s *Server) replayCollectionProjects(ctx context.Context, tx pgx.Tx, uid, id string, response json.RawMessage) (any, error) {
+	var saved struct {
+		Projects []contract.ProjectAssociation `json:"projects"`
+	}
+	if err := json.Unmarshal(response, &saved); err != nil {
+		return nil, err
+	}
+	if len(saved.Projects) == 0 {
+		return response, nil
+	}
+	projectIDs := make([]uuid.UUID, 0, len(saved.Projects))
+	for _, project := range saved.Projects {
+		projectIDs = append(projectIDs, project.ProjectId)
+	}
+	var missing bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM unnest($2::uuid[]) AS saved(id)
+		WHERE NOT EXISTS(SELECT 1 FROM projects p WHERE (p.user_id,p.id)=($1,saved.id)))`,
+		uid, projectIDs).Scan(&missing); err != nil {
+		return nil, err
+	}
+	if !missing {
+		return response, nil
+	}
+	row, err := s.loadCollection(ctx, tx, uid, id)
+	return row.Collection, err
 }
 
 func checkCollectionTombstone(ctx context.Context, tx pgx.Tx, uid, id string) error {

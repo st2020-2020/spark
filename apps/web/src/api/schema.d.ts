@@ -356,7 +356,11 @@ export interface paths {
         get: operations["getProject"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * 按项目版本删除项目
+         * @description 解除项目关联并保留所有收藏和附件。以原幂等键和原版本重试返回相同的 204。项目版本冲突返回 resource_conflict，同键改版本返回 idempotency_mismatch，其他账号的项目返回 not_found。
+         */
+        delete: operations["deleteProject"];
         options?: never;
         head?: never;
         /** 版本化修改项目 */
@@ -2873,6 +2877,60 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Project"];
+                };
+            };
+            /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    deleteProject: {
+        parameters: {
+            query: {
+                base_version: number;
+            };
+            header: {
+                "X-CSRF-Token": string;
+                "Idempotency-Key": string;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 项目已删除 */
+            204: {
+                headers: {
+                    /** @description 响应来自已完成的相同请求 */
+                    "Idempotent-Replayed"?: boolean;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 项目不存在或不属于当前账号 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description 项目版本冲突、幂等请求参数不符或同键正在执行 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description 错误码和对应 HTTP 状态见 docs/design/API.md */

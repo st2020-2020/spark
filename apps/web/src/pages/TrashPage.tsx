@@ -15,12 +15,14 @@ import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
 import { isValidHttpUrl } from '../lib/document';
 import { formatDateTime, formatRemainingTrashDays } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import {
   estimateTrashPurgeAfter,
   loadAcceptedPurges,
+  purgeStatusDescription,
   purgeStatusLabel,
   resolvePurgeActionError,
   saveAcceptedPurges,
@@ -57,6 +59,14 @@ export function TrashPage() {
 
   const purgeKeysRef = useRef<Map<string, string>>(new Map());
   const loadedUserIdRef = useRef<string | undefined>(user?.id);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (loadedUserIdRef.current !== user?.id) {
@@ -70,9 +80,11 @@ export function TrashPage() {
     }
   }, [user?.id]);
 
-  useEffect(() => {
-    saveAcceptedPurges(user?.id, acceptedPurges);
-  }, [user?.id, acceptedPurges]);
+  function dismissAcceptedPurge(collectionId: string) {
+    const next = acceptedPurges.filter((item) => item.collectionId !== collectionId);
+    setAcceptedPurges(next);
+    saveAcceptedPurges(user?.id, next);
+  }
 
   const trashQuery = useInfiniteQuery({
     queryKey: ['collections', 'trash'],
@@ -83,9 +95,13 @@ export function TrashPage() {
   });
 
   const restoreMutation = useMutation({
-    mutationFn: (col: CollectionSummary) =>
-      api.restoreCollection(col.id, { base_resource_version: col.resource_version }),
-    onSuccess: (_restored, col) => {
+    mutationFn: async (col: CollectionSummary): Promise<{ session: AuthSessionSnapshot; col: CollectionSummary }> => {
+      const session = captureAuthSession();
+      await api.restoreCollection(col.id, { base_resource_version: col.resource_version });
+      return { session, col };
+    },
+    onSuccess: ({ session, col }) => {
+      if (!isSameAuthSession(session)) return;
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setActionError(null);
       queryClient.setQueryData<InfiniteData<CollectionPage>>(
@@ -101,6 +117,7 @@ export function TrashPage() {
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
     onError: (err) => {
+      if (!mountedRef.current || loadedUserIdRef.current !== user?.id) return;
       setActionError(getFriendlyErrorMessage(err));
       if (isApiErrorCode(err, 'resource_conflict') || isApiErrorCode(err, 'not_found')) {
         void queryClient.invalidateQueries({ queryKey: ['collections', 'trash'] });
@@ -109,20 +126,38 @@ export function TrashPage() {
   });
 
   const purgeMutation = useMutation({
-    mutationFn: ({ col, idempotencyKey }: { col: CollectionSummary; idempotencyKey: string }) =>
-      api.purgeCollection(col.id, { base_resource_version: col.resource_version }, idempotencyKey),
-    onSuccess: (accepted: Accepted, { col }) => {
+    mutationFn: async ({
+      col,
+      idempotencyKey,
+    }: {
+      col: CollectionSummary;
+      idempotencyKey: string;
+    }): Promise<{ accepted: Accepted; col: CollectionSummary; session: AuthSessionSnapshot }> => {
+      const session = captureAuthSession();
+      const accepted = await api.purgeCollection(
+        col.id,
+        { base_resource_version: col.resource_version },
+        idempotencyKey,
+      );
+      return { accepted, col, session };
+    },
+    onSuccess: ({ accepted, col, session }) => {
+      if (session.userId) {
+        const currentStored = loadAcceptedPurges(session.userId);
+        saveAcceptedPurges(session.userId, [
+          {
+            collectionId: col.id,
+            operationId: accepted.operation_id,
+            status: accepted.status,
+          },
+          ...currentStored.filter((item) => item.collectionId !== col.id),
+        ]);
+      }
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
       purgeKeysRef.current.delete(`${col.id}:${col.resource_version}`);
       setActionError(null);
       setConfirmTarget(null);
-      setAcceptedPurges((prev) => [
-        {
-          collectionId: col.id,
-          operationId: accepted.operation_id,
-          status: accepted.status,
-        },
-        ...prev.filter((item) => item.collectionId !== col.id),
-      ]);
+      setAcceptedPurges(loadAcceptedPurges(session.userId ?? undefined));
       queryClient.setQueryData<InfiniteData<CollectionPage>>(
         ['collections', 'trash'],
         (old) => removeCollectionFromPages(old, col.id),
@@ -138,6 +173,7 @@ export function TrashPage() {
       void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
     },
     onError: (err) => {
+      if (!mountedRef.current || loadedUserIdRef.current !== user?.id) return;
       const resolved = resolvePurgeActionError(err);
       setActionError(resolved.message);
       setConfirmTarget(null);
@@ -148,29 +184,47 @@ export function TrashPage() {
   });
 
   async function handleCheckPurgeStatus(collectionId: string) {
+    const session = captureAuthSession();
     setCheckingById((prev) => ({ ...prev, [collectionId]: true }));
     setStatusErrorById((prev) => ({ ...prev, [collectionId]: null }));
     try {
       const latest = await api.getCollectionPurgeStatus(collectionId);
-      setAcceptedPurges((prev) =>
-        prev.map((item) =>
-          item.collectionId === collectionId
-            ? { ...item, operationId: latest.operation_id, status: latest.status }
-            : item,
-        ),
-      );
+      if (session.userId) {
+        const currentStored = loadAcceptedPurges(session.userId);
+        saveAcceptedPurges(
+          session.userId,
+          currentStored.map((item) =>
+            item.collectionId === collectionId
+              ? { collectionId, operationId: latest.operation_id, status: latest.status }
+              : item,
+          ),
+        );
+      }
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
+      setAcceptedPurges(loadAcceptedPurges(session.userId ?? undefined));
     } catch (err) {
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
       setStatusErrorById((prev) => ({
         ...prev,
         [collectionId]: getFriendlyErrorMessage(err),
       }));
     } finally {
-      setCheckingById((prev) => ({ ...prev, [collectionId]: false }));
+      if (mountedRef.current && isSameAuthSession(session)) {
+        setCheckingById((prev) => ({ ...prev, [collectionId]: false }));
+      }
     }
   }
 
   function handleConfirmPurge() {
-    if (!purgeEnabled || !confirmTarget || restoreMutation.isPending || purgeMutation.isPending) return;
+    if (
+      !purgeEnabled ||
+      !confirmTarget ||
+      acceptedIds.has(confirmTarget.id) ||
+      restoreMutation.isPending ||
+      purgeMutation.isPending
+    ) {
+      return;
+    }
     const keySlot = `${confirmTarget.id}:${confirmTarget.resource_version}`;
     let idempotencyKey = purgeKeysRef.current.get(keySlot);
     if (!idempotencyKey) {
@@ -217,7 +271,7 @@ export function TrashPage() {
                     </span>
                   </div>
                   <div className="sp-banner-detail">
-                    已从回收站、详情与搜索移除；后台清理完成后会更新为已完成。
+                    {purgeStatusDescription(rec.status)}
                   </div>
                   {statusErr && (
                     <div className="sp-banner-detail sp-text-danger" role="alert">
@@ -246,11 +300,7 @@ export function TrashPage() {
                     type="button"
                     className="sp-btn sp-btn--sm sp-btn--ghost"
                     aria-label={`关闭操作 ${rec.operationId.slice(0, 8)} 提示`}
-                    onClick={() =>
-                      setAcceptedPurges((prev) =>
-                        prev.filter((item) => item.collectionId !== rec.collectionId),
-                      )
-                    }
+                    onClick={() => dismissAcceptedPurge(rec.collectionId)}
                   >
                     <X size={14} strokeWidth={2} aria-hidden="true" />
                     <span>收起</span>

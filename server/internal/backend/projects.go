@@ -3,12 +3,15 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"spark/server/internal/contract"
+	"spark/server/internal/store"
 )
 
 type querier interface {
@@ -54,10 +57,9 @@ func (s *Server) createProject(c *gin.Context) (any, error) {
 	if err = validateProject(req.Name, req.FocusPoints); err != nil {
 		return nil, err
 	}
-	return s.idempotent(c, req, 201, func(tx pgx.Tx) (any, error) {
+	ctx, uid := c.Request.Context(), current(c).User.ID
+	return s.idempotentWithReplay(c, req, 201, func(tx pgx.Tx) (any, error) {
 		id := uuid.NewString()
-		uid := current(c).User.ID
-		ctx := c.Request.Context()
 		if _, err = tx.Exec(ctx, `INSERT INTO projects(id,user_id,name,description,focus_points) VALUES($1,$2,$3,$4,$5)`, id, uid, req.Name, req.Description, jsonBytes(req.FocusPoints)); err != nil {
 			return nil, err
 		}
@@ -65,6 +67,22 @@ func (s *Server) createProject(c *gin.Context) (any, error) {
 			return nil, err
 		}
 		return loadProject(ctx, tx, uid, id)
+	}, func(tx pgx.Tx, response json.RawMessage) (any, error) {
+		var saved struct {
+			ID uuid.UUID `json:"id"`
+		}
+		if err := json.Unmarshal(response, &saved); err != nil {
+			return nil, err
+		}
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM projects WHERE user_id=$1 AND id=$2)`,
+			uid, saved.ID).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, notFound
+		}
+		return response, nil
 	})
 }
 func (s *Server) updateProject(c *gin.Context) (any, error) {
@@ -120,6 +138,47 @@ func (s *Server) updateProject(c *gin.Context) (any, error) {
 	}
 	return p, nil
 }
+func (s *Server) deleteProject(c *gin.Context) (any, error) {
+	baseVersion, err := strconv.ParseInt(c.Query("base_version"), 10, 64)
+	if err != nil || baseVersion < 1 {
+		return nil, problem(400, "invalid_request", "无效的项目版本。")
+	}
+	ctx, uid, id := c.Request.Context(), current(c).User.ID, c.Param("id")
+	return s.idempotent(c, baseVersion, http.StatusNoContent, func(tx pgx.Tx) (any, error) {
+		var version int64
+		if err := tx.QueryRow(ctx, `SELECT version FROM projects WHERE user_id=$1 AND id=$2`, uid, id).Scan(&version); err != nil {
+			return nil, err
+		}
+		if version != baseVersion {
+			return nil, conflict("resource_conflict", "current_version", version)
+		}
+		// The account change lock serializes deletion with manual decisions and
+		// organization write-back. Version live and restorable notes alike.
+		if _, err := tx.Exec(ctx, `WITH detached AS (
+			DELETE FROM collection_projects WHERE user_id=$1 AND project_id=$2 RETURNING collection_id
+		), affected AS (
+			UPDATE collections c SET decision_version=c.decision_version+1,
+				resource_version=c.resource_version+1,updated_at=now()
+			FROM detached WHERE c.user_id=$1 AND c.id=detached.collection_id AND c.purge_requested_at IS NULL
+			RETURNING c.id,c.resource_version
+		), sequence AS (
+			UPDATE user_change_counters SET last_seq=last_seq+(SELECT count(*) FROM affected)
+			WHERE user_id=$1 RETURNING last_seq-(SELECT count(*) FROM affected) AS previous
+		)
+		INSERT INTO change_events(user_id,seq,resource_type,resource_id,resource_version,action)
+		SELECT $1,sequence.previous+row_number() OVER(ORDER BY affected.id),
+			'collection',affected.id,affected.resource_version,'upsert' FROM sequence CROSS JOIN affected`, uid, id); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM projects WHERE user_id=$1 AND id=$2`, uid, id); err != nil {
+			return nil, err
+		}
+		return nil, store.New(tx).RecordChange(ctx, store.RecordChangeParams{
+			UserID: idPG(uid), ResourceType: "project", ResourceID: idPG(id), ResourceVersion: version + 1, Action: "delete",
+		})
+	})
+}
+
 func (s *Server) queryProjectPage(c *gin.Context, state, projection string) (pgx.Rows, int, error) {
 	limit, cur, err := s.pagination(c)
 	if err != nil {

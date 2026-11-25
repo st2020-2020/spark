@@ -20,7 +20,7 @@ import (
 // ReplayDeletions applies the independent receipts to an offline restored
 // database. The worker then removes objects from the corresponding restored
 // storage even when an older database backup marked cleanup complete.
-func ReplayDeletions(ctx context.Context, pool *pgxpool.Pool, archive *purgearchive.Archive) (int, error) {
+func ReplayDeletions(ctx context.Context, pool *pgxpool.Pool, archive purgearchive.Archive) (int, error) {
 	queue, err := river.NewClient(riverpgxv5.New(pool), &river.Config{Schema: db.RiverSchema(pool)})
 	if err != nil {
 		return 0, err

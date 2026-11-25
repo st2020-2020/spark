@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"spark/server/db"
 	"spark/server/internal/purgearchive"
 )
@@ -69,7 +70,7 @@ func TestDeletionReplayRejectsMissingAccountWithObjects(t *testing.T) {
 	receipt := purgearchive.Receipt{
 		SchemaVersion: 1, OperationID: uuid.New(), UserID: owner, CollectionID: uuid.New(), RequestedAt: time.Now().UTC(),
 	}
-	if err := archive.Put(receipt); err != nil {
+	if err := archive.Put(t.Context(), receipt); err != nil {
 		t.Fatal(err)
 	}
 	if count, err := ReplayDeletions(t.Context(), app.Pool, archive); count != 0 || err != nil {
@@ -78,7 +79,7 @@ func TestDeletionReplayRejectsMissingAccountWithObjects(t *testing.T) {
 
 	receipt.OperationID = uuid.New()
 	receipt.Objects = []purgearchive.Object{{Key: "fixture/users/" + owner.String() + "/attachments/" + uuid.NewString()}}
-	if err := archive.Put(receipt); err != nil {
+	if err := archive.Put(t.Context(), receipt); err != nil {
 		t.Fatal(err)
 	}
 	count, err := ReplayDeletions(t.Context(), app.Pool, archive)
@@ -209,7 +210,7 @@ func TestPermanentPurgeAndBackupReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	objects := &controlledPurgeObjects{contents: map[string]string{final: "final-ver-1", staging: ""}, calls: map[string]int{}, failKey: staging}
-	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, objects)
+	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, objects, pgtype.Timestamptz{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +250,7 @@ func TestPermanentPurgeAndBackupReplay(t *testing.T) {
 	}
 	repick()
 	checkPurgeEventually(t, "physical transaction rollback", func() bool { return recordedFailure("synthetic physical transaction failure") })
-	receipt, err := archive.Read(operationID)
+	receipt, err := archive.Read(ctx, operationID)
 	if err != nil || len(receipt.Objects) != 2 || receipt.Objects[0].Key != final || receipt.Objects[0].Version != "final-ver-1" ||
 		receipt.Objects[1].NotBefore == nil || !receipt.Objects[1].NotBefore.Equal(expires) {
 		t.Fatalf("independent copy lost object cleanup metadata: %v", err)
@@ -316,7 +317,7 @@ func TestPermanentPurgeAndBackupReplay(t *testing.T) {
 	objects.mu.Lock()
 	objects.contents[final], objects.contents[staging] = "final-ver-1", ""
 	objects.mu.Unlock()
-	restoredWorker, err := StartPurgeWorker(context.Background(), restoreApp.Pool, archive, objects)
+	restoredWorker, err := StartPurgeWorker(context.Background(), restoreApp.Pool, archive, objects, pgtype.Timestamptz{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +382,7 @@ func TestPurgeSweepHonorsTrashDeadlineWithAnotherWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = archive.Close() })
-	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, nil)
+	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, nil, pgtype.Timestamptz{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,5 +405,153 @@ func TestPurgeSweepHonorsTrashDeadlineWithAnotherWorker(t *testing.T) {
 	if err := app.Pool.QueryRow(ctx, `SELECT EXISTS(SELECT FROM river_job
 		WHERE kind='spark_sweep_expired_collections' AND scheduled_at>now() AND state='scheduled')`).Scan(&next); err != nil || !next {
 		t.Fatalf("daily sweep did not persist its successor: %v", err)
+	}
+}
+
+func TestPurgeExpiryCutoverPreservesLegacyTrashAndResumesAccepted(t *testing.T) {
+	app, base := testBackend(t)
+	ctx := t.Context()
+	app.Config.PurgeEnabled = true
+	owner := imageTestAccount(t, app, base, "purge-cutover")
+	objects, _, storage := newUploadStorageFixture(t)
+	app.Assets = storage
+	makeTrash := func() string {
+		t.Helper()
+		id := uuid.NewString()
+		path := "/collections/" + id
+		owner.do("POST", "/collections", collectionInput(id, "synthetic cutover"), uuid.NewString()).want(t, 201)
+		owner.do("DELETE", path, map[string]any{"base_resource_version": 1}, "").want(t, 200)
+		return path
+	}
+	setDeadline := func(path string, deadline time.Time) {
+		t.Helper()
+		if _, err := app.Pool.Exec(ctx, `UPDATE collections SET purge_after=$2,deleted_at=$2::timestamptz-interval '30 days'
+			WHERE id=$1`, strings.TrimPrefix(path, "/collections/"), deadline); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const conditionVersion = 2
+	condition := map[string]any{"base_resource_version": conditionVersion}
+	cutover := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	legacy := makeTrash()
+	setDeadline(legacy, cutover.Add(-time.Microsecond))
+	due := makeTrash()
+	dueID := strings.TrimPrefix(due, "/collections/")
+	setDeadline(due, cutover)
+	young := makeTrash()
+	accepted := makeTrash()
+	setDeadline(accepted, cutover.Add(-time.Minute))
+	acceptedPurge := accepted + "/purge"
+	key := uuid.NewString()
+	previous := owner.do("POST", acceptedPurge, condition, key).want(t, 202)["operation_id"]
+	if _, err := app.Pool.Exec(ctx, `UPDATE river_job SET state='discarded',finalized_at=now(),attempt=max_attempts
+		WHERE kind='spark_purge_collection' AND args->>'collection_id'=$1`, strings.TrimPrefix(accepted, "/collections/")); err != nil {
+		t.Fatal(err)
+	}
+
+	picture := saveImageCollection(t, app, owner, objects)
+	picturePath, attachment := "/collections/"+picture.id, "/attachments/"+picture.attachmentID
+	pictureTrash := func(version int) map[string]any {
+		t.Helper()
+		return owner.do("DELETE", picturePath, map[string]any{"base_resource_version": version}, "").want(t, 200)
+	}
+	checkThumbnail := func(want int) {
+		t.Helper()
+		res, err := owner.http.Get(base + "/api/v1" + attachment + "/thumbnail")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != want || want == 200 && res.Header.Get("Content-Type") != "image/jpeg" {
+			t.Fatalf("thumbnail: got %d, want %d", res.StatusCode, want)
+		}
+	}
+	pictureTrash(1)
+	owner.do("GET", attachment+"/download", nil, "").want(t, 200)
+	checkThumbnail(200)
+	owner.do("POST", picturePath+"/restore", condition, "").want(t, 200)
+	owner.do("GET", attachment+"/download", nil, "").want(t, 200)
+	checkThumbnail(200)
+	pictureVersion := pictureTrash(3)["resource_version"]
+	setDeadline(picturePath, cutover.Add(-time.Minute))
+	var staging, final string
+	if err := app.Pool.QueryRow(ctx, `UPDATE uploads u SET expires_at=now()-interval '1 second'
+		FROM attachments a WHERE (u.user_id,u.id)=(a.user_id,a.upload_id) AND a.id=$1
+		RETURNING u.staging_key,u.final_key`, picture.attachmentID).Scan(&staging, &final); err != nil {
+		t.Fatal(err)
+	}
+	objects.mu.Lock()
+	objects.objects[staging] = objects.objects[final]
+	objects.mu.Unlock()
+
+	// Failure registering one auto-expired collection must not starve an
+	// explicit deletion whose previous cleanup exhausted its attempts.
+	if _, err := app.Pool.Exec(ctx, `CREATE FUNCTION reject_cutover_expiry() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN IF NEW.collection_id <> TG_ARGV[0]::uuid THEN RETURN NEW; END IF;
+		RAISE EXCEPTION 'synthetic expiry registration failure'; END $$;
+		CREATE TRIGGER reject_cutover_expiry BEFORE INSERT ON deletion_ledger
+		FOR EACH ROW EXECUTE FUNCTION reject_cutover_expiry('`+dueID+`')`); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := purgearchive.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = archive.Close() })
+	worker, err := StartPurgeWorker(context.Background(), app.Pool, archive, storage,
+		pgtype.Timestamptz{Time: cutover, Valid: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopImageTestWorker(t, worker)
+	checkPurgeEventually(t, "accepted recovery while new expiry registration fails", func() bool {
+		var recoveredWhileBlocked bool
+		err := app.Pool.QueryRow(ctx, `SELECT
+			EXISTS(SELECT FROM deletion_ledger WHERE id=$1 AND completed_at IS NOT NULL)
+			AND EXISTS(SELECT FROM river_job WHERE kind='spark_sweep_expired_collections' AND state='retryable')`,
+			previous).Scan(&recoveredWhileBlocked)
+		return err == nil && recoveredWhileBlocked
+	})
+	owner.do("GET", due+"/purge", nil, "").want(t, 404)
+	if _, err := app.Pool.Exec(ctx, `DROP TRIGGER reject_cutover_expiry ON deletion_ledger`); err != nil {
+		t.Fatal(err)
+	}
+	checkPurgeEventually(t, "failed sweep available for retry", func() bool {
+		tag, err := app.Pool.Exec(ctx, `UPDATE river_job SET state='available',scheduled_at=now()
+			WHERE kind='spark_sweep_expired_collections' AND state='retryable'`)
+		return err == nil && tag.RowsAffected() == 1
+	})
+	checkPurgeEventually(t, "expiry exactly at cutover", func() bool {
+		var complete bool
+		err := app.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM deletion_ledger
+			WHERE collection_id=$1 AND completed_at IS NOT NULL)`, dueID).Scan(&complete)
+		return err == nil && complete
+	})
+	owner.do("GET", legacy, nil, "").want(t, 200)
+	owner.do("GET", legacy+"/purge", nil, "").want(t, 404)
+	owner.do("POST", legacy+"/restore", condition, "").want(t, 200)
+	owner.do("GET", young, nil, "").want(t, 200)
+	replay := owner.do("POST", acceptedPurge, condition, key).want(t, 202)
+	if replay["operation_id"] != previous || replay["status"] != "completed" {
+		t.Fatalf("previous operation was not resumed: %v", replay)
+	}
+
+	purgePath := picturePath + "/purge"
+	owner.do("GET", purgePath, nil, "").want(t, 404)
+	owner.do("POST", purgePath, map[string]any{"base_resource_version": pictureVersion}, uuid.NewString()).want(t, 202)
+	owner.do("GET", attachment+"/download", nil, "").want(t, 404)
+	checkThumbnail(404)
+	owner.do("POST", picturePath+"/restore", map[string]any{"base_resource_version": pictureVersion}, "").want(t, 404)
+	checkPurgeEventually(t, "explicit removal of legacy attachment", func() bool {
+		return owner.do("GET", purgePath, nil, "").want(t, 200)["status"] == "completed"
+	})
+	objects.mu.Lock()
+	defer objects.mu.Unlock()
+	if objects.objects[final] != nil || objects.objects[staging] != nil {
+		t.Fatal("the final or staging object remained after completion")
 	}
 }
