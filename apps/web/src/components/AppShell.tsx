@@ -38,6 +38,7 @@ import {
   pruneSidebarPinnedIds,
   resolveSidebarProjects,
   saveSidebarPrefs,
+  subscribeSidebarPrefs,
   togglePinnedWithMeta,
   type SidebarPrefs,
 } from '../lib/sidebarPrefs';
@@ -86,6 +87,12 @@ export function AppShell({
   useEffect(() => {
     setSidebarPrefs(loadSidebarPrefs(user?.id));
     setProjectCustomizeOpen(false);
+    if (!user?.id) return;
+    return subscribeSidebarPrefs((changedUserId, prefs) => {
+      if (changedUserId === user.id) {
+        setSidebarPrefs(prefs);
+      }
+    });
   }, [user?.id]);
 
   const updateSidebarPrefs = (patch: Partial<SidebarPrefs>) => {
@@ -146,18 +153,19 @@ export function AppShell({
   }, [drawerOpen, drawerRendered]);
 
   const activeProjectsQuery = useInfiniteQuery({
-    queryKey: ['projects', 'sidebar-active'],
+    queryKey: ['projects', 'sidebar-active', user?.id],
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => api.listProjects({ state: 'active', cursor: pageParam, limit: 50 }),
     getNextPageParam: (page) => page.next_cursor,
+    enabled: Boolean(user),
     staleTime: 30_000,
   });
 
   const remoteProjectTerm = projectPopoverSearch.trim();
   const activeProjectsSearchQuery = useQuery({
-    queryKey: ['projects', 'sidebar-active-search', remoteProjectTerm],
+    queryKey: ['projects', 'sidebar-active-search', user?.id, remoteProjectTerm],
     queryFn: () => api.listProjects({ state: 'active', q: remoteProjectTerm, limit: 50 }),
-    enabled: projectCustomizeOpen && Boolean(remoteProjectTerm) && Boolean(activeProjectsQuery.hasNextPage),
+    enabled: Boolean(user) && projectCustomizeOpen && Boolean(remoteProjectTerm) && Boolean(activeProjectsQuery.hasNextPage),
     staleTime: 15_000,
   });
 
@@ -170,9 +178,9 @@ export function AppShell({
   }, [activeProjectsQuery.data, activeProjectsSearchQuery.data]);
 
   const anyProjectsQuery = useQuery({
-    queryKey: ['projects', 'sidebar-any'],
+    queryKey: ['projects', 'sidebar-any', user?.id],
     queryFn: () => api.listProjects({ limit: 1 }),
-    enabled: activeProjectsQuery.isSuccess && activeItems.length === 0,
+    enabled: Boolean(user) && activeProjectsQuery.isSuccess && activeItems.length === 0,
     staleTime: 30_000,
   });
 

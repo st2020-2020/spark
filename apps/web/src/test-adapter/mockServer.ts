@@ -1538,6 +1538,54 @@ export function createTestAdapter(): TestAdapter {
       return pub;
     },
 
+    async deleteProject(id, baseVersion, idempotencyKey) {
+      const user = requireUser(true);
+      if (!idempotencyKey || !idempotencyKey.trim()) {
+        throw new ApiError({ status: 400, code: 'invalid_request', message: '缺少 Idempotency-Key 请求头' });
+      }
+      const replay = checkIdempotency<{ deleted: true }>(
+        user.id,
+        'deleteProject',
+        idempotencyKey,
+        { id, base_version: baseVersion },
+      );
+      if (replay) return;
+
+      const idx = projects.findIndex((p) => p.id === id && p.user_id === user.id);
+      if (idx === -1) {
+        throw new ApiError({ status: 404, code: 'not_found', message: '项目不存在' });
+      }
+      const proj = projects[idx];
+      if (proj.version !== baseVersion) {
+        throw new ApiError({
+          status: 409,
+          code: 'resource_conflict',
+          message: '项目已被更新，请刷新当前版本后再删除',
+          details: { current_version: proj.version },
+        });
+      }
+
+      projects.splice(idx, 1);
+      // Preserve every collection, document, tag, and attachment; unlink only associations to the deleted project.
+      for (const col of collections) {
+        if (col.user_id !== user.id) continue;
+        const nextProjects = col.projects.filter((p) => p.project_id !== id);
+        if (nextProjects.length !== col.projects.length) {
+          col.projects = nextProjects;
+          col.decision_version += 1;
+          col.resource_version += 1;
+        }
+      }
+      refreshProjectCounts(user.id);
+      saveIdempotency(
+        user.id,
+        'deleteProject',
+        idempotencyKey,
+        { id, base_version: baseVersion },
+        { deleted: true },
+      );
+    },
+
     async createTag(body, idempotencyKey) {
       const user = requireUser(true);
       const replay = checkIdempotency<Tag>(user.id, 'createTag', idempotencyKey, body);

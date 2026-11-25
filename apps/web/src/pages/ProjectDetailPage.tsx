@@ -1,22 +1,35 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, Search, X } from 'lucide-react';
+import { ArrowLeft, Pencil, Search, Trash2, X } from 'lucide-react';
 import type { CollectionType, ProjectState } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { CollectionCard } from '../components/CollectionCard';
-import { CollectionComposer } from '../components/CollectionComposer';
+import { CollectionComposer, type ComposerDraftSnapshot } from '../components/CollectionComposer';
+import { DeleteProjectConfirmModal } from '../components/DeleteProjectConfirmModal';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
+import {
+  isDraftMeaningful,
+  loadDraft,
+  reconcileProjectDraftsOnDelete,
+  type CollectionDraft,
+} from '../lib/drafts';
 import { contentTypeLabels, projectStateLabel } from '../lib/format';
+import { generateIdempotencyKey } from '../lib/idempotency';
 import { projectToneClass } from '../lib/projectTone';
+import { removeSidebarPinnedId } from '../lib/sidebarPrefs';
 
 export function ProjectDetailPage() {
   const { id = '' } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const api = useApi();
+  const { user } = useAuth();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
@@ -51,6 +64,31 @@ export function ProjectDetailPage() {
   const [editFocusPoints, setEditFocusPoints] = useState<string[]>([]);
   const [editError, setEditError] = useState<string | null>(null);
   const [conflictLatestVersion, setConflictLatestVersion] = useState<number | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteConflictVersion, setDeleteConflictVersion] = useState<number | null>(null);
+  const [deleteDraftState, setDeleteDraftState] = useState<{
+    hasUnsavedDraft: boolean;
+    hasPendingImageFiles: boolean;
+    readyImageCount: number;
+    inboxHasDraft: boolean;
+  }>({
+    hasUnsavedDraft: false,
+    hasPendingImageFiles: false,
+    readyImageCount: 0,
+    inboxHasDraft: false,
+  });
+  const composerSnapshotRef = useRef<ComposerDraftSnapshot | null>(null);
+  const deleteKeyRef = useRef<{ version: number; key: string } | null>(null);
+  const deleteAttemptSessionRef = useRef<AuthSessionSnapshot | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (searchComposingRef.current) return;
@@ -73,6 +111,23 @@ export function ProjectDetailPage() {
     setEditError(null);
     setConflictLatestVersion(null);
     setEditOpen(true);
+  };
+
+  const openDeleteModal = () => {
+    if (!projectQuery.data) return;
+    const live = composerSnapshotRef.current;
+    const diskProjectDraft = loadDraft<CollectionDraft>(user?.id ?? '', `project:${id}`).data;
+    const diskInboxDraft = loadDraft<CollectionDraft>(user?.id ?? '', 'inbox').data;
+    const readyFromDisk = (diskProjectDraft?.images ?? []).filter((img) => Boolean(img.uploadId)).length;
+    setDeleteDraftState({
+      hasUnsavedDraft: Boolean(live?.hasUnsavedContent) || isDraftMeaningful(diskProjectDraft),
+      hasPendingImageFiles: Boolean(live?.hasPendingImageFiles),
+      readyImageCount: Math.max(live?.readyImageCount ?? 0, readyFromDisk),
+      inboxHasDraft: isDraftMeaningful(diskInboxDraft),
+    });
+    setDeleteError(null);
+    setDeleteConflictVersion(null);
+    setDeleteOpen(true);
   };
 
   const collectionsQuery = useInfiniteQuery({
@@ -153,9 +208,135 @@ export function ProjectDetailPage() {
     updateMutation.mutate(conflictLatestVersion ?? projectQuery.data.version);
   };
 
-  if (projectQuery.isLoading) return <LoadingState message="正在加载项目…" />;
+  const finishProjectDeletionNavigation = (
+    targetUserId: string | null,
+    deletedProjectId: string,
+    draftTransferResult: { movedToInbox: boolean },
+    customToast?: {
+      message: string;
+      tone?: 'default' | 'error';
+    },
+  ) => {
+    const projectName = projectQuery.data?.name;
+    deleteKeyRef.current = null;
+    setDeleteOpen(false);
+    setEditOpen(false);
+    void queryClient.cancelQueries({ queryKey: ['project', deletedProjectId] });
+    queryClient.removeQueries({ queryKey: ['project', deletedProjectId] });
+    queryClient.removeQueries({ queryKey: ['project-collections', deletedProjectId] });
+    void queryClient.invalidateQueries({ queryKey: ['projects'] });
+    void queryClient.invalidateQueries({ queryKey: ['project'] });
+    void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+    void queryClient.invalidateQueries({ queryKey: ['collections'] });
+    void queryClient.invalidateQueries({ queryKey: ['collection'] });
+    void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
+    void queryClient.invalidateQueries({ queryKey: ['collections-command'] });
+    void queryClient.invalidateQueries({ queryKey: ['tags'] });
+    const defaultMessage = draftTransferResult.movedToInbox
+      ? `项目${projectName ? `「${projectName}」` : ''}已删除，未保存草稿已转存到收件箱`
+      : `项目${projectName ? `「${projectName}」` : ''}已删除，原关联收藏与图片已保留`;
+    pushToast(customToast ?? { message: defaultMessage });
+    if (targetUserId) {
+      // Drafts and sidebar pins already updated for targetUserId prior to UI unmount
+    }
+    navigate('/projects', { replace: true });
+  };
+
+  const deleteMutation = useMutation({
+    mutationFn: async (baseVersion: number): Promise<{ session: AuthSessionSnapshot; deletedId: string }> => {
+      const session = captureAuthSession();
+      deleteAttemptSessionRef.current = session;
+      if (!deleteKeyRef.current || deleteKeyRef.current.version !== baseVersion) {
+        deleteKeyRef.current = { version: baseVersion, key: generateIdempotencyKey() };
+      }
+      await api.deleteProject(id, baseVersion, deleteKeyRef.current.key);
+      return { session, deletedId: id };
+    },
+    onSuccess: ({ session, deletedId }) => {
+      const activeSnapshot = isSameAuthSession(session) ? composerSnapshotRef.current?.currentDraft : null;
+      const transferResult = session.userId
+        ? reconcileProjectDraftsOnDelete(session.userId, deletedId, activeSnapshot)
+        : { movedToInbox: false };
+      if (session.userId) {
+        removeSidebarPinnedId(session.userId, 'project', deletedId);
+      }
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
+      finishProjectDeletionNavigation(session.userId, deletedId, transferResult);
+    },
+    onError: async (err, baseVersion) => {
+      const session = deleteAttemptSessionRef.current ?? captureAuthSession();
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
+      if (isApiErrorCode(err, 'not_found')) {
+        const transferResult = session.userId
+          ? reconcileProjectDraftsOnDelete(session.userId, id, composerSnapshotRef.current?.currentDraft)
+          : { movedToInbox: false };
+        if (session.userId) {
+          removeSidebarPinnedId(session.userId, 'project', id);
+        }
+        finishProjectDeletionNavigation(session.userId, id, transferResult, {
+          message: '该项目已不存在或已被删除，原关联收藏仍保留。',
+          tone: 'error',
+        });
+        return;
+      }
+      if (isApiErrorCode(err, 'resource_conflict')) {
+        setDeleteError(null);
+        try {
+          const latest = await api.getProject(id);
+          if (!mountedRef.current || !isSameAuthSession(session)) return;
+          queryClient.setQueryData(['project', id], latest);
+          setDeleteConflictVersion(latest.version);
+        } catch (refreshErr) {
+          if (!mountedRef.current || !isSameAuthSession(session)) return;
+          if (isApiErrorCode(refreshErr, 'not_found')) {
+            const transferResult = session.userId
+              ? reconcileProjectDraftsOnDelete(session.userId, id, composerSnapshotRef.current?.currentDraft)
+              : { movedToInbox: false };
+            if (session.userId) {
+              removeSidebarPinnedId(session.userId, 'project', id);
+            }
+            finishProjectDeletionNavigation(session.userId, id, transferResult, {
+              message: '该项目已不存在或已被删除，原关联收藏仍保留。',
+              tone: 'error',
+            });
+            return;
+          }
+          setDeleteError(getFriendlyErrorMessage(refreshErr));
+        }
+        return;
+      }
+      if (isApiErrorCode(err, 'idempotency_mismatch') || deleteKeyRef.current?.version !== baseVersion) {
+        deleteKeyRef.current = null;
+      }
+      setDeleteError(getFriendlyErrorMessage(err));
+    },
+  });
+
+  if (projectQuery.isLoading) {
+    return (
+      <div>
+        <div className="sp-detail-bar">
+          <Link to="/projects" className="sp-btn--quiet sp-back-link">
+            <ArrowLeft size={18} strokeWidth={2} aria-hidden="true" />
+            <span>项目</span>
+          </Link>
+        </div>
+        <LoadingState message="正在加载项目…" />
+      </div>
+    );
+  }
   if (projectQuery.isError) {
-    return <ErrorBanner error={projectQuery.error} onRetry={() => void projectQuery.refetch()} />;
+    return (
+      <div>
+        <div className="sp-detail-bar">
+          <Link to="/projects" className="sp-btn--quiet sp-back-link">
+            <ArrowLeft size={18} strokeWidth={2} aria-hidden="true" />
+            <span>项目</span>
+          </Link>
+        </div>
+        <ErrorBanner error={projectQuery.error} onRetry={() => void projectQuery.refetch()} />
+      </div>
+    );
   }
 
   const project = projectQuery.data;
@@ -171,9 +352,18 @@ export function ProjectDetailPage() {
           <span>项目</span>
         </Link>
         <div className="sp-detail-actions">
-          <button type="button" className="sp-btn--quiet" onClick={openEditModal}>
+          <button type="button" className="sp-btn--quiet" title="编辑项目" onClick={openEditModal}>
             <Pencil size={16} strokeWidth={2} aria-hidden="true" />
             <span className="sp-collapse-label">编辑项目</span>
+          </button>
+          <button
+            type="button"
+            className="sp-btn--quiet sp-btn--danger-text"
+            title="删除项目"
+            onClick={openDeleteModal}
+          >
+            <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
+            <span className="sp-collapse-label">删除项目</span>
           </button>
         </div>
       </div>
@@ -218,7 +408,11 @@ export function ProjectDetailPage() {
         </div>
       )}
 
-      <CollectionComposer key={project.id} defaultProjectId={project.id} />
+      <CollectionComposer
+        key={project.id}
+        defaultProjectId={project.id}
+        draftSnapshotRef={composerSnapshotRef}
+      />
 
       <div className="sp-list-toolbar">
         <div className="sp-search-bar">
@@ -442,6 +636,27 @@ export function ProjectDetailPage() {
           </div>
         </form>
       </Modal>
+
+      <DeleteProjectConfirmModal
+        open={deleteOpen}
+        projectName={project.name}
+        collectionCount={project.collection_count}
+        hasUnsavedDraft={deleteDraftState.hasUnsavedDraft}
+        hasPendingImageFiles={deleteDraftState.hasPendingImageFiles}
+        readyImageCount={deleteDraftState.readyImageCount}
+        inboxHasDraft={deleteDraftState.inboxHasDraft}
+        isSubmitting={deleteMutation.isPending}
+        errorMessage={deleteError}
+        conflictVersion={deleteConflictVersion}
+        onCancel={() => {
+          if (!deleteMutation.isPending) setDeleteOpen(false);
+        }}
+        onConfirm={() => {
+          if (deleteMutation.isPending) return;
+          setDeleteError(null);
+          deleteMutation.mutate(deleteConflictVersion ?? project.version);
+        }}
+      />
     </div>
   );
 }

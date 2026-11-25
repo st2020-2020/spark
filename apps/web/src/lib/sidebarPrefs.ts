@@ -11,6 +11,16 @@ const STORAGE_PREFIX = 'spark:sidebar-prefs:v1:';
 const MAX_PINNED_ITEMS = 200;
 export const DEFAULT_SIDEBAR_ITEMS = 5;
 
+type SidebarPrefsListener = (userId: string, prefs: SidebarPrefs) => void;
+const prefsListeners = new Set<SidebarPrefsListener>();
+
+export function subscribeSidebarPrefs(listener: SidebarPrefsListener): () => void {
+  prefsListeners.add(listener);
+  return () => {
+    prefsListeners.delete(listener);
+  };
+}
+
 function storageKey(userId: string): string {
   return `${STORAGE_PREFIX}${userId}`;
 }
@@ -101,6 +111,9 @@ export function saveSidebarPrefs(
     }
   } catch {
     // Ignore storage quota/private mode errors; keep UI responsive.
+  }
+  for (const listener of prefsListeners) {
+    listener(userId, next);
   }
   return next;
 }
@@ -251,5 +264,30 @@ export function pruneSidebarPinnedIds(
     kind === 'project'
       ? { pinnedProjectIds: finalIds, pinnedProjectMeta: nextMeta }
       : { pinnedTagIds: finalIds, pinnedTagMeta: nextMeta },
+  );
+}
+
+export function removeSidebarPinnedId(
+  userId: string | undefined,
+  kind: 'project' | 'tag',
+  id: string,
+): SidebarPrefs | null {
+  if (!userId || !id) return null;
+  const current = loadSidebarPrefs(userId);
+  const currentIds = kind === 'project' ? current.pinnedProjectIds : current.pinnedTagIds;
+  const currentMeta =
+    (kind === 'project' ? current.pinnedProjectMeta : current.pinnedTagMeta) ?? {};
+  const hasId = Boolean(currentIds?.includes(id));
+  const hasMeta = Object.prototype.hasOwnProperty.call(currentMeta, id);
+  if (!hasId && !hasMeta) return null;
+
+  const nextIds = (currentIds ?? []).filter((item) => item !== id);
+  const nextMeta = { ...currentMeta };
+  delete nextMeta[id];
+  return saveSidebarPrefs(
+    userId,
+    kind === 'project'
+      ? { pinnedProjectIds: nextIds.length > 0 ? nextIds : null, pinnedProjectMeta: nextMeta }
+      : { pinnedTagIds: nextIds.length > 0 ? nextIds : null, pinnedTagMeta: nextMeta },
   );
 }

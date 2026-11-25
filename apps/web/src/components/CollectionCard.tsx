@@ -17,7 +17,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { Attachment, Collection, CollectionSummary, SearchHit } from '../api/types';
-import { getFriendlyErrorMessage } from '../api/errors';
+import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { useApi } from '../context/ApiContext';
 import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
@@ -278,9 +278,15 @@ export function CollectionCard({
   });
 
   const trashMutation = useMutation({
-    mutationFn: () =>
-      api.trashCollection(collection.id, { base_resource_version: collection.resource_version }),
-    onSuccess: (trashed) => {
+    mutationFn: async () => {
+      const session = captureAuthSession();
+      const trashed = await api.trashCollection(collection.id, {
+        base_resource_version: collection.resource_version,
+      });
+      return { trashed, session };
+    },
+    onSuccess: ({ trashed, session }) => {
+      if (!isSameAuthSession(session)) return;
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setMenuOpen(false);
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
@@ -293,21 +299,37 @@ export function CollectionCard({
         message: '已移入回收站',
         actionLabel: '撤销',
         onAction: async () => {
-          await api.restoreCollection(collection.id, {
-            base_resource_version: trashed.resource_version,
-          });
-          void queryClient.invalidateQueries({ queryKey: ['collections'] });
-          void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
-          void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
-          void queryClient.invalidateQueries({ queryKey: ['projects'] });
-          void queryClient.invalidateQueries({ queryKey: ['project'] });
-          void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
-          void queryClient.invalidateQueries({ queryKey: ['tags'] });
-          pushToast({ message: '已恢复收藏' });
+          const actionSession = captureAuthSession();
+          try {
+            await api.restoreCollection(collection.id, {
+              base_resource_version: trashed.resource_version,
+            });
+            if (!isSameAuthSession(actionSession)) return;
+            void queryClient.invalidateQueries({ queryKey: ['collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
+            void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
+            void queryClient.invalidateQueries({ queryKey: ['projects'] });
+            void queryClient.invalidateQueries({ queryKey: ['project'] });
+            void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['tags'] });
+            pushToast({ message: '已恢复收藏' });
+          } catch (restoreErr) {
+            if (!isSameAuthSession(actionSession)) return;
+            pushToast({ message: getFriendlyErrorMessage(restoreErr), tone: 'error' });
+            void queryClient.invalidateQueries({ queryKey: ['collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
+          }
         },
       });
     },
-    onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
+    onError: (err) => {
+      pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
+      if (isApiErrorCode(err, 'resource_conflict') || isApiErrorCode(err, 'not_found')) {
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+        void queryClient.invalidateQueries({ queryKey: ['collection', collection.id] });
+        void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+      }
+    },
   });
 
   const effectiveProjects = collection.projects.filter(
@@ -532,7 +554,10 @@ export function CollectionCard({
                   role="menuitem"
                   className="sp-menu-item sp-menu-item--danger"
                   disabled={trashMutation.isPending}
-                  onClick={() => trashMutation.mutate()}
+                  onClick={() => {
+                    if (trashMutation.isPending) return;
+                    trashMutation.mutate();
+                  }}
                 >
                   <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
                   <span>移入回收站</span>

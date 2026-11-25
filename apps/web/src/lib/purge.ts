@@ -26,6 +26,17 @@ export function purgeStatusLabel(status: Accepted['status']): string {
   }
 }
 
+export function purgeStatusDescription(status: Accepted['status']): string {
+  switch (status) {
+    case 'queued':
+      return '已移出回收站，等待清理附件。可点击「刷新状态」确认结果。';
+    case 'running':
+      return '已移出回收站，正在清理附件。清理失败会自动重试，可点击「刷新状态」查看结果。';
+    case 'completed':
+      return '笔记和附件已永久删除，无法恢复。';
+  }
+}
+
 export function resolvePurgeActionError(err: unknown): {
   message: string;
   shouldRefresh: boolean;
@@ -91,13 +102,29 @@ export function loadAcceptedPurges(userId?: string): AcceptedPurgeRecord[] {
 
 export function saveAcceptedPurges(userId: string | undefined, items: AcceptedPurgeRecord[]): void {
   if (!userId || typeof window === 'undefined') return;
+  const sanitized = items.slice(0, 20).map(({ collectionId, operationId, status }) => ({
+    collectionId,
+    operationId,
+    status,
+  }));
   try {
-    if (items.length === 0) {
+    if (sanitized.length === 0) {
       window.sessionStorage.removeItem(storageKey(userId));
     } else {
-      window.sessionStorage.setItem(storageKey(userId), JSON.stringify(items.slice(0, 20)));
+      window.sessionStorage.setItem(storageKey(userId), JSON.stringify(sanitized));
     }
   } catch {
-    // Non-fatal in private browsing / storage quota exceeded
+    // Ignore storage failures
   }
+}
+
+export function upsertAcceptedPurge(userId: string | undefined, record: AcceptedPurgeRecord): void {
+  if (!userId) return;
+  const existing = loadAcceptedPurges(userId);
+  const minimal: AcceptedPurgeRecord = {
+    collectionId: record.collectionId,
+    operationId: record.operationId,
+    status: record.status,
+  };
+  saveAcceptedPurges(userId, [minimal, ...existing.filter((item) => item.collectionId !== record.collectionId)]);
 }

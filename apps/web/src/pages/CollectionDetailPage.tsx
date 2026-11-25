@@ -58,6 +58,7 @@ import {
   inspectSparkDocumentSupport,
   isValidHttpUrl,
 } from '../lib/document';
+import { captureAuthSession, isSameAuthSession } from '../lib/authSession';
 import { confirmLeavingImageDraft, loadDraft, removeDraft, saveDraft, useBeforeUnloadWarning } from '../lib/drafts';
 import { toFollowUpSourceFromCollection } from '../lib/followUp';
 import { formatDateTime, formatRemainingTrashDays } from '../lib/format';
@@ -72,7 +73,12 @@ import {
   stageNameLabel,
   stageStatusLabel,
 } from '../lib/organization';
-import { purgeStatusLabel, resolvePurgeActionError } from '../lib/purge';
+import {
+  purgeStatusDescription,
+  purgeStatusLabel,
+  resolvePurgeActionError,
+  upsertAcceptedPurge,
+} from '../lib/purge';
 
 interface BackfillAttemptRecord {
   idempotencyKey: string;
@@ -767,12 +773,15 @@ export function CollectionDetailPage() {
 
   const trashMutation = useMutation({
     scope: resourceWriteScope,
-    mutationFn: (visibleVersion: number) => {
+    mutationFn: async (visibleVersion: number) => {
+      const session = captureAuthSession();
       const advance = readAdvance.current;
       const version = advance?.from === visibleVersion ? advance.to : visibleVersion;
-      return api.trashCollection(id, { base_resource_version: version });
+      const trashed = await api.trashCollection(id, { base_resource_version: version });
+      return { trashed, session };
     },
-    onSuccess: (trashed) => {
+    onSuccess: ({ trashed, session }) => {
+      if (!isSameAuthSession(session)) return;
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['collection-extractions', id] });
@@ -784,28 +793,51 @@ export function CollectionDetailPage() {
         message: '已移入回收站',
         actionLabel: '撤销',
         onAction: async () => {
-          await api.restoreCollection(id, { base_resource_version: trashed.resource_version });
-          void queryClient.invalidateQueries({ queryKey: ['collections'] });
-          void queryClient.invalidateQueries({ queryKey: ['collection', id] });
-          void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
-          void queryClient.invalidateQueries({ queryKey: ['projects'] });
-          void queryClient.invalidateQueries({ queryKey: ['project'] });
-          void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
-          void queryClient.invalidateQueries({ queryKey: ['tags'] });
-          pushToast({ message: '已恢复收藏' });
+          const actionSession = captureAuthSession();
+          try {
+            await api.restoreCollection(id, { base_resource_version: trashed.resource_version });
+            if (!isSameAuthSession(actionSession)) return;
+            void queryClient.invalidateQueries({ queryKey: ['collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['collection', id] });
+            void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
+            void queryClient.invalidateQueries({ queryKey: ['projects'] });
+            void queryClient.invalidateQueries({ queryKey: ['project'] });
+            void queryClient.invalidateQueries({ queryKey: ['project-collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['tags'] });
+            pushToast({ message: '已恢复收藏' });
+          } catch (restoreErr) {
+            if (!isSameAuthSession(actionSession)) return;
+            pushToast({ message: getFriendlyErrorMessage(restoreErr), tone: 'error' });
+            void queryClient.invalidateQueries({ queryKey: ['collections'] });
+            void queryClient.invalidateQueries({ queryKey: ['collection', id] });
+          }
         },
       });
-      navigate(backTo);
+      if (mountedRef.current) {
+        navigate(backTo);
+      }
     },
-    onError: (err) => pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' }),
+    onError: (err) => {
+      if (!mountedRef.current || activeUserIdRef.current !== userId) return;
+      pushToast({ message: getFriendlyErrorMessage(err), tone: 'error' });
+      if (isApiErrorCode(err, 'resource_conflict') || isApiErrorCode(err, 'not_found')) {
+        void queryClient.invalidateQueries({ queryKey: ['collection', id] });
+        void queryClient.invalidateQueries({ queryKey: ['collections'] });
+      }
+    },
   });
 
   const restoreMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!collection) throw new Error('收藏不存在');
-      return api.restoreCollection(id, { base_resource_version: collection.resource_version });
+      const session = captureAuthSession();
+      const restored = await api.restoreCollection(id, {
+        base_resource_version: collection.resource_version,
+      });
+      return { restored, session };
     },
-    onSuccess: (restored) => {
+    onSuccess: ({ restored, session }) => {
+      if (!isSameAuthSession(session)) return;
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       setPurgeError(null);
       queryClient.setQueryData(['collection', id], restored);
@@ -818,6 +850,7 @@ export function CollectionDetailPage() {
       pushToast({ message: '已从回收站恢复' });
     },
     onError: (err) => {
+      if (!mountedRef.current || activeUserIdRef.current !== userId) return;
       const msg = getFriendlyErrorMessage(err);
       setPurgeError(msg);
       pushToast({ message: msg, tone: 'error' });
@@ -828,21 +861,31 @@ export function CollectionDetailPage() {
   });
 
   const purgeMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!collection) throw new Error('收藏不存在');
+      const session = captureAuthSession();
       if (!purgeKeyRef.current || purgeKeyRef.current.version !== collection.resource_version) {
         purgeKeyRef.current = {
           version: collection.resource_version,
           key: generateIdempotencyKey(),
         };
       }
-      return api.purgeCollection(
+      const accepted = await api.purgeCollection(
         id,
         { base_resource_version: collection.resource_version },
         purgeKeyRef.current.key,
       );
+      return { accepted, session };
     },
-    onSuccess: (accepted) => {
+    onSuccess: ({ accepted, session }) => {
+      if (session.userId) {
+        upsertAcceptedPurge(session.userId, {
+          collectionId: id,
+          operationId: accepted.operation_id,
+          status: accepted.status,
+        });
+      }
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
       purgeKeyRef.current = null;
       setPurgeError(null);
       setPurgeConfirmOpen(false);
@@ -858,6 +901,7 @@ export function CollectionDetailPage() {
       });
     },
     onError: (err) => {
+      if (!mountedRef.current || activeUserIdRef.current !== userId) return;
       const resolved = resolvePurgeActionError(err);
       setPurgeError(resolved.message);
       setPurgeConfirmOpen(false);
@@ -869,16 +913,28 @@ export function CollectionDetailPage() {
   });
 
   async function handleRefreshDetailPurgeStatus() {
+    const session = captureAuthSession();
     setCheckingPurgeStatus(true);
     setPurgeError(null);
     try {
       const latest = await api.getCollectionPurgeStatus(id);
+      if (session.userId) {
+        upsertAcceptedPurge(session.userId, {
+          collectionId: id,
+          operationId: latest.operation_id,
+          status: latest.status,
+        });
+      }
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
       setAcceptedPurge(latest);
       queryClient.setQueryData(['collection-purge', id], latest);
     } catch (err) {
+      if (!mountedRef.current || !isSameAuthSession(session)) return;
       setPurgeError(getFriendlyErrorMessage(err));
     } finally {
-      setCheckingPurgeStatus(false);
+      if (mountedRef.current && isSameAuthSession(session)) {
+        setCheckingPurgeStatus(false);
+      }
     }
   }
 
@@ -1165,7 +1221,7 @@ export function CollectionDetailPage() {
           </div>
 
           <p className="sp-help">
-            该收藏已从回收站、列表与搜索中移除，恢复与新附件下载均已停止；后台完成物理清理后状态会变为已完成。
+            {purgeStatusDescription(effectiveAcceptedPurge.status)}
           </p>
 
           {purgeError && (
@@ -1430,15 +1486,21 @@ export function CollectionDetailPage() {
                 <span className="sp-collapse-label">编辑</span>
               </button>
             )}
-            <button
-              type="button"
-              className="sp-btn--quiet sp-btn--danger-text"
-              onClick={() => trashMutation.mutate(collection.resource_version)}
-              disabled={trashMutation.isPending}
-            >
-              <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
-              <span className="sp-collapse-label">移入回收站</span>
-            </button>
+            {!isEditing && (
+              <button
+                type="button"
+                className="sp-btn--quiet sp-btn--danger-text"
+                title="移入回收站"
+                onClick={() => {
+                  if (trashMutation.isPending) return;
+                  trashMutation.mutate(collection.resource_version);
+                }}
+                disabled={trashMutation.isPending}
+              >
+                <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
+                <span className="sp-collapse-label">移入回收站</span>
+              </button>
+            )}
           </div>
         )}
       </div>

@@ -26,7 +26,7 @@ export function PurgeConfirmModal({
         <div className="sp-banner sp-banner--warning">
           <AlertTriangle size={16} strokeWidth={2} aria-hidden="true" />
           <span>
-            永久删除后，该收藏会立即从回收站与搜索中移除，关联的原文、附件与历史版本将不可恢复。
+            永久删除后，这条笔记和附件将无法恢复。
           </span>
         </div>
 
