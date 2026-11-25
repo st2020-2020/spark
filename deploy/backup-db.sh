@@ -128,18 +128,27 @@ case "$command" in
         ;;
       *) die "unknown deletion ledger backend" ;;
     esac
+    verified_ledger_config=""
     recovery_tool() (
       unset SPARK_RECOVERY_DB_PASSWORD SPARK_RECOVERY_IMAGE "${!SPARK_DELETION_LEDGER_@}"
+      if [[ -n "$verified_ledger_config" ]]; then
+        export SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH="$verified_ledger_config"
+      fi
       docker compose --env-file "$env_file" "${recovery_compose[@]}" -p "$project" \
         run --rm --no-deps -T tools "$@" </dev/null
     )
+    scratch="$(mktemp -d "${TMPDIR:-/tmp}/spark-recovery.XXXXXXXX")"
     if [[ "$ledger_backend" == oss ]]; then
       verified_namespace="$(recovery_tool verify-deletion-ledger "$ledger_probe_id")" &&
         [[ "$verified_namespace" == "$ledger_namespace" ]] ||
         die "OSS receipt namespace or known probe could not be verified; database left empty"
+      # Replay must use the verified location even if the operator replaces
+      # the source config while a large database archive is being imported.
+      verified_ledger_config="$scratch/ledger.json"
+      printf '%s\n' "$verified_namespace" > "$verified_ledger_config"
+      chmod 0444 "$verified_ledger_config"
     fi
 
-    scratch="$(mktemp -d "${TMPDIR:-/tmp}/spark-recovery.XXXXXXXX")"
     if ! gpg --homedir "$keyring" --batch --no-tty --decrypt --output "$scratch/spark.dump" "$archive" 2>/dev/null; then
       die "could not decrypt backup or verify its ciphertext integrity"
     fi

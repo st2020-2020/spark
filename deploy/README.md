@@ -292,6 +292,11 @@ OSS 模式使用已有阿里云 OSS 的一个经确认的私有专用前缀。�
 
 ```bash
 umask 077
+docker run --rm --read-only --pull never \
+  -e SPARK_DELETION_LEDGER_BACKEND=oss \
+  -v "$LEDGER_CONFIG:/run/spark-deletion-ledger/oss.json:ro" \
+  -v "$PROBE_CREDENTIALS:/run/secrets/spark-deletion-ledger-oss:ro" \
+  --entrypoint /spark "$REVIEWED_SPARK_IMAGE" probe-deletion-ledger "$PROBE_UUID" || exit 1
 namespace="$(docker compose --env-file "$RECOVERY_ENV" \
   -f deploy/compose.recovery.yaml -f deploy/compose.recovery-ledger-oss.yaml \
   -p spark-restore-ledger-check run --rm --no-deps -T tools \
@@ -301,7 +306,7 @@ namespace="$(docker compose --env-file "$RECOVERY_ENV" \
 
 绑定文件两行依次保存探针 UUID 与已验证的单行命名空间 JSON。将同一文件以 `0600` 保存在部署根目录的 `deletion-ledger.oss`，并独立随恢复配置保留。保留该已验证探针供后续恢复，不重新生成探针来放行旧库。运行版本升级后发布脚本用 Worker 身份检查桶版本，并比较实际命名空间和绑定。
 
-OSS 模式恢复环境设置 `SPARK_DELETION_LEDGER_BACKEND=oss`、`SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH`、`SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH`（默认 `/etc/spark/deletion-receipts/reader.json`）和 `SPARK_DELETION_LEDGER_OSS_BINDING_HOST_PATH`（绑定文件绝对路径）。只启动内部网络的 PostgreSQL。恢复脚本用短时 `tools` 容器以只读身份验证已知探针和绑定，再导入数据库和重放回执。探针缺失、命名空间不符或 OSS 不可达时在导入前停止。若重放过程中失联，恢复库继续隔离。完成后验证删除队列、对象状态和已撤销会话，再开放流量。
+OSS 模式恢复环境设置 `SPARK_DELETION_LEDGER_BACKEND=oss`、`SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH`、`SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH`（默认 `/etc/spark/deletion-receipts/reader.json`）和 `SPARK_DELETION_LEDGER_OSS_BINDING_HOST_PATH`（绑定文件绝对路径）。只启动内部网络的 PostgreSQL。恢复脚本用短时 `tools` 容器以只读身份验证已知探针和绑定，再导入数据库，并使用校验时固定的配置重放回执。探针缺失、命名空间不符或 OSS 不可达时在导入前停止。若重放过程中失联，恢复库继续隔离。完成后验证删除队列、对象状态和已撤销会话，再开放流量。
 
 每日备份即使每次成功，故障发生在下一次备份前也可能丢失近 24 小时写入；漏跑或上传失败会延长窗口。数据库 RPO 15 分钟与 RTO 2 小时仍是设计目标。RPO 需要基础备份、持续异机 WAL 归档、归档延迟监控和时间点恢复演练来证明。[数据库恢复目标](../docs/ARCHITECTURE.md#部署恢复与运行目标)
 
