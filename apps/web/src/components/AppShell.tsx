@@ -35,6 +35,7 @@ import { formatShortcut, isTouchDevice } from '../lib/shortcuts';
 import {
   DEFAULT_SIDEBAR_ITEMS,
   loadSidebarPrefs,
+  pruneSidebarPinnedIds,
   resolveSidebarProjects,
   saveSidebarPrefs,
   togglePinnedWithMeta,
@@ -268,6 +269,18 @@ export function AppShell({
   ];
 
   const allActiveLoaded = activeProjectsQuery.isSuccess && !activeProjectsQuery.hasNextPage;
+
+  useEffect(() => {
+    if (!user?.id || !allActiveLoaded || !activeProjectsQuery.data) return;
+    const loadedProjects = activeProjectsQuery.data.pages.flatMap((p) => p.items);
+    const loadedIds = new Set(loadedProjects.map((p) => p.id));
+    const loadedNames = new Map(loadedProjects.map((p) => [p.id, p.name]));
+    const updated = pruneSidebarPinnedIds(user.id, 'project', loadedIds, loadedNames);
+    if (updated) {
+      setSidebarPrefs(updated);
+    }
+  }, [user?.id, allActiveLoaded, activeProjectsQuery.data]);
+
   const {
     visible: sidebarProjects,
     isCustomized: projectsCustomized,

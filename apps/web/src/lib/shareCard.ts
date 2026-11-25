@@ -30,21 +30,50 @@ export function selectDefaultShareTemplate(body: string, imageCount: number): Sh
 
 const URL_LIKE_NODE_RE = /^(?:https?:\/\/|www\.)\S+$/iu;
 
+type ParagraphChild = NonNullable<Paragraph['content']>[number];
+
+function getLinkMarkHref(node: ParagraphChild): string | null {
+  if (node.type !== 'text' || !node.marks) return null;
+  const linkMark = node.marks.find((m) => m.type === 'link');
+  if (!linkMark) return null;
+  const href = (linkMark.attrs as { href?: unknown } | undefined)?.href;
+  return typeof href === 'string' && href.trim() ? href.trim() : '__link__';
+}
+
 function extractShareDocumentText(doc: SparkDocument): string {
   const lines: string[] = [];
 
   const readParagraph = (p: Paragraph): string => {
     if (!p.content) return '';
-    return p.content
-      .map((node) => {
-        if (node.type !== 'text') return '\n';
-        const hasLinkMark = node.marks?.some((m) => m.type === 'link');
-        if (hasLinkMark && URL_LIKE_NODE_RE.test(node.text.trim())) {
-          return '';
-        }
-        return node.text;
-      })
-      .join('');
+    const parts: string[] = [];
+    let index = 0;
+    while (index < p.content.length) {
+      const node = p.content[index];
+      if (node.type !== 'text') {
+        parts.push('\n');
+        index += 1;
+        continue;
+      }
+      const linkHref = getLinkMarkHref(node);
+      if (linkHref === null) {
+        parts.push(node.text);
+        index += 1;
+        continue;
+      }
+      // Merge consecutive text nodes sharing the same link href before testing URL shape,
+      // so bolded/highlighted segments inside a single URL don't leave query/hash tails behind.
+      let runText = node.text;
+      index += 1;
+      while (index < p.content.length && getLinkMarkHref(p.content[index]) === linkHref) {
+        const nextNode = p.content[index];
+        if (nextNode.type === 'text') runText += nextNode.text;
+        index += 1;
+      }
+      if (!URL_LIKE_NODE_RE.test(runText.trim())) {
+        parts.push(runText);
+      }
+    }
+    return parts.join('');
   };
 
   const walkBlocks = (blocks: Array<Paragraph | BulletList | OrderedList>): void => {
@@ -65,11 +94,11 @@ function extractShareDocumentText(doc: SparkDocument): string {
 
 function stripUrlsFromShareBody(raw: string): string {
   return raw
-    .replace(/(?:https?:\/\/|www\.)[^\s<>'"]+/giu, (match) => {
+    .replace(/(?:https?:\/\/|www\.)[^\s<>"]+/giu, (match) => {
       // Preserve trailing sentence-ending punctuation only when no query/fragment exists
-      // and never break early inside URLs containing CJK brackets/commas.
+      // and never break early inside URLs containing apostrophes or CJK brackets/commas.
       if (!match.includes('?') && !match.includes('#')) {
-        const trailing = match.match(/([，。！？；：])$/u);
+        const trailing = match.match(/([，。！？；：,.!?'])$/u);
         if (trailing) return trailing[1];
       }
       return '';

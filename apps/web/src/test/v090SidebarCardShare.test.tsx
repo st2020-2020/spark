@@ -860,4 +860,153 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     expect(screen.getByRole('button', { name: '查看已归档' })).toBeInTheDocument();
     expect(screen.queryByText('还没有项目')).not.toBeInTheDocument();
   });
+
+  it('merges consecutive same-href link nodes, preserves readable link titles, and strips apostrophe URLs completely', () => {
+    const now = '2026-04-20T09:00:00Z';
+    const docCollection = {
+      id: 'col-split-link-apostrophe',
+      owner_user_id: 'u-1',
+      kind: 'link',
+      title: '拆段链接与单引号路径',
+      content_text: '',
+      document: {
+        schema_version: 1,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '先看 ' },
+                {
+                  type: 'text',
+                  text: 'https://example.com/',
+                  marks: [
+                    {
+                      type: 'link',
+                      attrs: { href: 'https://example.com/secret-path?token=split-secret#h' },
+                    },
+                  ],
+                },
+                {
+                  type: 'text',
+                  text: 'secret-path',
+                  marks: [
+                    { type: 'bold' },
+                    {
+                      type: 'link',
+                      attrs: { href: 'https://example.com/secret-path?token=split-secret#h' },
+                    },
+                  ],
+                },
+                {
+                  type: 'text',
+                  text: '?token=split-secret#h',
+                  marks: [
+                    {
+                      type: 'link',
+                      attrs: { href: 'https://example.com/secret-path?token=split-secret#h' },
+                    },
+                  ],
+                },
+                { type: 'text', text: ' 也可读 ' },
+                {
+                  type: 'text',
+                  text: '苹果',
+                  marks: [
+                    { type: 'bold' },
+                    { type: 'link', attrs: { href: 'https://developer.apple.com/design/' } },
+                  ],
+                },
+                {
+                  type: 'text',
+                  text: '设计指南',
+                  marks: [{ type: 'link', attrs: { href: 'https://developer.apple.com/design/' } }],
+                },
+                {
+                  type: 'text',
+                  text: " ，裸链接 https://example.com/O'Brien?token=apo-secret#top。 ",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      summary: '',
+      original_url: '',
+      source_host: '',
+      projects: [],
+      tags: [],
+      attachments: [],
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      read_at: now,
+      resource_version: 1,
+    } as unknown as Collection;
+
+    const extracted = shareCardLib.shareText(docCollection, false, false);
+    expect(extracted.body).toContain('先看');
+    expect(extracted.body).toContain('也可读 苹果设计指南');
+    expect(extracted.body).not.toContain('split-secret');
+    expect(extracted.body).not.toContain('secret-path');
+    expect(extracted.body).not.toContain('apo-secret');
+    expect(extracted.body).not.toContain("O'Brien");
+    expect(extracted.body).not.toContain('https://');
+  });
+
+  it('prunes archived pinned projects from localStorage once full active list loads without flashing on remount', async () => {
+    const { api, user } = await admin();
+    const keepProj = await api.createProject(
+      { name: '保留项目', description: '', focus_points: [] },
+      'prune-keep',
+    );
+    const archiveProj = await api.createProject(
+      { name: '即将归档项目', description: '', focus_points: [] },
+      'prune-arch',
+    );
+    saveSidebarPrefs(user.id, {
+      pinnedProjectIds: [archiveProj.id, keepProj.id],
+      pinnedProjectMeta: {
+        [archiveProj.id]: archiveProj.name,
+        [keepProj.id]: keepProj.name,
+      },
+    });
+
+    await api.updateProject(archiveProj.id, {
+      base_version: archiveProj.version,
+      state: 'paused',
+    });
+
+    const firstMount = mount(api, '/inbox');
+    await screen.findByRole('link', { name: '保留项目' });
+    await waitFor(() => {
+      const saved = loadSidebarPrefs(user.id);
+      expect(saved.pinnedProjectIds).toEqual([keepProj.id]);
+      expect(saved.pinnedProjectMeta).toEqual({ [keepProj.id]: '保留项目' });
+    });
+    expect(screen.queryByRole('link', { name: '即将归档项目' })).not.toBeInTheDocument();
+    firstMount.unmount();
+
+    // Even if page loading is pending on subsequent mount, cleared localStorage prevents brief flash
+    const origListProjects = api.listProjects.bind(api);
+    let resolveDelayed: ((v: Awaited<ReturnType<typeof origListProjects>>) => void) | undefined;
+    vi.spyOn(api, 'listProjects').mockImplementation((params) => {
+      if (params?.state === 'active') {
+        return new Promise((res) => {
+          resolveDelayed = res;
+        });
+      }
+      return origListProjects(params);
+    });
+
+    mount(api, '/inbox');
+    await waitFor(() => expect(resolveDelayed).toBeTypeOf('function'));
+    expect(screen.queryByRole('link', { name: '即将归档项目' })).not.toBeInTheDocument();
+    await act(async () => {
+      resolveDelayed?.({ items: [keepProj], next_cursor: undefined });
+    });
+    expect(await screen.findByRole('link', { name: '保留项目' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: '即将归档项目' })).not.toBeInTheDocument();
+  });
 });

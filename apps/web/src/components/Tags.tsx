@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowRight, SlidersHorizontal } from 'lucide-react';
@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { isApiErrorCode } from '../api/errors';
 import {
   DEFAULT_SIDEBAR_ITEMS,
+  pruneSidebarPinnedIds,
   resolveSidebarTags,
   togglePinnedWithMeta,
 } from '../lib/sidebarPrefs';
@@ -73,6 +74,20 @@ export function TagNavigation({
   }, [tagsQuery.data, remoteSearchQuery.data]);
 
   const allTagsLoaded = tagsQuery.isSuccess && !tagsQuery.hasNextPage;
+  const onUpdatePinnedTagsRef = useRef(onUpdatePinnedTags);
+  onUpdatePinnedTagsRef.current = onUpdatePinnedTags;
+
+  useEffect(() => {
+    if (!user?.id || !allTagsLoaded || !tagsQuery.data) return;
+    const loadedTags = tagsQuery.data.pages.flatMap((p) => p.items);
+    const loadedIds = new Set(loadedTags.map((t) => t.id));
+    const loadedNames = new Map(loadedTags.map((t) => [t.id, t.name]));
+    const updated = pruneSidebarPinnedIds(user.id, 'tag', loadedIds, loadedNames);
+    if (updated) {
+      onUpdatePinnedTagsRef.current(updated.pinnedTagIds, updated.pinnedTagMeta ?? {});
+    }
+  }, [user?.id, allTagsLoaded, tagsQuery.data]);
+
   const { visible, isCustomized, validPinnedIds } = useMemo(
     () =>
       resolveSidebarTags(allTags, pinnedTagIds, DEFAULT_SIDEBAR_ITEMS, {

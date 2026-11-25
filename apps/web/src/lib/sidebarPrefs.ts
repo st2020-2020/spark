@@ -212,3 +212,44 @@ export function togglePinnedWithMeta(
   }
   return { ids, meta: nextMeta };
 }
+
+export function pruneSidebarPinnedIds(
+  userId: string | undefined,
+  kind: 'project' | 'tag',
+  loadedIds: ReadonlySet<string>,
+  loadedNames?: ReadonlyMap<string, string>,
+): SidebarPrefs | null {
+  if (!userId) return null;
+  const current = loadSidebarPrefs(userId);
+  const currentIds = kind === 'project' ? current.pinnedProjectIds : current.pinnedTagIds;
+  if (!currentIds || currentIds.length === 0) return null;
+
+  const currentMeta =
+    (kind === 'project' ? current.pinnedProjectMeta : current.pinnedTagMeta) ?? {};
+  const nextIds = currentIds.filter((id) => loadedIds.has(id));
+  const nextMeta: Record<string, string> = {};
+  let changed = nextIds.length !== currentIds.length;
+  for (const id of nextIds) {
+    const freshName = loadedNames?.get(id)?.trim();
+    const resolvedName = freshName || currentMeta[id];
+    if (resolvedName) {
+      nextMeta[id] = resolvedName;
+      if (resolvedName !== currentMeta[id]) changed = true;
+    }
+  }
+  for (const existingKey of Object.keys(currentMeta)) {
+    if (!nextIds.includes(existingKey)) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return null;
+
+  const finalIds = nextIds.length > 0 ? nextIds : null;
+  return saveSidebarPrefs(
+    userId,
+    kind === 'project'
+      ? { pinnedProjectIds: finalIds, pinnedProjectMeta: nextMeta }
+      : { pinnedTagIds: finalIds, pinnedTagMeta: nextMeta },
+  );
+}
