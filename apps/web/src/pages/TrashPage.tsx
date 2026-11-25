@@ -982,9 +982,9 @@ export function TrashPage() {
 
       <LoadMore
         hasNextPage={trashQuery.hasNextPage}
-        isFetching={trashQuery.isFetchingNextPage}
+        isFetching={trashQuery.isFetching}
         isError={trashQuery.isFetchNextPageError}
-        onLoad={() => void trashQuery.fetchNextPage()}
+        onLoad={() => void trashQuery.fetchNextPage({ cancelRefetch: false })}
       />
 
       <PurgeConfirmModal

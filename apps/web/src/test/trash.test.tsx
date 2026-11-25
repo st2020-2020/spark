@@ -454,7 +454,13 @@ describe('T08 Trash & permanent purge UI', () => {
 
     // Force enumeration pagination even under limit=100 by temporarily capping mock page slice via wrapper spy
     const rawList = adapter.listCollections.bind(adapter);
+    let holdFirstPage = false;
+    let releaseFirstPage!: () => void;
+    const refetchGate = new Promise<void>(resolve => { releaseFirstPage = resolve; });
     const listSpy = vi.spyOn(adapter, 'listCollections').mockImplementation(async (query, signal) => {
+      if (holdFirstPage && query?.scope === 'trash' && query.limit === 30 && !query.cursor) {
+        await refetchGate;
+      }
       if (query?.scope === 'trash' && (query.limit ?? 30) > 20) {
         return rawList({ ...query, limit: 20 }, signal);
       }
@@ -491,6 +497,8 @@ describe('T08 Trash & permanent purge UI', () => {
     await adapter.trashCollection(lateNote.id, { base_resource_version: lateNote.resource_version });
     await adapter.restoreCollection(seeded[0].id, { base_resource_version: seeded[0].version });
 
+    const nextPage = screen.getByRole('button', { name: '加载更多' });
+    holdFirstPage = true;
     await user.click(screen.getByRole('button', { name: '确认清空 (35 条)' }));
 
     await waitFor(() => {
@@ -498,6 +506,15 @@ describe('T08 Trash & permanent purge UI', () => {
         '本批共 35 条：已受理 34 条（0 条已清除，34 条等待或正在清理附件，暂未确认全部附件清完），版本冲突或已恢复 1 条（未删除）',
       );
     });
+
+    try {
+      // The sentinel can become visible as soon as the deleted rows disappear.
+      await waitFor(() => expect(nextPage).toBeDisabled());
+      await user.click(nextPage);
+      expect(listSpy.mock.calls.some(([q]) => q?.limit === 30 && q.cursor)).toBe(false);
+    } finally {
+      releaseFirstPage();
+    }
 
     // Bounded concurrency <= 3, confirmed snapshot NEVER expanded to lateNote, and O(1) batch sessionStorage flush
     expect(maxInFlight).toBeGreaterThanOrEqual(2);
