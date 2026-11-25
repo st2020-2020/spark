@@ -511,6 +511,10 @@ class WebActivity : ComponentActivity() {
         }
         root.setBackgroundColor(changed.background)
         web?.setBackgroundColor(changed.background)
+        theme.applyStyle(
+            if (changed.dark) R.style.ThemeOverlay_Spark_Dialog_Dark else R.style.ThemeOverlay_Spark_Dialog_Light,
+            true,
+        )
         WindowCompat.getInsetsController(window, root).apply {
             isAppearanceLightStatusBars = !changed.dark
             if (Build.VERSION.SDK_INT >= 26) isAppearanceLightNavigationBars = !changed.dark

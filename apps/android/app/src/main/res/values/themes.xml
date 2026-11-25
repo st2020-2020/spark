@@ -8,6 +8,39 @@
     <string name="drafts_shortcut_label">本机草稿</string>
 
     <style name="Theme.Spark.Base" parent="android:style/Theme.Material.Light.NoActionBar" />
+    <style name="Theme.Spark.AlertDialog.Light.Base" parent="android:style/Theme.Material.Light.Dialog.Alert" />
+    <style name="Theme.Spark.AlertDialog.Dark.Base" parent="android:style/Theme.Material.Dialog.Alert" />
+    <style name="Theme.Spark.AlertDialog.Light" parent="Theme.Spark.AlertDialog.Light.Base">
+        <item name="android:windowBackground">@drawable/spark_dialog_bg_light</item>
+        <item name="android:backgroundDimAmount">0.38</item>
+        <item name="android:windowElevation">12dp</item>
+        <item name="android:colorAccent">#2a8369</item>
+        <item name="android:colorControlActivated">#2a8369</item>
+        <item name="android:colorControlNormal">#7a948a</item>
+        <item name="android:textColorPrimary">#2c3e38</item>
+        <item name="android:textColorSecondary">#4a5d56</item>
+        <item name="android:listDivider">@drawable/spark_dialog_divider_light</item>
+    </style>
+    <style name="Theme.Spark.AlertDialog.Dark" parent="Theme.Spark.AlertDialog.Dark.Base">
+        <item name="android:windowBackground">@drawable/spark_dialog_bg_dark</item>
+        <item name="android:backgroundDimAmount">0.56</item>
+        <item name="android:windowElevation">12dp</item>
+        <item name="android:colorAccent">#6fd1b2</item>
+        <item name="android:colorControlActivated">#6fd1b2</item>
+        <item name="android:colorControlNormal">#62786f</item>
+        <item name="android:textColorPrimary">#e3eeea</item>
+        <item name="android:textColorSecondary">#c2d2cc</item>
+        <item name="android:listDivider">@drawable/spark_dialog_divider_dark</item>
+    </style>
+    <style name="Theme.Spark.AlertDialog" parent="Theme.Spark.AlertDialog.Light" />
+    <style name="ThemeOverlay.Spark.Dialog.Light" parent="">
+        <item name="android:alertDialogTheme">@style/Theme.Spark.AlertDialog.Light</item>
+        <item name="android:dialogTheme">@style/Theme.Spark.AlertDialog.Light</item>
+    </style>
+    <style name="ThemeOverlay.Spark.Dialog.Dark" parent="">
+        <item name="android:alertDialogTheme">@style/Theme.Spark.AlertDialog.Dark</item>
+        <item name="android:dialogTheme">@style/Theme.Spark.AlertDialog.Dark</item>
+    </style>
     <style name="Theme.Spark" parent="Theme.Spark.Base">
         <item name="android:fontFamily">sans-serif</item>
         <item name="android:colorAccent">@color/spark_window_primary</item>
@@ -16,6 +49,8 @@
         <item name="android:navigationBarColor">@color/spark_navigation_bar_background</item>
         <item name="android:windowLightStatusBar">@bool/spark_light_system_bars</item>
         <item name="android:windowLightNavigationBar">@bool/spark_light_system_bars</item>
+        <item name="android:alertDialogTheme">@style/Theme.Spark.AlertDialog</item>
+        <item name="android:dialogTheme">@style/Theme.Spark.AlertDialog</item>
     </style>
     <style name="Theme.Spark.Starting" parent="Theme.SplashScreen.IconBackground">
         <item name="windowSplashScreenBackground">@color/spark_window_background</item>

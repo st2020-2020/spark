@@ -3,4 +3,5 @@
     <color name="spark_window_primary">#6fd1b2</color>
     <bool name="spark_light_system_bars">false</bool>
     <style name="Theme.Spark.Base" parent="android:style/Theme.Material.NoActionBar" />
+    <style name="Theme.Spark.AlertDialog" parent="Theme.Spark.AlertDialog.Dark" />
 </resources>

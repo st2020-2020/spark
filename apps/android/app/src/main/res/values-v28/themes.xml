@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Spark.AlertDialog.Light.Base" parent="android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:dialogCornerRadius">20dp</item>
+    </style>
+    <style name="Theme.Spark.AlertDialog.Dark.Base" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:dialogCornerRadius">20dp</item>
+    </style>
+</resources>
