@@ -74,7 +74,7 @@ describe('LinkPreviewCard & T07 link preview flows', () => {
     );
     expect(screen.getByText('正在获取网页信息')).toBeInTheDocument();
     expect(
-      screen.getByRole('link', { name: 'https://docs.example.test/guide' }),
+      screen.getByRole('link', { name: 'docs.example.test/guide' }),
     ).toHaveAttribute('target', '_blank');
 
     rerender(
@@ -106,7 +106,7 @@ describe('LinkPreviewCard & T07 link preview flows', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
       expect(screen.queryByText(/失败|不可用|被拦截|正在获取/)).not.toBeInTheDocument();
       expect(
-        screen.getByRole('link', { name: 'https://docs.example.test/guide' }),
+        screen.getByRole('link', { name: 'docs.example.test/guide' }),
       ).toBeInTheDocument();
     }
 
@@ -258,7 +258,7 @@ describe('LinkPreviewCard & T07 link preview flows', () => {
     ]);
 
     await user.click(screen.getByRole('link', { name: '全部收藏' }));
-    const openLinks = await screen.findAllByRole('link', { name: '查看全文' });
+    const openLinks = await screen.findAllByRole('link', { name: /查看详情：/ });
     await user.click(openLinks[0]);
 
     expect(await screen.findByText('正在获取网页信息')).toBeInTheDocument();

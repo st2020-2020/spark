@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -13,6 +13,7 @@ import {
   Plus,
   Search,
   Settings,
+  SlidersHorizontal,
   Smartphone,
   ShieldCheck,
   Trash2,
@@ -31,8 +32,17 @@ import {
 } from '../lib/motion';
 import { projectToneClass } from '../lib/projectTone';
 import { formatShortcut, isTouchDevice } from '../lib/shortcuts';
+import {
+  DEFAULT_SIDEBAR_ITEMS,
+  loadSidebarPrefs,
+  resolveSidebarProjects,
+  saveSidebarPrefs,
+  togglePinnedId,
+  type SidebarPrefs,
+} from '../lib/sidebarPrefs';
 import { BrandLink, SparkGlyph } from './Brand';
 import { CommandPalette } from './CommandPalette';
+import { SidebarCustomizePopover } from './SidebarCustomizePopover';
 import { TagNavigation } from './Tags';
 import { ActivityCalendar } from './ActivityCalendar';
 import { QuickCaptureSheet } from './QuickCaptureSheet';
@@ -60,11 +70,32 @@ export function AppShell({
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [inputFocusedMobile, setInputFocusedMobile] = useState(false);
   const [commandOpen, setCommandOpen] = useState(false);
+  const [commandInitialQuery, setCommandInitialQuery] = useState('');
   const [captureOpen, setCaptureOpen] = useState(false);
+  const [sidebarPrefs, setSidebarPrefs] = useState<SidebarPrefs>(() => loadSidebarPrefs(user?.id));
+  const [projectCustomizeOpen, setProjectCustomizeOpen] = useState(false);
 
   const drawerPanelRef = useRef<HTMLDivElement | null>(null);
   const accountWrapRef = useRef<HTMLDivElement | null>(null);
   const drawerExitTimerRef = useRef<number | null>(null);
+  const desktopProjectCustomizeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const drawerProjectCustomizeBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  useEffect(() => {
+    setSidebarPrefs(loadSidebarPrefs(user?.id));
+    setProjectCustomizeOpen(false);
+  }, [user?.id]);
+
+  const updateSidebarPrefs = (patch: Partial<SidebarPrefs>) => {
+    setSidebarPrefs(saveSidebarPrefs(user?.id, patch));
+  };
+
+  const openCommandPalette = (initial = '') => {
+    setDrawerOpen(false);
+    setProjectCustomizeOpen(false);
+    setCommandInitialQuery(initial);
+    setCommandOpen(true);
+  };
 
   const {
     isDragging: drawerDragging,
@@ -114,7 +145,7 @@ export function AppShell({
 
   const activeProjectsQuery = useQuery({
     queryKey: ['projects', 'sidebar-active'],
-    queryFn: () => api.listProjects({ state: 'active', limit: 5 }),
+    queryFn: () => api.listProjects({ state: 'active', limit: 50 }),
     staleTime: 30_000,
   });
 
@@ -136,6 +167,7 @@ export function AppShell({
     setDrawerOpen(false);
     setAccountMenuOpen(false);
     setCaptureOpen(false);
+    setProjectCustomizeOpen(false);
   }, [location.pathname, location.search]);
 
   useEffect(() => {
@@ -212,11 +244,29 @@ export function AppShell({
 
   const primaryNav = [
     { to: '/inbox', label: '收件箱', icon: Inbox },
-    { to: '/collections', label: '全部收藏', icon: Search },
     { to: '/unclassified', label: '待归类', icon: Layers },
+    { to: '/collections', label: '全部收藏', icon: Search },
   ];
 
-  const sidebarProjects = activeItems.slice(0, 5);
+  const {
+    visible: sidebarProjects,
+    isCustomized: projectsCustomized,
+    validPinnedIds: validPinnedProjectIds,
+  } = useMemo(
+    () => resolveSidebarProjects(activeItems, sidebarPrefs.pinnedProjectIds, DEFAULT_SIDEBAR_ITEMS),
+    [activeItems, sidebarPrefs.pinnedProjectIds],
+  );
+  const validProjectIdSet = useMemo(() => new Set(activeItems.map((p) => p.id)), [activeItems]);
+  const validPinnedProjectSet = useMemo(
+    () => new Set(validPinnedProjectIds),
+    [validPinnedProjectIds],
+  );
+  const showAllProjectsLink =
+    !hasTrulyZeroProjects &&
+    (activeItems.length > sidebarProjects.length ||
+      Boolean(activeProjectsQuery.data?.next_cursor) ||
+      (activeProjectsQuery.isSuccess && activeItems.length === 0));
+
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
   const isInbox = location.pathname === '/inbox';
   const androidWorkspace = navigator.userAgent.split(/\s+/).includes('SparkAndroid/2');
@@ -260,6 +310,7 @@ export function AppShell({
       if (event.metaKey || event.ctrlKey) {
         if (key === 'k') {
           event.preventDefault();
+          setCommandInitialQuery('');
           setCommandOpen(true);
         }
         return;
@@ -285,109 +336,162 @@ export function AppShell({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const renderPrimaryAndProjectsNav = (compactMobile = false) => (
-    <>
-      <nav aria-label="工作区页面">
-        <ul className="sp-nav-list">
-          {primaryNav.map((item) => {
-            const Icon = item.icon;
-            const showSuggestionBadge =
-              item.to === '/unclassified' && pendingSuggestionsCount > 0;
-            return (
-              <li key={item.to} className="sp-nav-item">
-                <NavLink
-                  to={item.to}
-                  className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
-                >
-                  <Icon size={17} strokeWidth={2} aria-hidden="true" />
-                  <span>{item.label}</span>
-                </NavLink>
-                {showSuggestionBadge && (
-                  <Link
-                    to="/unclassified?tab=suggested"
-                    className="sp-nav-badge"
-                    aria-label={`${pendingSuggestionsCount} 条待确认 AI 建议`}
-                    title={`${pendingSuggestionsCount} 条待确认 AI 建议`}
-                  >
-                    {badgeText}
-                  </Link>
-                )}
-              </li>
-            );
-          })}
-          {androidWorkspace && (
-            <li className="sp-nav-item">
-              {/* A document navigation deliberately reaches the Android WebViewClient. */}
-              <a href="/android/local-drafts" className="sp-nav-link" onClick={() => setDrawerOpen(false)}>
-                <Smartphone size={17} strokeWidth={2} aria-hidden="true" />
-                <span>本机草稿</span>
-              </a>
-            </li>
-          )}
-        </ul>
-      </nav>
-
-      <div className="sp-sidebar-group-head">
-        <span>项目</span>
-        <Link
-          to={hasTrulyZeroProjects ? '/projects?create=1' : '/projects'}
-          aria-label="查看或新建项目"
-          className="sp-icon-btn sp-icon-btn--sm"
-        >
-          <Plus size={15} strokeWidth={2} aria-hidden="true" />
-        </Link>
-      </div>
-
+  const renderPrimaryNav = () => (
+    <nav aria-label="工作区页面">
       <ul className="sp-nav-list">
-        {sidebarProjects.map((proj) => (
-          <li key={proj.id}>
-            <NavLink
-              to={`/projects/${proj.id}`}
-              className={({ isActive }) => `sp-nav-link sp-nav-link--project ${isActive ? 'active' : ''}`}
-            >
-              <span className={`sp-project-dot ${projectToneClass(proj.id)}`} aria-hidden="true" />
-              <span className="sp-truncate">{proj.name}</span>
-            </NavLink>
-          </li>
-        ))}
-        {hasTrulyZeroProjects ? (
-          <li>
-            <Link to="/projects?create=1" className="sp-nav-link sp-nav-link--muted">
-              <span>创建项目</span>
-            </Link>
-          </li>
-        ) : (
-          <li>
-            <NavLink
-              to="/projects"
-              end
-              className={({ isActive }) =>
-                `sp-nav-link sp-nav-link--muted ${isActive ? 'active' : ''}`
-              }
-            >
-              <span>查看全部</span>
-            </NavLink>
+        {primaryNav.map((item) => {
+          const Icon = item.icon;
+          const showSuggestionBadge =
+            item.to === '/unclassified' && pendingSuggestionsCount > 0;
+          return (
+            <li key={item.to} className="sp-nav-item">
+              <NavLink
+                to={item.to}
+                className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
+              >
+                <Icon size={17} strokeWidth={2} aria-hidden="true" />
+                <span>{item.label}</span>
+              </NavLink>
+              {showSuggestionBadge && (
+                <Link
+                  to="/unclassified?tab=suggested"
+                  className="sp-nav-badge"
+                  aria-label={`${pendingSuggestionsCount} 条待确认 AI 建议`}
+                  title={`${pendingSuggestionsCount} 条待确认 AI 建议`}
+                >
+                  {badgeText}
+                </Link>
+              )}
+            </li>
+          );
+        })}
+        {androidWorkspace && (
+          <li className="sp-nav-item">
+            {/* A document navigation deliberately reaches the Android WebViewClient. */}
+            <a href="/android/local-drafts" className="sp-nav-link" onClick={() => setDrawerOpen(false)}>
+              <Smartphone size={17} strokeWidth={2} aria-hidden="true" />
+              <span>本机草稿</span>
+            </a>
           </li>
         )}
       </ul>
-      <TagNavigation />
-      <button
-        type="button"
-        className="sp-nav-link sp-nav-link--command"
-        aria-label={compactMobile ? '搜索与跳转' : '快速跳转'}
-        onClick={() => {
-          setDrawerOpen(false);
-          setCommandOpen(true);
-        }}
-      >
-        <Search size={16} strokeWidth={2} aria-hidden="true" />
-        <span>{compactMobile ? '搜索与跳转' : '快速跳转'}</span>
-        {!compactMobile && !isTouchDevice() && (
-          <kbd className="sp-kbd-hint sp-kbd-hint--nav">{formatShortcut('K')}</kbd>
-        )}
-      </button>
-    </>
+    </nav>
   );
+
+  const renderSpaceSection = (compactMobile = false) => {
+    const customizeAnchorRef = compactMobile
+      ? drawerProjectCustomizeBtnRef
+      : desktopProjectCustomizeBtnRef;
+    const showPopoverHere = projectCustomizeOpen && compactMobile === drawerOpen;
+    return (
+      <div className="sp-sidebar-space">
+        <div className="sp-sidebar-section">
+          <div className="sp-sidebar-group-head">
+            <Link to="/projects" className="sp-sidebar-group-label sp-sidebar-group-link">
+              常用项目
+            </Link>
+            <div className="sp-sidebar-group-actions">
+              {activeItems.length > 0 && (
+                <button
+                  ref={customizeAnchorRef}
+                  type="button"
+                  className="sp-icon-btn sp-icon-btn--sm"
+                  aria-label="自定义常用项目"
+                  aria-expanded={showPopoverHere}
+                  title="自定义常用项目"
+                  onClick={() => setProjectCustomizeOpen((v) => !v)}
+                >
+                  <SlidersHorizontal size={13} strokeWidth={2} aria-hidden="true" />
+                </button>
+              )}
+              <Link
+                to={hasTrulyZeroProjects ? '/projects?create=1' : '/projects'}
+                aria-label="查看或新建项目"
+                className="sp-icon-btn sp-icon-btn--sm"
+              >
+                <Plus size={15} strokeWidth={2} aria-hidden="true" />
+              </Link>
+            </div>
+          </div>
+
+          <SidebarCustomizePopover
+            open={showPopoverHere}
+            title="自定义常用项目"
+            searchLabel="搜索常用项目"
+            searchPlaceholder="搜索进行中项目…"
+            emptyText="没有匹配的项目"
+            items={activeItems.map((p) => ({
+              id: p.id,
+              label: p.name,
+              count: p.collection_count,
+              pinned: validPinnedProjectSet.has(p.id),
+              accentClass: projectToneClass(p.id),
+            }))}
+            isCustomized={projectsCustomized}
+            onTogglePin={(id) =>
+              updateSidebarPrefs({
+                pinnedProjectIds: togglePinnedId(
+                  sidebarPrefs.pinnedProjectIds,
+                  id,
+                  validProjectIdSet,
+                ),
+              })
+            }
+            onReset={() => updateSidebarPrefs({ pinnedProjectIds: null })}
+            onClose={() => setProjectCustomizeOpen(false)}
+            anchorRef={customizeAnchorRef}
+          />
+
+          <ul className="sp-nav-list">
+            {sidebarProjects.map((proj) => (
+              <li key={proj.id}>
+                <NavLink
+                  to={`/projects/${proj.id}`}
+                  className={({ isActive }) => `sp-nav-link sp-nav-link--project ${isActive ? 'active' : ''}`}
+                >
+                  <span className={`sp-project-dot ${projectToneClass(proj.id)}`} aria-hidden="true" />
+                  <span className="sp-truncate">{proj.name}</span>
+                </NavLink>
+              </li>
+            ))}
+            {hasTrulyZeroProjects ? (
+              <li>
+                <Link to="/projects?create=1" className="sp-nav-link sp-nav-link--muted">
+                  <span>创建项目</span>
+                </Link>
+              </li>
+            ) : (
+              showAllProjectsLink && (
+                <li>
+                  <NavLink
+                    to="/projects"
+                    end
+                    className={({ isActive }) =>
+                      `sp-nav-link sp-nav-link--muted sp-sidebar-all-link ${isActive ? 'active' : ''}`
+                    }
+                  >
+                    <span>全部项目</span>
+                  </NavLink>
+                </li>
+              )
+            )}
+          </ul>
+        </div>
+
+        <TagNavigation
+          pinnedTagIds={sidebarPrefs.pinnedTagIds}
+          onUpdatePinnedTags={(next) => updateSidebarPrefs({ pinnedTagIds: next })}
+          onOpenAllTags={() => openCommandPalette('#')}
+          onNavigate={compactMobile ? () => setDrawerOpen(false) : undefined}
+        />
+
+        <ActivityCalendar
+          key={user?.id}
+          onSelect={compactMobile ? () => setDrawerOpen(false) : undefined}
+        />
+      </div>
+    );
+  };
 
   return (
     <div className={`sp-app-root${androidWorkspace && !isInbox ? ' sp-app-root--android-subpage' : ''}`}>
@@ -438,19 +542,38 @@ export function AppShell({
 
       <div className={`sp-workspace ${wide ? 'sp-workspace--wide' : ''}`}>
         <aside className="sp-sidebar" aria-label="主导航">
-          <BrandLink className="sp-brand--sidebar" />
+          <div className="sp-sidebar-top">
+            <BrandLink className="sp-brand--sidebar" />
 
-          <button type="button" className="sp-capture-btn" onClick={handleQuickCapture}>
-            <PenLine size={16} strokeWidth={2} aria-hidden="true" />
-            <span>记一条</span>
-            <kbd className="sp-kbd-hint" aria-hidden="true">
-              N
-            </kbd>
-          </button>
+            <div className="sp-sidebar-actions">
+              <button type="button" className="sp-capture-btn" onClick={handleQuickCapture}>
+                <PenLine size={16} strokeWidth={2} aria-hidden="true" />
+                <span>记一条</span>
+                <kbd className="sp-kbd-hint" aria-hidden="true">
+                  N
+                </kbd>
+              </button>
 
-          {renderPrimaryAndProjectsNav()}
+              <button
+                type="button"
+                className="sp-jump-btn"
+                aria-label="快速跳转"
+                title={`快速跳转 (${formatShortcut('K')})`}
+                onClick={() => openCommandPalette('')}
+              >
+                <Search size={15} strokeWidth={2} aria-hidden="true" />
+                {!isTouchDevice() && (
+                  <kbd className="sp-kbd-hint" aria-hidden="true">
+                    {formatShortcut('K')}
+                  </kbd>
+                )}
+              </button>
+            </div>
 
-          <ActivityCalendar key={user?.id} />
+            {renderPrimaryNav()}
+          </div>
+
+          {renderSpaceSection(false)}
 
           <div
             className="sp-sidebar-footer"
@@ -563,7 +686,11 @@ export function AppShell({
         </button>
       </nav>
 
-      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
+      <CommandPalette
+        open={commandOpen}
+        initialQuery={commandInitialQuery}
+        onClose={() => setCommandOpen(false)}
+      />
       <QuickCaptureSheet open={captureOpen} onClose={() => setCaptureOpen(false)} />
 
       {/* Tablet side drawer / phone bottom sheet — one panel, two presentations. */}
@@ -602,7 +729,6 @@ export function AppShell({
               </div>
             </div>
 
-            <ActivityCalendar key={user?.id} onSelect={() => setDrawerOpen(false)} />
             <Link to="/settings" className="sp-drawer-account">
               <span className="sp-avatar sp-avatar--lg" aria-hidden="true">
                 {userInitial}
@@ -616,7 +742,18 @@ export function AppShell({
               <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
             </Link>
 
-            {renderPrimaryAndProjectsNav(true)}
+            <button
+              type="button"
+              className="sp-nav-link sp-nav-link--command"
+              aria-label="搜索与跳转"
+              onClick={() => openCommandPalette('')}
+            >
+              <Search size={16} strokeWidth={2} aria-hidden="true" />
+              <span>搜索与跳转</span>
+            </button>
+
+            {renderPrimaryNav()}
+            {renderSpaceSection(true)}
 
             <div className="sp-drawer-footer">
               <NavLink

@@ -240,11 +240,12 @@ describe('v0.3-T04 multi-image upload & presentation', () => {
     await user.click(screen.getByRole('button', { name: '前移待保存图片 second.png' }));
     await user.click(screen.getByRole('button', { name: '保存收藏' }));
 
-    // Inbox card shows image indicator badge
-    expect(await screen.findByRole('img', { name: '含图片' })).toBeInTheDocument();
+    // Inbox card renders cover thumbnail directly without redundant top kind icon
+    expect(await screen.findByText('共 2 张')).toBeInTheDocument();
+    expect(screen.queryByRole('img', { name: '含图片' })).not.toBeInTheDocument();
 
     // Open detail page and verify attachment positions were persisted in [second.png, first.png] order
-    const openLinks = screen.getAllByRole('link', { name: /查看全文/ });
+    const openLinks = screen.getAllByRole('link', { name: /查看详情：/ });
     await user.click(openLinks[0]);
 
     const imgs = await screen.findAllByRole('img', { name: /\.png$/ });
@@ -285,7 +286,7 @@ describe('v0.3-T04 multi-image upload & presentation', () => {
     await waitForUploadReady('beta.png');
 
     await user.click(screen.getByRole('button', { name: '保存收藏' }));
-    await screen.findByRole('img', { name: '含图片' });
+    await screen.findByText('共 2 张');
 
     // Visit Unclassified -> TriagePage and check compact attachment gallery renders inside front card
     await user.click(

@@ -168,7 +168,7 @@ describe('Platform AI organization & UI states', () => {
     });
 
     // Open detail and verify excluded state + re-allow toggle
-    await user.click(await screen.findByRole('link', { name: '查看全文' }));
+    await user.click(await screen.findByRole('link', { name: /查看详情：/ }));
     await screen.findByText('已排除 AI');
     expect(screen.queryByRole('button', { name: /重新整理|重试整理/ })).not.toBeInTheDocument();
 

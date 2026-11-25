@@ -63,7 +63,7 @@ describe('capture and recall', () => {
     const draft = loadDraft<CollectionDraft>(session.user.id, 'inbox').data!;
     expect(draft.tagIds).toHaveLength(1);
     await userEvent.click(screen.getByRole('button', { name: '重试保存' }));
-    await screen.findByRole('link', { name: '#观察' });
+    await within(screen.getByRole('main')).findByRole('link', { name: '#观察' });
     expect(save.mock.calls[1]).toEqual(save.mock.calls[0]);
   });
 
@@ -110,7 +110,7 @@ describe('capture and recall', () => {
     await screen.findByText(/部分关联尚未保存/);
     expect(editor).toHaveTextContent('新段落');
     await userEvent.click(screen.getByRole('button', { name: '保存修改' }));
-    await screen.findByRole('link', { name: '#校对' });
+    await within(screen.getByRole('main')).findByRole('link', { name: '#校对' });
     expect(body).toHaveBeenCalledOnce();
     expect((await api.getCollection(id)).tags).toHaveLength(1);
   });
@@ -206,9 +206,9 @@ describe('capture and recall', () => {
       await userEvent.click(screen.getByRole('button', { name: '重新生成' }));
       await screen.findByRole('link', { name: '下载 PNG' });
       expect(thumbnail.mock.calls.map(args => args[0])).toEqual(['a', 'a', 'b']);
-      expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), [image, image]);
+      expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), [image, image], 'gallery');
       await userEvent.click(screen.getByLabelText('第 2 张'));
-      await waitFor(() => expect(renderCard).toHaveBeenLastCalledWith(expect.anything(), [image]));
+      await waitFor(() => expect(renderCard).toHaveBeenLastCalledWith(expect.anything(), [image], 'gallery'));
       expect(thumbnail).toHaveBeenCalledTimes(3);
       expect(screen.queryByText(/private-/)).toBeNull();
       cleanup();
@@ -216,7 +216,7 @@ describe('capture and recall', () => {
       render(<ApiProvider api={api}><ShareCard collection={c} onClose={() => {}} /></ApiProvider>);
       await userEvent.click(await screen.findByRole('button', { name: '仅文字' }));
       await screen.findByRole('link', { name: '下载 PNG' });
-      expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), []);
+      expect(renderCard).toHaveBeenLastCalledWith(expect.objectContaining({ body: '手动修改的图片笔记' }), [], 'quote');
     } finally {
       cleanup();
       thumbnail.mockRestore(); decode.mockRestore(); renderCard.mockRestore();

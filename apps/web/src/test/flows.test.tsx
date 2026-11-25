@@ -81,11 +81,11 @@ describe('Spark Web key flows', () => {
     const user = userEvent.setup();
     await user.type(await screen.findByLabelText('在当前项目内搜索'), 'AlpineRecall');
     await user.selectOptions(screen.getByRole('combobox', { name: '筛选类型' }), 'url');
-    await user.click(await screen.findByRole('link', { name: '查看全文' }));
+    await user.click(await screen.findByRole('link', { name: /查看详情/ }));
     await user.click(await screen.findByRole('link', { name: '返回' }));
     expect(await screen.findByLabelText('在当前项目内搜索')).toHaveValue('AlpineRecall');
     expect(screen.getByRole('combobox', { name: '筛选类型' })).toHaveValue('url');
-    expect(await screen.findByRole('link', { name: '查看全文' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /查看详情/ })).toBeInTheDocument();
   });
 
   it.each([
@@ -226,7 +226,7 @@ describe('Spark Web key flows', () => {
     await loginAsAdmin(user, adapter);
 
     await screen.findByText('example.com');
-    await user.click(screen.getByRole('link', { name: '查看全文' }));
+    await user.click(screen.getByRole('link', { name: /查看详情/ }));
     await screen.findByRole('button', { name: '编辑' });
 
     await user.click(screen.getByRole('button', { name: '编辑' }));
@@ -310,7 +310,9 @@ describe('Spark Web key flows', () => {
     expect(screen.getByRole('region', { name: '快速收集' })).toHaveClass('sp-composer--active');
 
     await user.click(screen.getByRole('button', { name: '重试保存' }));
-    await screen.findByText('retry.example.com');
+    await waitFor(() => {
+      expect(screen.getAllByText('retry.example.com').length).toBeGreaterThanOrEqual(1);
+    });
 
     expect(createSpy).toHaveBeenCalledTimes(2);
     expect(createSpy.mock.calls[0][0].id).toBe(createSpy.mock.calls[1][0].id);
@@ -426,7 +428,7 @@ describe('Spark Web key flows', () => {
     await user.click(getSidebar().getByRole('link', { name: '待归类' }));
     await screen.findByText('note.example.com');
 
-    await user.click(screen.getByRole('link', { name: '查看全文' }));
+    await user.click(screen.getByRole('link', { name: /查看详情/ }));
     await user.click(await screen.findByRole('button', { name: '移入回收站' }));
     const undoBtn = await screen.findByRole('button', { name: '撤销' });
     await user.click(undoBtn);

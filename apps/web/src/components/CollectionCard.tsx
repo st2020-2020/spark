@@ -1,11 +1,12 @@
 import { confirmLeavingImageDraft } from '../lib/drafts';
+import { isValidHttpUrl } from '../lib/document';
 import { followUpCountLabel, toFollowUpSourceFromSummary } from '../lib/followUp';
 import { CollectionLink, useRecordOpened } from './CollectionLink';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  ChevronRight,
+  CornerDownRight,
   Image as ImageIcon,
   Link2,
   Mail,
@@ -312,6 +313,23 @@ export function CollectionCard({
   const effectiveProjects = collection.projects.filter(
     (p) => p.decision === 'manual' || p.decision === 'confirmed' || p.decision === 'auto',
   );
+  const visibleProjects = effectiveProjects.slice(0, 2);
+  const hiddenProjects = effectiveProjects.slice(visibleProjects.length);
+  const extraProjectsCount = hiddenProjects.length;
+  const extraProjectsLabel =
+    extraProjectsCount > 0
+      ? `还有 ${extraProjectsCount} 个关联项目：${hiddenProjects.map((p) => p.name).join('、')}`
+      : '';
+
+  const effectiveTags = collection.tags.filter((t) => t.decision !== 'rejected');
+  const visibleTags = effectiveTags.slice(0, 3);
+  const hiddenTags = effectiveTags.slice(visibleTags.length);
+  const extraTagsCount = hiddenTags.length;
+  const extraTagsLabel =
+    extraTagsCount > 0
+      ? `还有 ${extraTagsCount} 个标签：${hiddenTags.map((t) => `#${t.path}`).join('、')}`
+      : '';
+
   const showTitle = shouldShowDistinctTitle(collection);
   const showOrgStatus =
     collection.organization_status === 'queued' ||
@@ -322,10 +340,49 @@ export function CollectionCard({
   const detailState = { from: `${location.pathname}${location.search}` };
   const hasUrl = collection.content_types.includes('url');
   const hasImage = collection.content_types.includes('image');
+  const hasRenderedUrlBar = Boolean(collection.original_url && isValidHttpUrl(collection.original_url));
+  const effectiveAttachments: Attachment[] =
+    attachments && attachments.length > 0
+      ? attachments
+      : collection.cover_attachment_id
+        ? [
+            {
+              id: collection.cover_attachment_id,
+              filename: collection.display_title
+                ? `${collection.display_title} 封面`
+                : '图片附件',
+              mime_type: 'image/png',
+              size_bytes: 0,
+              position: 0,
+            },
+          ]
+        : [];
+  const hasRenderedThumbnails = effectiveAttachments.length > 0;
   const followUpCountText = followUpCountLabel(collection.follow_up_count);
 
+  const handleCardClick = (e: ReactMouseEvent<HTMLElement>) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if (window.getSelection()?.toString().trim()) return;
+    const target = e.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest(
+        'a, button, input, textarea, select, [role="button"], [role="menuitem"], [role="menu"], [role="dialog"], .sp-popover, .sp-sheet-scrim, .sp-lightbox-backdrop',
+      )
+    ) {
+      return;
+    }
+    if (!confirmLeavingImageDraft()) return;
+    recordOpened(collection.id);
+    navigate(`/collections/${collection.id}`, { state: detailState });
+  };
+
   return (
-    <article data-keyboard-card tabIndex={0} aria-label={collection.display_title}
+    <article
+      data-keyboard-card
+      tabIndex={0}
+      aria-label={collection.display_title}
+      onClick={handleCardClick}
       onKeyDown={e => {
         if (e.target !== e.currentTarget || e.nativeEvent.isComposing || e.keyCode === 229 ||
             e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.repeat) return;
@@ -341,19 +398,28 @@ export function CollectionCard({
         } else if (key === 'r' && !toggleReadMutation.isPending) {
           e.preventDefault(); toggleReadMutation.mutate(Boolean(isUnread));
         }
-      }} className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}>
+      }}
+      className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}
+    >
       <div className="sp-note-meta">
-        <time dateTime={collection.created_at} title={formatDateTime(collection.created_at)}>
-          {timeStyle === 'clock'
-            ? formatClock(collection.created_at)
-            : formatRelativeTime(collection.created_at)}
-        </time>
-        {hasUrl && (
+        <CollectionLink
+          id={collection.id}
+          state={detailState}
+          className="sp-note-time-link"
+          aria-label={`查看详情：${collection.display_title}`}
+        >
+          <time dateTime={collection.created_at} title={formatDateTime(collection.created_at)}>
+            {timeStyle === 'clock'
+              ? formatClock(collection.created_at)
+              : formatRelativeTime(collection.created_at)}
+          </time>
+        </CollectionLink>
+        {hasUrl && !hasRenderedUrlBar && (
           <span className="sp-note-kind" role="img" aria-label="含网址" title="含网址">
             <Link2 size={13} strokeWidth={2.2} aria-hidden="true" />
           </span>
         )}
-        {hasImage && (
+        {hasImage && !hasRenderedThumbnails && (
           <span className="sp-note-kind" role="img" aria-label="含图片" title="含图片">
             <ImageIcon size={13} strokeWidth={2.2} aria-hidden="true" />
           </span>
@@ -513,82 +579,103 @@ export function CollectionCard({
         />
       )}
 
-      {(() => {
-        const effectiveAttachments: Attachment[] =
-          attachments && attachments.length > 0
-            ? attachments
-            : collection.cover_attachment_id
-              ? [
-                  {
-                    id: collection.cover_attachment_id,
-                    filename: collection.display_title
-                      ? `${collection.display_title} 封面`
-                      : '图片附件',
-                    mime_type: 'image/png',
-                    size_bytes: 0,
-                    position: 0,
-                  },
-                ]
-              : [];
-        if (effectiveAttachments.length === 0) return null;
-        const hasMoreCoverImages = !attachments && (collection.attachment_count ?? 0) > 1;
-        return (
-          <div className="sp-note-cover">
-            <AttachmentGallery
-              attachments={effectiveAttachments}
-              compact
-              className="sp-note-gallery"
-            />
-            {hasMoreCoverImages && (
-              <span className="sp-note-cover-count">共 {collection.attachment_count} 张</span>
+      {hasRenderedThumbnails && (
+        <div className="sp-note-cover">
+          <AttachmentGallery
+            attachments={effectiveAttachments}
+            compact
+            className="sp-note-gallery"
+          />
+          {!attachments && (collection.attachment_count ?? 0) > 1 && (
+            <span className="sp-note-cover-count">共 {collection.attachment_count} 张</span>
+          )}
+        </div>
+      )}
+
+      {(visibleProjects.length > 0 || visibleTags.length > 0 || followUpCountText || true) && (
+        <div className="sp-note-footer">
+          {(visibleProjects.length > 0 || visibleTags.length > 0) && (
+            <div className="sp-note-footer-meta">
+              {visibleProjects.map((p) => (
+                <Link
+                  key={p.project_id}
+                  to={`/projects/${p.project_id}`}
+                  className={`sp-project-chip ${projectToneClass(p.project_id)}`}
+                  aria-label={p.decision === 'auto' ? `自动归入 · ${p.name}` : p.name}
+                  title={p.decision === 'auto' ? `自动归入 · ${p.name}` : p.name}
+                >
+                  <span className="sp-project-chip-dot" aria-hidden="true" />
+                  <span className="sp-truncate">{p.name}</span>
+                  {p.decision === 'auto' && (
+                    <span className="sp-project-chip-ai" aria-hidden="true">
+                      ✦
+                    </span>
+                  )}
+                </Link>
+              ))}
+              {extraProjectsCount > 0 && (
+                <CollectionLink
+                  id={collection.id}
+                  state={detailState}
+                  className="sp-footer-more"
+                  aria-label={extraProjectsLabel}
+                  title={extraProjectsLabel}
+                >
+                  +{extraProjectsCount}
+                </CollectionLink>
+              )}
+
+              {visibleTags.map((t) => (
+                <Link
+                  key={t.tag_id}
+                  className="sp-tag sp-tag--quiet"
+                  to={`/collections?tag_id=${t.tag_id}`}
+                  state={{ tagName: t.path }}
+                >
+                  #{t.path}
+                </Link>
+              ))}
+              {extraTagsCount > 0 && (
+                <CollectionLink
+                  id={collection.id}
+                  state={detailState}
+                  className="sp-footer-more"
+                  aria-label={extraTagsLabel}
+                  title={extraTagsLabel}
+                >
+                  +{extraTagsCount}
+                </CollectionLink>
+              )}
+            </div>
+          )}
+
+          <div className="sp-note-footer-actions">
+            {followUpCountText && (
+              <CollectionLink
+                id={collection.id}
+                state={detailState}
+                hash="#follow-up-thread"
+                className="sp-pill sp-follow-up-pill"
+                aria-label={followUpCountText}
+                title={followUpCountText}
+              >
+                <CornerDownRight size={12} strokeWidth={2} aria-hidden="true" />
+                <span>{collection.follow_up_count} 条续写</span>
+              </CollectionLink>
             )}
+
+            <button
+              type="button"
+              className="sp-note-follow-up-btn"
+              aria-label={`续写 ${collection.display_title}`}
+              onClick={() => openFollowUp(toFollowUpSourceFromSummary(collection))}
+            >
+              <PenLine size={13} strokeWidth={2} aria-hidden="true" />
+              <span>续写</span>
+            </button>
           </div>
-        );
-      })()}
-
-      <div className="sp-note-footer">
-        {collection.tags.filter(t => t.decision !== 'rejected').map(t => <Link key={t.tag_id} className="sp-tag"
-          to={`/collections?tag_id=${t.tag_id}`} state={{ tagName: t.path }}>#{t.path}</Link>)}
-        {effectiveProjects.map((p) => (
-          <Link
-            key={p.project_id}
-            to={`/projects/${p.project_id}`}
-            className={`sp-tape ${projectToneClass(p.project_id)}`}
-          >
-            <span className="sp-truncate">{p.decision === 'auto' && '自动归入 · '}{p.name}</span>
-          </Link>
-        ))}
-
-        {followUpCountText && (
-          <CollectionLink
-            id={collection.id}
-            state={detailState}
-            hash="#follow-up-thread"
-            className="sp-pill sp-follow-up-pill"
-          >
-            {followUpCountText}
-          </CollectionLink>
-        )}
-
-        <button
-          type="button"
-          className="sp-note-follow-up-btn"
-          aria-label={`续写 ${collection.display_title}`}
-          onClick={() => openFollowUp(toFollowUpSourceFromSummary(collection))}
-        >
-          <PenLine size={14} strokeWidth={2} aria-hidden="true" />
-          <span>续写</span>
-        </button>
-
-        <CollectionLink
-          id={collection.id}
-          state={detailState}
-          className="sp-note-open"
-        >
-          查看全文
-          <ChevronRight size={14} strokeWidth={2} aria-hidden="true" />
-        </CollectionLink>
-      </div>
+        </div>
+      )}
     </article>
   );
 }
