@@ -90,13 +90,18 @@ export function ProjectsPage() {
     });
   }, [pausedProjectsQuery.data, completedProjectsQuery.data]);
 
-  const hasArchived = archivedItems.length > 0;
-  const effectiveTab: ProjectViewTab = hasArchived ? viewTab : 'active';
+  const archivedConfirmedEmpty =
+    pausedProjectsQuery.isSuccess &&
+    completedProjectsQuery.isSuccess &&
+    archivedItems.length === 0;
+  const showFilterTabs = !archivedConfirmedEmpty;
+  const effectiveTab: ProjectViewTab = archivedConfirmedEmpty ? 'active' : viewTab;
   const items = effectiveTab === 'active' ? activeItems : archivedItems;
   const isLoading =
     effectiveTab === 'active'
       ? activeProjectsQuery.isLoading
-      : pausedProjectsQuery.isLoading || completedProjectsQuery.isLoading;
+      : (pausedProjectsQuery.isLoading || completedProjectsQuery.isLoading) &&
+        archivedItems.length === 0;
   const activeError =
     effectiveTab === 'active'
       ? activeProjectsQuery.error
@@ -176,7 +181,7 @@ export function ProjectsPage() {
         }
       />
 
-      {hasArchived && (
+      {showFilterTabs && (
         <div className="sp-filter-tabs" role="tablist" aria-label="项目状态筛选">
           {([
             ['active', '进行中'],
@@ -213,11 +218,19 @@ export function ProjectsPage() {
       {!isLoading && !isError && items.length === 0 && (
         <EmptyState
           art="notebook"
-          title={effectiveTab === 'active' && hasArchived ? '当前没有进行中的项目' : '还没有项目'}
+          title={
+            effectiveTab === 'archived'
+              ? '没有已归档的项目'
+              : archivedItems.length > 0
+                ? '当前没有进行中的项目'
+                : '还没有项目'
+          }
           description={
-            effectiveTab === 'active' && hasArchived
-              ? '你可以在「已归档」中查看历史项目，或新建一个进行中的项目。'
-              : '先建立一个你正在持续关注的事情，也可以在收件箱直接开始记录。'
+            effectiveTab === 'archived'
+              ? '暂停或结束的项目会收纳在这里，历史收藏仍会保留。'
+              : archivedItems.length > 0
+                ? '你可以在「已归档」中查看历史项目，或新建一个进行中的项目。'
+                : '先建立一个你正在持续关注的事情，也可以在收件箱直接开始记录。'
           }
           action={
             <div className="sp-row sp-wrap-gap">
@@ -225,7 +238,7 @@ export function ProjectsPage() {
                 <Plus size={16} strokeWidth={2} aria-hidden="true" />
                 <span>新建项目</span>
               </button>
-              {effectiveTab === 'active' && hasArchived && (
+              {effectiveTab === 'active' && archivedItems.length > 0 && (
                 <button type="button" className="sp-btn" onClick={() => setViewTab('archived')}>
                   查看已归档
                 </button>

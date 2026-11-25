@@ -23,6 +23,21 @@ export function ShareCard({ collection, onClose }: { collection: Collection; onC
   const [error, setError] = useState('');
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'fallback'>('idle');
   const copyTimerRef = useRef<number | null>(null);
+  const copyRequestIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const swatchRefs = useRef<Array<HTMLButtonElement | null>>([]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      copyRequestIdRef.current += 1;
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+        copyTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const attachments = useMemo(
     () =>
@@ -56,6 +71,11 @@ export function ShareCard({ collection, onClose }: { collection: Collection; onC
       : undefined;
 
   useEffect(() => {
+    copyRequestIdRef.current += 1;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
     setCopyStatus('idle');
     const controller = new AbortController();
     let url = '';
@@ -93,14 +113,6 @@ export function ShareCard({ collection, onClose }: { collection: Collection; onC
     };
   }, [api, selection, activeTemplate, attempt]);
 
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
-    };
-  }, []);
-
   const canCopyImage =
     typeof navigator !== 'undefined' &&
     typeof navigator.clipboard?.write === 'function' &&
@@ -108,20 +120,26 @@ export function ShareCard({ collection, onClose }: { collection: Collection; onC
 
   const handleCopyImage = async () => {
     if (!ready) return;
+    const requestId = ++copyRequestIdRef.current;
+    if (copyTimerRef.current !== null) {
+      window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = null;
+    }
     if (!canCopyImage) {
       setCopyStatus('fallback');
       return;
     }
     try {
       await navigator.clipboard.write([new ClipboardItem({ 'image/png': ready.blob })]);
+      if (!mountedRef.current || copyRequestIdRef.current !== requestId) return;
       setCopyStatus('copied');
-      if (copyTimerRef.current !== null) {
-        window.clearTimeout(copyTimerRef.current);
-      }
       copyTimerRef.current = window.setTimeout(() => {
+        copyTimerRef.current = null;
+        if (!mountedRef.current || copyRequestIdRef.current !== requestId) return;
         setCopyStatus('idle');
       }, 2200);
     } catch {
+      if (!mountedRef.current || copyRequestIdRef.current !== requestId) return;
       setCopyStatus('fallback');
     }
   };
@@ -129,6 +147,25 @@ export function ShareCard({ collection, onClose }: { collection: Collection; onC
   const hasAttributedProjects = collection.projects.some((p) =>
     ['manual', 'confirmed', 'auto'].includes(p.decision),
   );
+
+  const handleSwatchKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const total = SHARE_CARD_TEMPLATES.length;
+    let nextIndex: number | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (index + 1) % total;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (index - 1 + total) % total;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = total - 1;
+    }
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTpl = SHARE_CARD_TEMPLATES[nextIndex];
+    setManualTemplate(nextTpl.id);
+    swatchRefs.current[nextIndex]?.focus();
+  };
 
   return (
     <Modal open title="生成卡片" onClose={onClose}>
@@ -141,16 +178,21 @@ export function ShareCard({ collection, onClose }: { collection: Collection; onC
         )}
 
         <div className="sp-share-swatches" role="radiogroup" aria-label="分享卡片模板">
-          {SHARE_CARD_TEMPLATES.map((tpl) => {
+          {SHARE_CARD_TEMPLATES.map((tpl, index) => {
             const selected = activeTemplate === tpl.id;
             return (
               <button
                 key={tpl.id}
+                ref={(el) => {
+                  swatchRefs.current[index] = el;
+                }}
                 type="button"
                 role="radio"
                 aria-checked={selected}
+                tabIndex={selected ? 0 : -1}
                 className={`sp-share-swatch-btn ${selected ? 'is-active' : ''}`}
                 onClick={() => setManualTemplate(tpl.id)}
+                onKeyDown={(e) => handleSwatchKeyDown(e, index)}
               >
                 <span
                   className={`sp-share-swatch-dot sp-share-swatch-dot--${tpl.id}`}

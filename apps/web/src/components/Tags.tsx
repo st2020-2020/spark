@@ -39,24 +39,41 @@ export function TagNavigation({
   const api = useApi();
   const { user } = useAuth();
   const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [popoverSearch, setPopoverSearch] = useState('');
   const customizeBtnRef = useRef<HTMLButtonElement | null>(null);
   const location = useLocation();
   const selected =
     location.pathname === '/collections' && new URLSearchParams(location.search).get('tag_id');
 
-  const tagsQuery = useQuery({
+  const tagsQuery = useInfiniteQuery({
     queryKey: ['tags', 'sidebar', user?.id],
-    queryFn: () => api.listTags({ limit: 50 }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => api.listTags({ cursor: pageParam, limit: 50 }),
+    getNextPageParam: (page) => page.next_cursor,
     enabled: Boolean(user),
     staleTime: 30_000,
   });
 
-  const allTags = tagsQuery.data?.items ?? [];
+  const remoteTerm = popoverSearch.trim();
+  const remoteSearchQuery = useQuery({
+    queryKey: ['tags', 'sidebar-search', user?.id, remoteTerm],
+    queryFn: () => api.listTags({ q: remoteTerm, limit: 50 }),
+    enabled: Boolean(user) && customizeOpen && Boolean(remoteTerm) && Boolean(tagsQuery.hasNextPage),
+    staleTime: 15_000,
+  });
+
+  const allTags = useMemo(() => {
+    const pages = tagsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+    const searched = remoteSearchQuery.data?.items ?? [];
+    if (searched.length === 0) return pages;
+    const seen = new Set(pages.map((t) => t.id));
+    return [...pages, ...searched.filter((t) => !seen.has(t.id))];
+  }, [tagsQuery.data, remoteSearchQuery.data]);
+
   const { visible, isCustomized, validPinnedIds } = useMemo(
     () => resolveSidebarTags(allTags, pinnedTagIds, DEFAULT_SIDEBAR_ITEMS),
     [allTags, pinnedTagIds],
   );
-  const validTagIdSet = useMemo(() => new Set(allTags.map((t) => t.id)), [allTags]);
   const validPinnedSet = useMemo(() => new Set(validPinnedIds), [validPinnedIds]);
 
   return (
@@ -102,8 +119,12 @@ export function TagNavigation({
           pinned: validPinnedSet.has(t.id),
         }))}
         isCustomized={isCustomized}
+        hasMore={Boolean(tagsQuery.hasNextPage)}
+        isLoadingMore={tagsQuery.isFetchingNextPage}
+        onLoadMore={() => void tagsQuery.fetchNextPage()}
+        onQueryChange={setPopoverSearch}
         onTogglePin={(id) =>
-          onUpdatePinnedTags(togglePinnedId(pinnedTagIds, id, validTagIdSet))
+          onUpdatePinnedTags(togglePinnedId(pinnedTagIds, id))
         }
         onReset={() => onUpdatePinnedTags(null)}
         onClose={() => setCustomizeOpen(false)}

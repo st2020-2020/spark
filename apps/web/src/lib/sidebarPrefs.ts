@@ -139,11 +139,10 @@ export function resolveSidebarTags(
 export function togglePinnedId(
   currentPinned: readonly string[] | null,
   id: string,
-  validAvailableIds: ReadonlySet<string>,
 ): string[] | null {
-  const cleaned = (currentPinned ?? []).filter((item) => validAvailableIds.has(item));
-  const next = cleaned.includes(id)
-    ? cleaned.filter((item) => item !== id)
-    : [...cleaned, id];
+  const existing = currentPinned ?? [];
+  const next = existing.includes(id)
+    ? existing.filter((item) => item !== id)
+    : [...existing, id];
   return next.length > 0 ? next : null;
 }

@@ -17,6 +17,10 @@ export function SidebarCustomizePopover({
   emptyText,
   items,
   isCustomized,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore,
+  onQueryChange,
   onTogglePin,
   onReset,
   onClose,
@@ -29,6 +33,10 @@ export function SidebarCustomizePopover({
   emptyText: string;
   items: readonly CustomizePopoverItem[];
   isCustomized: boolean;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
+  onQueryChange?: (q: string) => void;
   onTogglePin: (id: string) => void;
   onReset: () => void;
   onClose: () => void;
@@ -38,10 +46,17 @@ export function SidebarCustomizePopover({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  const onQueryChangeRef = useRef(onQueryChange);
+  onQueryChangeRef.current = onQueryChange;
+  const anchorElRef = useRef(anchorRef);
+  anchorElRef.current = anchorRef;
 
   useEffect(() => {
     if (!open) {
       setQuery('');
+      onQueryChangeRef.current?.('');
       return;
     }
     const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
@@ -49,19 +64,19 @@ export function SidebarCustomizePopover({
       const target = event.target as Node;
       if (
         panelRef.current?.contains(target) ||
-        anchorRef.current?.contains(target)
+        anchorElRef.current.current?.contains(target)
       ) {
         return;
       }
-      onClose();
+      onCloseRef.current();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        event.stopPropagation();
-        onClose();
-        anchorRef.current?.focus?.();
-      }
+      if (event.key !== 'Escape') return;
+      if (event.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      event.stopPropagation();
+      onCloseRef.current();
+      anchorElRef.current.current?.focus?.();
     };
     document.addEventListener('mousedown', onPointerDown);
     window.addEventListener('keydown', onKeyDown, true);
@@ -70,7 +85,7 @@ export function SidebarCustomizePopover({
       document.removeEventListener('mousedown', onPointerDown);
       window.removeEventListener('keydown', onKeyDown, true);
     };
-  }, [open, onClose, anchorRef]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -134,7 +149,11 @@ export function SidebarCustomizePopover({
           aria-label={searchLabel}
           placeholder={searchPlaceholder}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const next = e.target.value;
+            setQuery(next);
+            onQueryChangeRef.current?.(next);
+          }}
         />
       </div>
 
@@ -166,6 +185,16 @@ export function SidebarCustomizePopover({
               />
             </button>
           ))
+        )}
+        {hasMore && onLoadMore && (
+          <button
+            type="button"
+            className="sp-sidebar-customize-more"
+            disabled={isLoadingMore}
+            onClick={onLoadMore}
+          >
+            {isLoadingMore ? '正在加载…' : '加载更多'}
+          </button>
         )}
       </div>
     </div>

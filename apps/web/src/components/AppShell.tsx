@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
   ChevronRight,
   Folder,
@@ -74,6 +74,7 @@ export function AppShell({
   const [captureOpen, setCaptureOpen] = useState(false);
   const [sidebarPrefs, setSidebarPrefs] = useState<SidebarPrefs>(() => loadSidebarPrefs(user?.id));
   const [projectCustomizeOpen, setProjectCustomizeOpen] = useState(false);
+  const [projectPopoverSearch, setProjectPopoverSearch] = useState('');
 
   const drawerPanelRef = useRef<HTMLDivElement | null>(null);
   const accountWrapRef = useRef<HTMLDivElement | null>(null);
@@ -143,13 +144,30 @@ export function AppShell({
     };
   }, [drawerOpen, drawerRendered]);
 
-  const activeProjectsQuery = useQuery({
+  const activeProjectsQuery = useInfiniteQuery({
     queryKey: ['projects', 'sidebar-active'],
-    queryFn: () => api.listProjects({ state: 'active', limit: 50 }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => api.listProjects({ state: 'active', cursor: pageParam, limit: 50 }),
+    getNextPageParam: (page) => page.next_cursor,
     staleTime: 30_000,
   });
 
-  const activeItems = activeProjectsQuery.data?.items ?? [];
+  const remoteProjectTerm = projectPopoverSearch.trim();
+  const activeProjectsSearchQuery = useQuery({
+    queryKey: ['projects', 'sidebar-active-search', remoteProjectTerm],
+    queryFn: () => api.listProjects({ state: 'active', q: remoteProjectTerm, limit: 50 }),
+    enabled: projectCustomizeOpen && Boolean(remoteProjectTerm) && Boolean(activeProjectsQuery.hasNextPage),
+    staleTime: 15_000,
+  });
+
+  const activeItems = useMemo(() => {
+    const pages = activeProjectsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+    const searched = activeProjectsSearchQuery.data?.items ?? [];
+    if (searched.length === 0) return pages;
+    const seen = new Set(pages.map((p) => p.id));
+    return [...pages, ...searched.filter((p) => !seen.has(p.id))];
+  }, [activeProjectsQuery.data, activeProjectsSearchQuery.data]);
+
   const anyProjectsQuery = useQuery({
     queryKey: ['projects', 'sidebar-any'],
     queryFn: () => api.listProjects({ limit: 1 }),
@@ -256,7 +274,6 @@ export function AppShell({
     () => resolveSidebarProjects(activeItems, sidebarPrefs.pinnedProjectIds, DEFAULT_SIDEBAR_ITEMS),
     [activeItems, sidebarPrefs.pinnedProjectIds],
   );
-  const validProjectIdSet = useMemo(() => new Set(activeItems.map((p) => p.id)), [activeItems]);
   const validPinnedProjectSet = useMemo(
     () => new Set(validPinnedProjectIds),
     [validPinnedProjectIds],
@@ -264,7 +281,7 @@ export function AppShell({
   const showAllProjectsLink =
     !hasTrulyZeroProjects &&
     (activeItems.length > sidebarProjects.length ||
-      Boolean(activeProjectsQuery.data?.next_cursor) ||
+      Boolean(activeProjectsQuery.hasNextPage) ||
       (activeProjectsQuery.isSuccess && activeItems.length === 0));
 
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
@@ -428,13 +445,13 @@ export function AppShell({
               accentClass: projectToneClass(p.id),
             }))}
             isCustomized={projectsCustomized}
+            hasMore={Boolean(activeProjectsQuery.hasNextPage)}
+            isLoadingMore={activeProjectsQuery.isFetchingNextPage}
+            onLoadMore={() => void activeProjectsQuery.fetchNextPage()}
+            onQueryChange={setProjectPopoverSearch}
             onTogglePin={(id) =>
               updateSidebarPrefs({
-                pinnedProjectIds: togglePinnedId(
-                  sidebarPrefs.pinnedProjectIds,
-                  id,
-                  validProjectIdSet,
-                ),
+                pinnedProjectIds: togglePinnedId(sidebarPrefs.pinnedProjectIds, id),
               })
             }
             onReset={() => updateSidebarPrefs({ pinnedProjectIds: null })}

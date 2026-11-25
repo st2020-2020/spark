@@ -24,10 +24,14 @@ export function selectDefaultShareTemplate(body: string, imageCount: number): Sh
 }
 
 export function shareText(collection: Collection, showSource: boolean, showProjects: boolean) {
-  // Only draw plain body text. Link targets, purpose and generated titles stay private.
+  // Strip all full URLs (including query strings & fragments) first so partial original_url matches never leave ?token=... behind.
   let body = [derivePlainText(collection.document), ...(collection.image_notes ?? []).map(note => note.text)].filter(Boolean).join('\n\n');
-  if (collection.original_url) body = body.split(collection.original_url).join('');
-  body = body.replace(/(?:https?:\/\/|www\.)[^\s<>\u3000，。！？]+/giu, '').trim();
+  body = body
+    .replace(/(?:https?:\/\/|www\.)[^\s<>\u3000，。！？、）】」』]+/giu, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   let source = '';
   if (showSource && collection.original_url) {
     try {
@@ -60,12 +64,26 @@ const SERIF_FONT = '"Songti SC", "STSong", "Noto Serif CJK SC", "Source Han Seri
 const SANS_FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Noto Sans CJK SC", sans-serif';
 const ROUND_FONT = 'ui-rounded, "SF Pro Rounded", "PingFang SC", sans-serif';
 
+const graphemeSegmenter =
+  typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+    ? new Intl.Segmenter('zh', { granularity: 'grapheme' })
+    : null;
+
+function splitGraphemes(text: string): string[] {
+  if (!graphemeSegmenter) return Array.from(text);
+  const out: string[] = [];
+  for (const seg of graphemeSegmenter.segment(text)) {
+    out.push(seg.segment);
+  }
+  return out;
+}
+
 function fitEllipsis(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
   if (!text) return '';
   if (ctx.measureText(text).width <= maxWidth) return text;
   let out = '';
-  for (const ch of text) {
-    if (ctx.measureText(out + ch + '…').width > maxWidth) {
+  for (const ch of splitGraphemes(text)) {
+    if (ctx.measureText(`${out}${ch}…`).width > maxWidth) {
       return out ? `${out}…` : '…';
     }
     out += ch;
@@ -80,26 +98,46 @@ function wrapTextLines(
   maxLines: number,
 ): string[] {
   const trimmed = text.trim();
-  if (!trimmed) return [];
+  if (!trimmed || maxLines <= 0) return [];
 
-  const allLines: string[] = [];
-  for (const paragraph of trimmed.split('\n')) {
+  const visible: string[] = [];
+  let hasOverflow = false;
+  const paragraphs = trimmed.split('\n');
+
+  for (let pIdx = 0; pIdx < paragraphs.length; pIdx += 1) {
+    const paragraph = paragraphs[pIdx];
+    const graphemes = splitGraphemes(paragraph);
     let line = '';
-    for (const char of paragraph) {
-      if (ctx.measureText(line + char).width > maxWidth) {
-        allLines.push(line);
-        line = char;
+
+    for (let gIdx = 0; gIdx < graphemes.length; gIdx += 1) {
+      const grapheme = graphemes[gIdx];
+      if (ctx.measureText(line + grapheme).width > maxWidth && line !== '') {
+        visible.push(line);
+        if (visible.length === maxLines) {
+          hasOverflow = true;
+          break;
+        }
+        line = grapheme;
       } else {
-        line += char;
+        line += grapheme;
       }
     }
-    allLines.push(line);
+
+    if (hasOverflow) break;
+
+    visible.push(line);
+    if (visible.length === maxLines) {
+      if (pIdx < paragraphs.length - 1) {
+        hasOverflow = true;
+      }
+      break;
+    }
   }
 
-  if (allLines.length <= maxLines) return allLines;
-  const visible = allLines.slice(0, maxLines);
-  const last = visible[maxLines - 1] ?? '';
-  visible[maxLines - 1] = fitEllipsis(ctx, `${last}…`, maxWidth);
+  if (hasOverflow && visible.length > 0) {
+    const lastIdx = visible.length - 1;
+    visible[lastIdx] = fitEllipsis(ctx, `${visible[lastIdx]}…`, maxWidth);
+  }
   return visible;
 }
 
@@ -329,18 +367,20 @@ export async function renderShareCard(
   const metaHeight = (content.source ? 36 : 0) + (content.projects ? 36 : 0) + (hasMetaFooter ? 14 : 0);
 
   if (template === 'quote') {
-    const isShort = [...content.body.trim()].length <= 42;
+    const isShort = splitGraphemes(content.body.trim()).length <= 42;
     const fontSize = isShort ? 44 : 36;
     const lineHeight = isShort ? 72 : 60;
     ctx.font = `500 ${fontSize}px ${SERIF_FONT}`;
     const lines = wrapTextLines(ctx, content.body, contentWidth - 40, 10);
     const bodyHeight = Math.max(120, lines.length * lineHeight);
 
-    let previewImgHeight = 0;
-    const quoteImages = images.slice(0, 3);
-    if (quoteImages.length > 0) {
-      previewImgHeight = 200;
-    }
+    const quoteCols = images.length <= 3 ? Math.max(1, images.length) : 3;
+    const quoteThumbGap = 16;
+    const quoteThumbSize = images.length <= 3 ? 152 : 136;
+    const quoteRows = images.length > 0 ? Math.ceil(images.length / quoteCols) : 0;
+    const previewImgHeight = quoteRows > 0
+      ? quoteRows * quoteThumbSize + (quoteRows - 1) * quoteThumbGap
+      : 0;
 
     const topSpace = 170;
     const bottomFooterHeight = 140 + metaHeight;
@@ -382,20 +422,21 @@ export async function renderShareCard(
       cursorY += lineHeight;
     }
 
-    if (quoteImages.length > 0) {
-      const thumbSize = 152;
-      const gap = 18;
-      const totalW = quoteImages.length * thumbSize + (quoteImages.length - 1) * gap;
-      const startX = (CANVAS_WIDTH - totalW) / 2;
-      const imgY = cursorY + 22;
-      quoteImages.forEach((img, idx) => {
+    if (images.length > 0) {
+      const startY = cursorY + 22;
+      images.forEach((img, idx) => {
+        const row = Math.floor(idx / quoteCols);
+        const col = idx % quoteCols;
+        const itemsInRow = Math.min(quoteCols, images.length - row * quoteCols);
+        const rowWidth = itemsInRow * quoteThumbSize + (itemsInRow - 1) * quoteThumbGap;
+        const startX = (CANVAS_WIDTH - rowWidth) / 2;
         drawRoundedImageCover(
           ctx,
           img,
-          startX + idx * (thumbSize + gap),
-          imgY,
-          thumbSize,
-          thumbSize,
+          startX + col * (quoteThumbSize + quoteThumbGap),
+          startY + row * (quoteThumbSize + quoteThumbGap),
+          quoteThumbSize,
+          quoteThumbSize,
           16,
         );
       });

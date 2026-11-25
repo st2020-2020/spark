@@ -757,6 +757,21 @@ button:disabled {
   color: var(--sp-muted);
 }
 
+.sp-sidebar-customize-more {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 550;
+  color: var(--sp-primary);
+  text-align: center;
+}
+
+.sp-sidebar-customize-more:hover {
+  background: var(--sp-accent);
+}
+
 .sp-sidebar-all-link {
   font-size: var(--sp-text-xs);
   min-height: 32px;
@@ -2716,19 +2731,21 @@ a.sp-tape:hover {
 .sp-note-footer {
   display: flex;
   align-items: center;
-  gap: 6px 10px;
+  gap: 8px;
   margin-top: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
+  overflow: hidden;
 }
 
 .sp-note-footer-meta {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px 8px;
+  flex-wrap: nowrap;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .sp-note-footer-actions {
@@ -2743,7 +2760,9 @@ a.sp-tape:hover {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 152px;
+  max-width: 140px;
+  min-width: 0;
+  flex: 0 1 auto;
   min-height: 22px;
   padding: 2px 9px;
   border-radius: var(--sp-radius-pill);

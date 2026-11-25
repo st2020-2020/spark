@@ -364,9 +364,14 @@ export function CollectionCard({
     if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     if (window.getSelection()?.toString().trim()) return;
     const target = e.target;
+    const targetElement =
+      target instanceof Element
+        ? target
+        : target instanceof Node
+          ? target.parentElement
+          : null;
     if (
-      target instanceof HTMLElement &&
-      target.closest(
+      targetElement?.closest(
         'a, button, input, textarea, select, [role="button"], [role="menuitem"], [role="menu"], [role="dialog"], .sp-popover, .sp-sheet-scrim, .sp-lightbox-backdrop',
       )
     ) {

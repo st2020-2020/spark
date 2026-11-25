@@ -1,12 +1,17 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import { AppProviders, AppRoutes } from '../App';
 import type { Collection } from '../api/types';
 import { ShareCard } from '../components/ShareCard';
 import * as shareCardLib from '../lib/shareCard';
-import { loadSidebarPrefs, resolveSidebarProjects, saveSidebarPrefs } from '../lib/sidebarPrefs';
+import {
+  loadSidebarPrefs,
+  resolveSidebarProjects,
+  saveSidebarPrefs,
+  togglePinnedId,
+} from '../lib/sidebarPrefs';
 import { createTestAdapter, type TestAdapter } from '../test-adapter/mockServer';
 
 beforeAll(() => {
@@ -410,5 +415,258 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
       await screen.findByText('进行中：参与自动归类并显示在快捷列表；暂停或结束后停止自动归类，历史收藏完整保留'),
     ).toBeInTheDocument();
     void activeProj;
+  });
+
+  it('strips sensitive query URLs completely from shareText, keeps archive tab on error, blocks card SVG button click-through, preserves Popover focus/IME & off-page pins, syncs calendar back navigation, and guards clipboard receipts', async () => {
+    // 1. shareText strips full URLs including query tokens even with shared original_url prefix
+    const leakyCollection = {
+      id: 'c-leak',
+      created_at: '2026-11-24T12:00:00Z',
+      original_url: 'https://docs.example.test/item',
+      intent: '内部',
+      display_title: '标题',
+      projects: [],
+      tags: [],
+      attachments: [],
+      document: {
+        schema_version: 1,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [{ type: 'text', text: '参考链接 https://docs.example.test/item?token=topsecret#frag 后文' }],
+            },
+          ],
+        },
+      },
+    } as unknown as Collection;
+    const stripped = shareCardLib.shareText(leakyCollection, false, false);
+    expect(stripped.body).toBe('参考链接 后文');
+    expect(stripped.body).not.toContain('token');
+    expect(stripped.body).not.toContain('topsecret');
+
+    // 2. togglePinnedId preserves off-page pinned IDs rather than wiping unloaded pages
+    expect(togglePinnedId(['off-page-id', 'page1-a'], 'page1-b')).toEqual([
+      'off-page-id',
+      'page1-a',
+      'page1-b',
+    ]);
+    expect(togglePinnedId(['off-page-id', 'page1-a'], 'page1-a')).toEqual(['off-page-id']);
+
+    // 3. ProjectsPage keeps 已归档 tab visible when paused/completed fails and lets user retry
+    const { api } = await admin();
+    await api.createProject({ name: '唯一活跃', description: '', focus_points: [] }, 'only-act');
+    const origListProjects = api.listProjects.bind(api);
+    let failArchived = true;
+    vi.spyOn(api, 'listProjects').mockImplementation(async (query) => {
+      if (failArchived && (query?.state === 'paused' || query?.state === 'completed')) {
+        throw new Error('archive fetch failed');
+      }
+      return origListProjects(query);
+    });
+
+    const ui = userEvent.setup();
+    mount(api, '/projects');
+    const errTablist = await screen.findByRole('tablist', { name: '项目状态筛选' });
+    const archivedTab = within(errTablist).getByRole('tab', { name: '已归档' });
+    await ui.click(archivedTab);
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    failArchived = false;
+    await ui.click(screen.getByRole('button', { name: '重试' }));
+    // Once both archive queries succeed with 0 items, tabs hide safely and active list displays
+    expect(await screen.findByRole('heading', { name: '唯一活跃' })).toBeInTheDocument();
+    expect(screen.queryByRole('tablist', { name: '项目状态筛选' })).not.toBeInTheDocument();
+    cleanup();
+
+    // 4. Clicking an SVG path inside CollectionCard's more button does not trigger card navigation
+    await api.createCollection(
+      {
+        id: crypto.randomUUID(),
+        document: {
+          schema_version: 1,
+          content: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '点击SVG不跳详情' }] }],
+          },
+        },
+        intent: '',
+        upload_ids: [],
+        project_ids: [],
+        tag_ids: [],
+      },
+      'svg-guard-seed',
+    );
+    mount(api, '/collections');
+    const card = await screen.findByRole('article', { name: '点击SVG不跳详情' });
+    const moreBtn = within(card).getByRole('button', { name: '更多操作' });
+    const innerSvg = moreBtn.querySelector('svg')!;
+    fireEvent.click(innerSvg);
+    expect(screen.getByRole('menu', { name: '收藏操作菜单' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: '归类结果' })).not.toBeInTheDocument();
+
+    // 5. Popover IME Escape does not close dialog & consecutive button clicks keep focus (no search focus hijack)
+    const sidebar = within(screen.getByRole('complementary', { name: '主导航' }));
+    await ui.click(sidebar.getByRole('button', { name: '自定义常用项目' }));
+    const pop = within(await sidebar.findByRole('dialog', { name: '自定义常用项目' }));
+    await waitFor(() => expect(pop.getByRole('searchbox', { name: '搜索常用项目' })).toHaveFocus());
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true, keyCode: 229 });
+    expect(sidebar.getByRole('dialog', { name: '自定义常用项目' })).toBeInTheDocument();
+
+    const firstProjBtn = pop.getByRole('button', { name: /唯一活跃/ });
+    await ui.keyboard('{ArrowDown}');
+    expect(firstProjBtn).toHaveFocus();
+    await ui.keyboard('{Enter}');
+    expect(firstProjBtn).toHaveAttribute('aria-pressed', 'true');
+    expect(firstProjBtn).toHaveFocus();
+    await ui.keyboard('{Enter}');
+    expect(firstProjBtn).toHaveAttribute('aria-pressed', 'false');
+    expect(firstProjBtn).toHaveFocus();
+    cleanup();
+
+    // 6. ActivityCalendar resets manual month browsing when clearing date -> browser back returns to date month
+    let navFn: ReturnType<typeof useNavigate> | null = null;
+    function NavProbe() {
+      navFn = useNavigate();
+      return null;
+    }
+    render(
+      <MemoryRouter initialEntries={['/inbox?date=2026-10-05']}>
+        <AppProviders api={api}>
+          <NavProbe />
+          <AppRoutes />
+        </AppProviders>
+      </MemoryRouter>,
+    );
+    const cal = await screen.findByRole('region', { name: '灵光日历' });
+    expect(within(cal).getByText('2026年10月')).toBeInTheDocument();
+    await ui.click(within(cal).getByRole('button', { name: '上个月' }));
+    expect(within(cal).getByText('2026年9月')).toBeInTheDocument();
+    await ui.click(within(cal).getByRole('link', { name: '清除日历日期筛选' }));
+    act(() => {
+      navFn!(-1);
+    });
+    expect(await within(cal).findByText('2026年10月')).toBeInTheDocument();
+    expect(await within(cal).findByRole('link', { current: 'date' })).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/^2026年10月5日/),
+    );
+    cleanup();
+
+    // 7. ShareCard radiogroup arrow keys + grapheme-safe early termination + all 4 quote images + stale clipboard guard
+    const measureMock = vi.fn((s: string) => ({ width: [...s].length * 18 }));
+    const drawImageCalls: number[] = [];
+    const origCreateEl = document.createElement.bind(document);
+    const fakeCtx2 = {
+      font: '',
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 1,
+      lineJoin: 'round',
+      textAlign: 'left',
+      shadowColor: '',
+      shadowBlur: 0,
+      shadowOffsetY: 0,
+      measureText: measureMock,
+      fillRect: vi.fn(),
+      fillText: vi.fn(),
+      stroke: vi.fn(),
+      fill: vi.fn(),
+      clip: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      translate: vi.fn(),
+      scale: vi.fn(),
+      beginPath: vi.fn(),
+      closePath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      bezierCurveTo: vi.fn(),
+      arc: vi.fn(),
+      roundRect: vi.fn(),
+      drawImage: vi.fn(() => {
+        drawImageCalls.push(1);
+      }),
+      createRadialGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
+    } as unknown as CanvasRenderingContext2D;
+
+    vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => {
+      const el = origCreateEl(tag);
+      if (tag === 'canvas') {
+        const c = el as HTMLCanvasElement;
+        c.getContext = (() => fakeCtx2) as unknown as typeof c.getContext;
+        c.toBlob = ((cb: BlobCallback) => cb(new Blob(['png'], { type: 'image/png' }))) as typeof c.toBlob;
+      }
+      return el;
+    }) as typeof document.createElement);
+
+    // Huge 15,000 char string must break early instead of measuring every character
+    await shareCardLib.renderShareCard(
+      { body: '字'.repeat(15_000), date: '2026年11月24日', source: '', projects: '' },
+      [],
+      'paper',
+    );
+    expect(measureMock.mock.calls.length).toBeLessThan(800);
+
+    // Quote template draws all 4 provided images without silent truncation
+    drawImageCalls.length = 0;
+    const mockImg = { naturalWidth: 200, naturalHeight: 200 } as HTMLImageElement;
+    await shareCardLib.renderShareCard(
+      { body: '四图金句', date: '2026年11月24日', source: '', projects: '' },
+      [mockImg, mockImg, mockImg, mockImg],
+      'quote',
+    );
+    expect(drawImageCalls).toHaveLength(4);
+
+    // ShareCard radiogroup ArrowRight + stale async clipboard copy receipt ignored after template switch
+    let resolveCopy!: () => void;
+    const delayedWrite = new Promise<void>((res) => {
+      resolveCopy = res;
+    });
+    const origClip = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const origClipItem = (globalThis as { ClipboardItem?: unknown }).ClipboardItem;
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { write: vi.fn(() => delayedWrite) },
+    });
+    (globalThis as { ClipboardItem: unknown }).ClipboardItem = class {
+      constructor(public data: Record<string, Blob>) {}
+    };
+    const origCreateUrl = URL.createObjectURL;
+    const origRevokeUrl = URL.revokeObjectURL;
+    URL.createObjectURL = () => 'blob:stale-guard';
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      render(<ShareCard collection={leakyCollection} onClose={() => {}} />);
+      const quoteRadio = await screen.findByRole('radio', { name: '极简金句' });
+      expect(quoteRadio).toHaveAttribute('aria-checked', 'true');
+      expect(quoteRadio).toHaveAttribute('tabIndex', '0');
+
+      const copyBtn = await screen.findByRole('button', { name: '复制图片' });
+      await ui.click(copyBtn);
+
+      // Switch template with ArrowRight from focused radio before copy resolves
+      quoteRadio.focus();
+      await ui.keyboard('{ArrowRight}');
+      const paperRadio = screen.getByRole('radio', { name: '手帐纸笺' });
+      expect(paperRadio).toHaveAttribute('aria-checked', 'true');
+      expect(paperRadio).toHaveFocus();
+
+      await screen.findByRole('img', { name: '待导出的分享卡片' });
+      await act(async () => {
+        resolveCopy();
+        await delayedWrite;
+      });
+      // Stale copy receipt from 'quote' must NOT mark 'paper' as copied
+      expect(screen.queryByRole('button', { name: '已复制图片' })).not.toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = origCreateUrl;
+      URL.revokeObjectURL = origRevokeUrl;
+      if (origClip) Object.defineProperty(navigator, 'clipboard', origClip);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+      (globalThis as { ClipboardItem?: unknown }).ClipboardItem = origClipItem;
+    }
   });
 });

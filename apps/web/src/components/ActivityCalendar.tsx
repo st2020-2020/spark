@@ -24,6 +24,8 @@ export function ActivityCalendar({ onSelect }: { onSelect?: () => void }) {
   const monthTotal = activity.data?.days.reduce((sum, d) => sum + d.count, 0) ?? 0;
 
   useEffect(() => {
+    browse(null);
+    setFocusedDate('');
     if (selected) {
       setExpanded(true);
     }
