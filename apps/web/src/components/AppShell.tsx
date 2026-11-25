@@ -252,11 +252,21 @@ export function AppShell({
       }
       return el.isContentEditable;
     };
+    let focusOutTimer: number | null = null;
+    const clearFocusOutTimer = () => {
+      if (focusOutTimer !== null) {
+        window.clearTimeout(focusOutTimer);
+        focusOutTimer = null;
+      }
+    };
     const onFocusIn = (e: FocusEvent) => {
-      if (isEditable(e.target)) setInputFocusedMobile(true);
+      clearFocusOutTimer();
+      setInputFocusedMobile(isEditable(e.target));
     };
     const onFocusOut = () => {
-      window.setTimeout(() => {
+      clearFocusOutTimer();
+      focusOutTimer = window.setTimeout(() => {
+        focusOutTimer = null;
         if (!isEditable(document.activeElement)) {
           setInputFocusedMobile(false);
         }
@@ -265,6 +275,7 @@ export function AppShell({
     document.addEventListener('focusin', onFocusIn);
     document.addEventListener('focusout', onFocusOut);
     return () => {
+      clearFocusOutTimer();
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('focusout', onFocusOut);
     };

@@ -1187,4 +1187,70 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
       expect(setReadSpy).toHaveBeenCalledWith(colC.id, { read: true });
     });
   });
+
+  it('hides mobile tabbar across editable switches, restores it on button focus, and cancels pending focusout timer on unmount', async () => {
+    const api = await admin();
+    const { unmount } = mount(api, '/inbox');
+    const composer = await screen.findByRole('region', { name: '快速收集' });
+    const textbox = within(composer).getByRole('textbox', { name: '收藏正文编辑器' });
+    const mobileTabbar = screen.getByRole('navigation', { name: '手机底部导航' });
+    // Expand two real <input> fields (intent & URL) since jsdom leaves contentEditable flags unset.
+    const user = userEvent.setup();
+    fireEvent.focus(textbox);
+    await user.click(within(composer).getByRole('button', { name: '更多' }));
+    await user.click(screen.getByRole('menuitem', { name: '补一句用途' }));
+    await user.click(within(composer).getByRole('button', { name: '更多' }));
+    await user.click(screen.getByRole('menuitem', { name: '附加网址' }));
+    const intentInput = within(composer).getByPlaceholderText('以后可能用在哪儿？');
+    const urlInput = within(composer).getByLabelText('附加网址');
+    const jumpButton = screen.getByRole('button', { name: '快速跳转' });
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
+
+    try {
+      vi.useFakeTimers();
+
+      // 1. Focusing an editable target hides the mobile tabbar, and switching to another input keeps it hidden.
+      act(() => {
+        intentInput.focus();
+        fireEvent.focusIn(intentInput);
+      });
+      expect(mobileTabbar).toHaveClass('sp-tabbar--hidden');
+
+      act(() => {
+        fireEvent.focusOut(intentInput);
+        urlInput.focus();
+        fireEvent.focusIn(urlInput);
+        vi.advanceTimersByTime(100);
+      });
+      expect(mobileTabbar).toHaveClass('sp-tabbar--hidden');
+
+      // 2. Moving from an input to a non-editable button right after focusout restores the mobile tabbar.
+      act(() => {
+        fireEvent.focusOut(urlInput);
+        jumpButton.focus();
+        fireEvent.focusIn(jumpButton);
+        vi.advanceTimersByTime(100);
+      });
+      expect(mobileTabbar).not.toHaveClass('sp-tabbar--hidden');
+
+      // 3. Unmounting while a focusout timer is pending clears the timeout without accessing torn-down document.
+      act(() => {
+        intentInput.focus();
+        fireEvent.focusIn(intentInput);
+        fireEvent.focusOut(intentInput);
+      });
+      unmount();
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      // Simulate JSDOM tearing down `document` immediately after test cleanup.
+      vi.stubGlobal('document', undefined);
+      expect(() => {
+        vi.advanceTimersByTime(100);
+      }).not.toThrow();
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      clearTimeoutSpy.mockRestore();
+    }
+  });
 });
