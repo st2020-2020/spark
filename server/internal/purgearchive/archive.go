@@ -33,9 +33,16 @@ type Object struct {
 	NotBefore *time.Time `json:"not_before,omitempty"`
 }
 
-type Archive struct{ root *os.Root }
+type Archive interface {
+	Close() error
+	Put(context.Context, Receipt) error
+	Read(context.Context, uuid.UUID) (Receipt, error)
+	Each(context.Context, func(Receipt) error) error
+}
 
-func Open(dir string) (*Archive, error) {
+type File struct{ root *os.Root }
+
+func Open(dir string) (*File, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, errors.New("an absolute deletion ledger directory is required")
 	}
@@ -48,14 +55,14 @@ func Open(dir string) (*Archive, error) {
 		root.Close()
 		return nil, errors.New("deletion ledger directory must be private to its operator")
 	}
-	return &Archive{root: root}, nil
+	return &File{root: root}, nil
 }
 
-func (a *Archive) Close() error { return a.root.Close() }
+func (a *File) Close() error { return a.root.Close() }
 
 // Put publishes one immutable receipt. The file and the directory entry are
 // synced before a worker is allowed to erase objects or collection data.
-func (a *Archive) Put(receipt Receipt) error {
+func (a *File) Put(ctx context.Context, receipt Receipt) error {
 	if err := receipt.validate(); err != nil {
 		return err
 	}
@@ -80,7 +87,7 @@ func (a *Archive) Put(receipt Receipt) error {
 		if !errors.Is(err, os.ErrExist) {
 			return err
 		}
-		existing, err := a.Read(receipt.OperationID)
+		existing, err := a.Read(ctx, receipt.OperationID)
 		if err != nil {
 			return err
 		}
@@ -89,10 +96,10 @@ func (a *Archive) Put(receipt Receipt) error {
 			return errors.New("deletion receipt conflicts with existing copy")
 		}
 	}
-	return a.Sync()
+	return a.sync()
 }
 
-func (a *Archive) Sync() error {
+func (a *File) sync() error {
 	dir, err := a.root.Open(".")
 	if err != nil {
 		return err
@@ -101,7 +108,7 @@ func (a *Archive) Sync() error {
 	return dir.Sync()
 }
 
-func (a *Archive) Read(id uuid.UUID) (Receipt, error) {
+func (a *File) Read(_ context.Context, id uuid.UUID) (Receipt, error) {
 	var receipt Receipt
 	file, err := a.root.Open(id.String() + ".json")
 	if err != nil {
@@ -123,7 +130,7 @@ func (a *Archive) Read(id uuid.UUID) (Receipt, error) {
 	return receipt, receipt.validate()
 }
 
-func (a *Archive) Each(ctx context.Context, visit func(Receipt) error) error {
+func (a *File) Each(ctx context.Context, visit func(Receipt) error) error {
 	dir, err := a.root.Open(".")
 	if err != nil {
 		return err
@@ -146,7 +153,7 @@ func (a *Archive) Each(ctx context.Context, visit func(Receipt) error) error {
 			if err != nil || name != id.String() {
 				return errors.New("invalid deletion receipt filename")
 			}
-			receipt, err := a.Read(id)
+			receipt, err := a.Read(ctx, id)
 			if err != nil {
 				return fmt.Errorf("read deletion operation %s: %w", id, err)
 			}

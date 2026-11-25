@@ -70,7 +70,7 @@ func TestDeletionReplayRejectsMissingAccountWithObjects(t *testing.T) {
 	receipt := purgearchive.Receipt{
 		SchemaVersion: 1, OperationID: uuid.New(), UserID: owner, CollectionID: uuid.New(), RequestedAt: time.Now().UTC(),
 	}
-	if err := archive.Put(receipt); err != nil {
+	if err := archive.Put(t.Context(), receipt); err != nil {
 		t.Fatal(err)
 	}
 	if count, err := ReplayDeletions(t.Context(), app.Pool, archive); count != 0 || err != nil {
@@ -79,7 +79,7 @@ func TestDeletionReplayRejectsMissingAccountWithObjects(t *testing.T) {
 
 	receipt.OperationID = uuid.New()
 	receipt.Objects = []purgearchive.Object{{Key: "fixture/users/" + owner.String() + "/attachments/" + uuid.NewString()}}
-	if err := archive.Put(receipt); err != nil {
+	if err := archive.Put(t.Context(), receipt); err != nil {
 		t.Fatal(err)
 	}
 	count, err := ReplayDeletions(t.Context(), app.Pool, archive)
@@ -250,7 +250,7 @@ func TestPermanentPurgeAndBackupReplay(t *testing.T) {
 	}
 	repick()
 	checkPurgeEventually(t, "physical transaction rollback", func() bool { return recordedFailure("synthetic physical transaction failure") })
-	receipt, err := archive.Read(operationID)
+	receipt, err := archive.Read(ctx, operationID)
 	if err != nil || len(receipt.Objects) != 2 || receipt.Objects[0].Key != final || receipt.Objects[0].Version != "final-ver-1" ||
 		receipt.Objects[1].NotBefore == nil || !receipt.Objects[1].NotBefore.Equal(expires) {
 		t.Fatalf("independent copy lost object cleanup metadata: %v", err)

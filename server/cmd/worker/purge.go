@@ -25,11 +25,6 @@ func runPurge() error {
 	if err != nil {
 		return err
 	}
-	archive, err := purgearchive.Open(os.Getenv("SPARK_DELETION_LEDGER_DIR"))
-	if err != nil {
-		return err
-	}
-	defer archive.Close()
 	env := os.Getenv("SPARK_ENV")
 	if env == "" {
 		env = "production"
@@ -49,6 +44,14 @@ func runPurge() error {
 	defer stop()
 	connect, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	archive, err := purgearchive.OpenConfigured(connect)
+	if err != nil {
+		return err
+	}
+	defer archive.Close()
+	if ledger, ok := archive.(*purgearchive.OSS); ok && storage != nil && ledger.Location().ObjectPrefix != storage.Prefix {
+		return errors.New("deletion ledger object_prefix must match the attachment OSS prefix")
+	}
 	pool, err := backend.OpenPool(connect, os.Getenv("DATABASE_URL"))
 	if err != nil {
 		return err
