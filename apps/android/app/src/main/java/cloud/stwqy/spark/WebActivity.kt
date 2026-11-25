@@ -10,8 +10,10 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -27,38 +29,51 @@ import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.addCallback
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -75,9 +90,16 @@ import cloud.stwqy.spark.core.auth.SessionScope
 import cloud.stwqy.spark.core.auth.SessionSnapshot
 import cloud.stwqy.spark.core.config.AppConfig
 import cloud.stwqy.spark.core.designsystem.LocalSparkColors
+import cloud.stwqy.spark.core.designsystem.LocalSparkReducedMotion
+import cloud.stwqy.spark.core.designsystem.SparkBrandMark
+import cloud.stwqy.spark.core.designsystem.SparkHaptics
+import cloud.stwqy.spark.core.designsystem.SparkMotion
 import cloud.stwqy.spark.core.designsystem.SparkPalette
 import cloud.stwqy.spark.core.designsystem.SparkTheme
 import cloud.stwqy.spark.core.designsystem.SparkTokens
+import cloud.stwqy.spark.core.designsystem.SparkTransitions
+import cloud.stwqy.spark.core.designsystem.sparkPressScale
+import cloud.stwqy.spark.core.designsystem.sparkTween
 import cloud.stwqy.spark.core.network.ActiveNetworkMonitor
 import cloud.stwqy.spark.core.security.WebNavigation
 import cloud.stwqy.spark.feature.capture.ShareCaptureActivity
@@ -88,15 +110,15 @@ import cloud.stwqy.spark.feature.workspace.WebFileChooser
 import cloud.stwqy.spark.feature.workspace.WorkspaceAppearance
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.ByteArrayInputStream
-import java.util.concurrent.atomic.AtomicBoolean
 
 class WebActivity : ComponentActivity() {
     private val navigation = WebNavigation()
-    private val networkMonitor by lazy { ActiveNetworkMonitor(applicationContext) }
     private val spark get() = application as SparkApp
     private val appearanceCache get() = spark.workspaceAppearance
+    private val networkMonitor by lazy { ActiveNetworkMonitor(this) }
     private lateinit var root: FrameLayout
     private lateinit var errorPanel: ComposeView
     private lateinit var webBack: OnBackPressedCallback
@@ -108,16 +130,47 @@ class WebActivity : ComponentActivity() {
     private var lastPage: String? = null
     private var observedScope: String? = null
     private var sessionUpdate: Job? = null
+    private var firstRenderReady = false
     private var failed by mutableStateOf(false)
     private var loadProgress by mutableIntStateOf(0)
     private var appearance by mutableStateOf(WorkspaceAppearance(SparkPalette.MINT, false, 0))
 
     override fun onCreate(state: Bundle?) {
-        installSplashScreen()
+        val splash = installSplashScreen()
+        val launchedAt = SystemClock.uptimeMillis()
+        splash.setKeepOnScreenCondition {
+            !firstRenderReady && SystemClock.uptimeMillis() - launchedAt < SPLASH_MAX_HOLD_MS
+        }
+        if (Build.VERSION.SDK_INT >= 31) {
+            splash.setOnExitAnimationListener { provider ->
+                if (SparkMotion.isReducedMotion(this)) {
+                    provider.remove()
+                } else {
+                    val splashView = provider.view
+                    splashView.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                    runCatching { provider.iconView }.getOrNull()?.animate()
+                        ?.scaleX(1.05f)
+                        ?.scaleY(1.05f)
+                        ?.setDuration(SparkMotion.Normal.toLong())
+                        ?.setInterpolator(SparkMotion.EaseOutInterpolator)
+                        ?.start()
+                    splashView.animate()
+                        .alpha(0f)
+                        .setDuration(SparkMotion.Normal.toLong())
+                        .setInterpolator(SparkMotion.EaseOutInterpolator)
+                        .withEndAction {
+                            splashView.setLayerType(View.LAYER_TYPE_NONE, null)
+                            provider.remove()
+                        }
+                        .start()
+                }
+            }
+        }
         super.onCreate(state)
         enableEdgeToEdge(navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT))
         if (isDraftLoginCaller()) {
             loginStartedIn = state?.getString(LOGIN_FINGERPRINT) ?: spark.credentials.currentSnapshot().provisionalScope
+            SparkTransitions.registerTargetModalTransitions(this)
         }
         chooser = WebFileChooser(this)
         bridge = MobileHostBridge(
@@ -149,6 +202,7 @@ class WebActivity : ComponentActivity() {
         }
         lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onResume(owner: LifecycleOwner) {
+                if (loginStartedIn != null) SparkTransitions.refreshTargetModalClose(this@WebActivity)
                 networkMonitor.start { online -> web?.setNetworkAvailable(online) }
                 web?.onResume()
                 sessionChanged(web?.url)
@@ -237,6 +291,7 @@ class WebActivity : ComponentActivity() {
             }
 
             override fun onPageCommitVisible(view: WebView, url: String) {
+                firstRenderReady = true
                 if (view === web && !failed && navigation.allowsMainDocument(url, "GET")) {
                     bridge.documentCommitted(view)
                     view.setNetworkAvailable(networkMonitor.hasNetwork())
@@ -258,6 +313,7 @@ class WebActivity : ComponentActivity() {
             }
 
             override fun onPageFinished(view: WebView, url: String) {
+                firstRenderReady = true
                 webBack.isEnabled = view.canGoBack()
                 sessionChanged(url)
             }
@@ -277,58 +333,144 @@ class WebActivity : ComponentActivity() {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 SparkTheme(appearance.palette, appearance.dark) {
-                    if (loadProgress < 100 && !failed) {
+                    val reducedMotion = LocalSparkReducedMotion.current
+                    var showBar by remember { mutableStateOf(false) }
+                    LaunchedEffect(loadProgress, failed, reducedMotion) {
+                        when {
+                            failed -> showBar = false
+                            loadProgress in 1..99 -> showBar = true
+                            loadProgress >= 100 && showBar -> {
+                                if (!reducedMotion) delay(120)
+                                showBar = false
+                            }
+                            else -> showBar = false
+                        }
+                    }
+                    val smoothProgress by animateFloatAsState(
+                        targetValue = (loadProgress / 100f).coerceIn(0f, 1f),
+                        animationSpec = sparkTween(SparkMotion.Fast, SparkMotion.EaseOut),
+                        label = "webProgress",
+                    )
+                    AnimatedVisibility(
+                        visible = showBar,
+                        enter = fadeIn(sparkTween(SparkMotion.Instant, SparkMotion.EaseOut)),
+                        exit = fadeOut(sparkTween(SparkMotion.Normal, SparkMotion.EaseExit)),
+                    ) {
                         LinearProgressIndicator(
-                            progress = { loadProgress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
+                            progress = { smoothProgress },
+                            modifier = Modifier.fillMaxWidth().height(2.dp),
                             trackColor = LocalSparkColors.current.surfaceMuted,
+                            strokeCap = StrokeCap.Round,
                         )
                     }
                 }
             }
         }, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
         errorPanel = ComposeView(this).apply {
-            visibility = View.GONE
-            isClickable = true
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
                 SparkTheme(appearance.palette, appearance.dark) {
-                    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-                        Card(
-                            modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
-                            colors = CardDefaults.cardColors(containerColor = LocalSparkColors.current.surface),
+                    val colors = LocalSparkColors.current
+                    val hostView = LocalView.current
+                    AnimatedVisibility(
+                        visible = failed,
+                        enter = fadeIn(sparkTween(SparkMotion.Normal, SparkMotion.EaseOut)) +
+                            scaleIn(initialScale = 0.96f, animationSpec = sparkTween(SparkMotion.Normal, SparkMotion.EaseOut)),
+                        exit = fadeOut(sparkTween(SparkMotion.Fast, SparkMotion.EaseExit)),
+                    ) {
+                        val backdropInteraction = remember { MutableInteractionSource() }
+                        val retryInteraction = remember { MutableInteractionSource() }
+                        val draftsInteraction = remember { MutableInteractionSource() }
+                        val interactiveBackdrop = if (failed) {
+                            Modifier.clickable(interactionSource = backdropInteraction, indication = null) {}
+                        } else {
+                            Modifier.clearAndSetSemantics {}
+                        }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(colors.bg)
+                                .then(interactiveBackdrop)
+                                .padding(24.dp),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            Column(
-                                modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                                horizontalAlignment = Alignment.Start,
+                            Card(
+                                modifier = Modifier.widthIn(max = 420.dp).fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = colors.surface),
                             ) {
-                                Icon(painterResource(R.drawable.ic_jar), contentDescription = null,
-                                    modifier = Modifier.size(56.dp), tint = LocalSparkColors.current.primary)
-                                Text("暂时连不上 Spark", style = MaterialTheme.typography.headlineSmall,
-                                    modifier = Modifier.semantics { heading() })
-                                Text("检查网络连接，再重新载入这一页。", color = LocalSparkColors.current.fgSoft)
-                                Button(onClick = ::retry, modifier = Modifier.heightIn(min = 48.dp)) { Text("重试") }
+                                Column(
+                                    modifier = Modifier.verticalScroll(rememberScrollState()).padding(24.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                                    horizontalAlignment = Alignment.Start,
+                                ) {
+                                    SparkBrandMark(size = 52.dp)
+                                    Text(
+                                        "暂时连不上 Spark",
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        modifier = Modifier.semantics { heading() },
+                                    )
+                                    Text(
+                                        "检查网络后再试试，也可以先写本机草稿。",
+                                        color = colors.fgSoft,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                    )
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(top = 4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                SparkHaptics.confirm(hostView)
+                                                retry()
+                                            },
+                                            enabled = failed,
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .sparkPressScale(retryInteraction, enabled = failed),
+                                            interactionSource = retryInteraction,
+                                        ) { Text("重新载入") }
+                                        OutlinedButton(
+                                            onClick = {
+                                                SparkHaptics.tick(hostView)
+                                                openDrafts()
+                                            },
+                                            enabled = failed,
+                                            modifier = Modifier
+                                                .heightIn(min = 48.dp)
+                                                .sparkPressScale(draftsInteraction, enabled = failed),
+                                            interactionSource = draftsInteraction,
+                                        ) { Text("本机草稿") }
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        root.addView(errorPanel, FrameLayout.LayoutParams(-1, -1))
+        val errorHost = ConditionalTouchHost(this) { failed }
+        errorHost.addView(errorPanel, FrameLayout.LayoutParams(-1, -1))
+        root.addView(errorHost, FrameLayout.LayoutParams(-1, -1))
+    }
+
+    private class ConditionalTouchHost(
+        context: Context,
+        private val acceptTouch: () -> Boolean,
+    ) : FrameLayout(context) {
+        override fun dispatchTouchEvent(ev: MotionEvent): Boolean = acceptTouch() && super.dispatchTouchEvent(ev)
     }
 
     private fun showError() {
+        firstRenderReady = true
         failed = true
         chooser.cancel()
         web?.let(bridge::navigationStarted)
         web?.visibility = View.INVISIBLE
-        errorPanel.visibility = View.VISIBLE
     }
 
     private fun clearError() {
         failed = false
-        errorPanel.visibility = View.GONE
         web?.visibility = View.VISIBLE
     }
 
@@ -423,11 +565,19 @@ class WebActivity : ComponentActivity() {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, url).addCategory(Intent.CATEGORY_BROWSABLE))
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, "请先安装可打开链接的浏览器", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "没有找到可打开此链接的浏览器", Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun openDrafts() = startActivity(Intent(this, LocalDraftsActivity::class.java))
+    private fun openDrafts() {
+        startActivity(Intent(this, LocalDraftsActivity::class.java))
+        SparkTransitions.applyCallerPushEnter(this)
+    }
+
+    override fun finish() {
+        super.finish()
+        if (loginStartedIn != null) SparkTransitions.applyLegacyModalExit(this)
+    }
 
     override fun onSaveInstanceState(state: Bundle) {
         super.onSaveInstanceState(state)
@@ -463,6 +613,7 @@ class WebActivity : ComponentActivity() {
 
     companion object {
         private const val ACTION_LOGIN_FOR_DRAFT = "cloud.stwqy.spark.LOGIN_FOR_DRAFT"
+        private const val SPLASH_MAX_HOLD_MS = 450L
         internal const val LOGIN_FINGERPRINT = "loginFingerprint"
         private const val PAGE = "page"
 

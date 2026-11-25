@@ -289,7 +289,7 @@ internal class BridgeFailure(
 ) : Exception(message)
 
 internal fun ApiError.asBridgeFailure(): BridgeFailure = when {
-    isSessionExpired -> BridgeFailure("session_expired", "请重新登录 Spark 后再操作文件。", status)
+    isSessionExpired -> BridgeFailure("session_expired", "登录已过期，重新登录后即可保存或导出。", status)
     status == 429 -> BridgeFailure("rate_limited", "导出过于频繁，请稍后重试。", status, retryAfterSeconds)
     code == "network_error" || code == "export_too_large" -> BridgeFailure(code, message)
     else -> BridgeFailure(code, "无法完成文件操作，请稍后重试。", status)
@@ -377,7 +377,7 @@ internal class MobileMessage private constructor(private val message: JsonObject
                 val format = ExportFormat.entries.firstOrNull { it.wireValue == payload.string("format") } ?: invalidMessage()
                 MobileAction.Export(format, payload.expectedUser())
             }
-            else -> throw BridgeFailure("unsupported_action", "此版本的 Spark 无法执行这项操作。")
+            else -> throw BridgeFailure("unsupported_action", "当前版本暂不支持这项操作，升级 Spark 后再试。")
         }
     }
 

@@ -1,9 +1,5 @@
 package cloud.stwqy.spark.feature.drafts
 
-import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
@@ -18,22 +14,18 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import cloud.stwqy.spark.SparkApp
 import cloud.stwqy.spark.WebActivity
+import cloud.stwqy.spark.core.designsystem.SparkTransitions
+import cloud.stwqy.spark.core.network.ActiveNetworkMonitor
 import cloud.stwqy.spark.core.storage.DraftLoginHandoff
 import kotlinx.coroutines.launch
 
 abstract class DraftActivity : ComponentActivity() {
-    private val connectivity by lazy { getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager }
-    private var watchingNetwork = false
+    private val networkMonitor by lazy { ActiveNetworkMonitor(this) }
     private var online = false
     internal val spark get() = application as SparkApp
     internal abstract val model: DraftViewModel
     private val signIn = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         model.loginResult(result.data?.getStringExtra(WebActivity.LOGIN_FINGERPRINT).takeIf { result.resultCode == RESULT_OK })
-    }
-    private val network = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) = networkChanged()
-        override fun onLost(network: Network) = networkChanged()
-        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = networkChanged()
     }
 
     override fun onCreate(state: Bundle?) {
@@ -43,31 +35,45 @@ abstract class DraftActivity : ComponentActivity() {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
                 model.effects.collect { effect ->
                     when (effect) {
-                        DraftEffect.Login -> signIn.launch(WebActivity.loginIntent(this@DraftActivity))
-                        is DraftEffect.Finish -> {
-                            effect.message?.let { Toast.makeText(this@DraftActivity, it, Toast.LENGTH_SHORT).show() }
-                            finish()
+                        DraftEffect.Login -> {
+                            signIn.launch(WebActivity.loginIntent(this@DraftActivity))
+                            SparkTransitions.applyCallerModalEnter(this@DraftActivity)
                         }
+                        is DraftEffect.Finish -> onFinishEffect(effect.message)
                     }
                 }
             }
         }
     }
 
+    protected open fun onFinishEffect(message: String?) {
+        message?.let { Toast.makeText(this, it, Toast.LENGTH_SHORT).show() }
+        finish()
+    }
+
     override fun onResume() {
         super.onResume()
-        online = hasNetwork()
+        online = networkMonitor.hasNetwork()
         model.resume(online)
         spark.draftWork.requestSend()
-        connectivity.registerDefaultNetworkCallback(network)
-        watchingNetwork = true
+        networkMonitor.start { available ->
+            if (available != online) {
+                online = available
+                model.resume(available)
+                if (available) spark.draftWork.requestSend()
+            }
+        }
     }
 
     override fun onPause() {
-        if (watchingNetwork) connectivity.unregisterNetworkCallback(network)
-        watchingNetwork = false
+        networkMonitor.stop()
         model.pause()
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        networkMonitor.stop()
+        super.onDestroy()
     }
 
     override fun onSaveInstanceState(state: Bundle) {
@@ -82,19 +88,7 @@ abstract class DraftActivity : ComponentActivity() {
         state.putBoolean("incoming", restore.incoming)
     }
 
-    internal fun hasNetwork(): Boolean = connectivity.getNetworkCapabilities(connectivity.activeNetwork)
-        ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
-
-    private fun networkChanged() = runOnUiThread {
-        if (watchingNetwork) {
-            val available = hasNetwork()
-            if (available != online) {
-                online = available
-                model.resume(available)
-                if (available) spark.draftWork.requestSend()
-            }
-        }
-    }
+    internal fun hasNetwork(): Boolean = networkMonitor.hasNetwork()
 }
 
 internal fun Bundle?.draftRestore(): DraftRestore {

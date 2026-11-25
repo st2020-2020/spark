@@ -77,7 +77,7 @@ object SharedInputParser {
         if (!(action == Intent.ACTION_SEND && (images || mimeType.equals("text/plain", true)) ||
                 action == Intent.ACTION_SEND_MULTIPLE && images)
         ) {
-            throw InvalidShare("此分享入口支持纯文字、网址和图片。")
+            throw InvalidShare("Spark 目前支持收藏文字、网址和图片。")
         }
     }
 

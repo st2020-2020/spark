@@ -77,7 +77,7 @@ internal class ShareCaptureViewModel(
             incoming = null
         }
         incomingSaved = true
-        setShareNotice(if (shared.input.hasMoreImages) "仅保留前 9 张图片。其余图片可以分批收藏。" else null)
+        setShareNotice(if (shared.input.hasMoreImages) "一次最多带 9 张图，已保留前 9 张，其余可分批收藏。" else null)
         return existing ?: drafts.read(snapshot, shared.id)
     }
 
@@ -126,14 +126,14 @@ internal class ShareCaptureViewModel(
         try {
             if (drafts.readAssets(snapshot, asset.draftId).none { it.id == asset.id }) return
             media.importing(asset.draftId) {
-                var error = "分享来源已不可用。请从原应用重新分享，或移除这张图片。"
+                var error = "原图已失效，移除后可重新分享"
                 val imported = if (source == null) null else try {
                     media.copy(asset.draftId, source, asset.sortOrder)
                 } catch (failure: IOException) {
                     error = when (failure) {
                         is ImageTooLarge, is InvalidImage, is ImageImportTimedOut ->
                             failure.message.orEmpty()
-                        else -> "无法读取分享图片。请重试或从原应用重新分享。"
+                        else -> "这张图没读出来，可重试或重新分享"
                     }
                     null
                 }

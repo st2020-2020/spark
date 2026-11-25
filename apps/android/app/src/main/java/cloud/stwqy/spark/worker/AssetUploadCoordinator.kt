@@ -158,7 +158,7 @@ internal class AssetUploadCoordinator(
         error.status == 404 || error.status == 410 || error.status == 409 && error.code == "upload_not_pending" ->
             grantEnded("upload_expired", "图片上传已失效，请重试。")
         error.status == 401 || error.status == 403 ->
-            AssetUploadFailure("object_upload_refused", "图片存储拒绝了上传，请重试。")
+            AssetUploadFailure("object_upload_refused", "图片暂时传不上去，请稍后重试。")
         error.code == "operation_in_progress" -> AssetUploadFailure(
             error.code, "上次图片上传仍在处理中，请稍后重试。", retryInBackground = true,
         )

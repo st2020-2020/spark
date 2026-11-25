@@ -176,10 +176,10 @@ internal class DraftSubmissionCoordinator(
             return drafts.finishUpload(account, current, queued = error.retryInBackground, message = error.message)
         } catch (error: ApiError) {
             if (error.isSessionExpired) {
-                drafts.finishUpload(account, current, queued = true, message = "会话已过期。请登录原账号后重试。")
+                drafts.finishUpload(account, current, queued = true, message = "登录已过期，请用原账号重新登录后再试。")
                 drafts.forgetVerification(snapshot)
             } else {
-                drafts.finishUpload(account, current, queued = false, message = "图片存储拒绝了上传，请重试。")
+                drafts.finishUpload(account, current, queued = false, message = "图片暂时传不上去，请稍后重试。")
             }
             throw error
         }
@@ -263,18 +263,18 @@ internal class DraftSubmissionCoordinator(
     }
 
     private fun collectionMessage(error: ApiError, posting: Boolean) = when {
-        error.isSessionExpired -> "会话已过期。请登录原账号后重试。"
-        !posting -> "暂时无法核对上次保存结果。请稍后重试。"
+        error.isSessionExpired -> "登录已过期，请用原账号重新登录后再试。"
+        !posting -> "暂时无法核对上次保存结果，请稍后重试。"
         error.status == 404 && error.code == "not_found" -> "所选项目或标签已不可用，请重新选择。"
         error.code == "operation_in_progress" -> "上次保存仍在处理中，请稍后重试。"
         error.status == 429 -> "保存过于频繁，请稍后重试。"
         error.status == 503 && error.code == "integration_not_configured" -> IMAGE_STORAGE_UNAVAILABLE
-        error.status == 409 && error.code == "duplicate_resource" -> "原收藏编号已被使用或已删除，请检查内容后重新保存。"
-        error.status == 409 && error.code == "idempotency_mismatch" -> "原提交与本机草稿不一致，请检查内容后重新保存。"
+        error.status == 409 && error.code == "duplicate_resource" -> "这条记录可能已在别处保存或删除，请核对后再试。"
+        error.status == 409 && error.code == "idempotency_mismatch" -> "草稿内容与上次提交不一致，请核对后再保存。"
         error.status == 409 -> "暂时无法确认保存冲突的结果，请稍后重试。"
         error.status == 413 -> "收藏内容太大，请分段保存。"
-        error.status == 422 && error.code == "invalid_attachment" -> "有图片已无法用于收藏，请重试图片上传或移除。"
-        error.status == 400 || error.status == 422 -> "服务器拒绝了当前内容，请检查后重试。"
-        else -> "未能确认保存，本机草稿已保留。请稍后重试。"
+        error.status == 422 && error.code == "invalid_attachment" -> "有图片已无法用于收藏，请重试上传或移除。"
+        error.status == 400 || error.status == 422 -> "内容格式不符合要求，请检查后再试。"
+        else -> "未能确认保存，本机草稿已保留，请稍后重试。"
     }
 }

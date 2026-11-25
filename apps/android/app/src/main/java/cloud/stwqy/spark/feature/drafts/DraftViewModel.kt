@@ -70,6 +70,8 @@ internal enum class DraftImageImport(val label: String) {
     READING("正在读取图片"), INTERRUPTED("导入中断"), FAILED("导入失败"),
 }
 
+internal data class CaptureClosing(val generation: Long, val message: String?)
+
 internal data class DraftUiState(
     val draft: DraftEntity? = null,
     val content: DraftContent = DraftContent(""),
@@ -90,13 +92,20 @@ internal data class DraftUiState(
     val initialized: Boolean = false,
     val busy: Boolean = false,
     val dirty: Boolean = false,
+    val persisting: Boolean = false,
+    val closing: CaptureClosing? = null,
+    val replacingCapture: Boolean = false,
+    val captureGeneration: Long = 0L,
+    val sessionGeneration: Long = 0L,
     val notice: String? = null,
     val error: String? = null,
 ) {
+    val isClosing get() = closing != null
+    val locked get() = isClosing || replacingCapture
     val sending get() = draft?.status == DraftStatus.UPLOADING_ASSETS || draft?.status == DraftStatus.SUBMITTING
-    val canEdit get() = draft?.frozen == false && !sending && !busy
-    val canSend get() = online && !sending && !busy && access == DraftAccess.VERIFIED
-    val canLogin get() = online && !busy && access == DraftAccess.SIGNED_OUT &&
+    val canEdit get() = !locked && draft?.frozen == false && !sending && !busy
+    val canSend get() = !locked && online && !sending && !busy && access == DraftAccess.VERIFIED
+    val canLogin get() = !locked && online && !busy && access == DraftAccess.SIGNED_OUT &&
         images.none { importStatus(it.asset) == DraftImageImport.READING }
     val hasContent get() = images.any { !it.asset.uploadState.importIncomplete } || content.body.any { !it.isSparkWhitespace() }
     val hasUnimportedImages get() = images.any { it.asset.uploadState.importIncomplete }
@@ -147,6 +156,56 @@ internal abstract class DraftViewModel(
     private var replacement: Job? = null
     private var refreshPending: Boolean? = null
     private var foreground = false
+    private var captureGeneration = 0L
+    private var consumedClosingGeneration: Long? = null
+    private var sessionGeneration = 0L
+
+    fun consumeClosing(generation: Long): Pair<Boolean, String?> {
+        val pending = state.value.closing ?: return false to null
+        if (pending.generation != generation || consumedClosingGeneration == generation) return false to null
+        consumedClosingGeneration = generation
+        return true to pending.message
+    }
+
+    private suspend fun finishCapture(expectedGeneration: Long, message: String?) {
+        if (expectedGeneration != captureGeneration) return
+        if (state.value.closing?.generation == expectedGeneration) return
+        var published = false
+        mutableState.update {
+            if (expectedGeneration != captureGeneration || it.closing?.generation == expectedGeneration) {
+                it
+            } else {
+                published = true
+                it.copy(
+                    closing = CaptureClosing(expectedGeneration, message),
+                    dirty = false,
+                    notice = null,
+                    error = null,
+                )
+            }
+        }
+        if (published) eventChannel.send(DraftEffect.Finish(message))
+    }
+
+    private fun tryFinishCapture(expectedGeneration: Long, message: String? = null) {
+        if (expectedGeneration != captureGeneration) return
+        if (state.value.closing?.generation == expectedGeneration) return
+        var published = false
+        mutableState.update {
+            if (expectedGeneration != captureGeneration || it.closing?.generation == expectedGeneration) {
+                it
+            } else {
+                published = true
+                it.copy(
+                    closing = CaptureClosing(expectedGeneration, message),
+                    dirty = false,
+                    notice = null,
+                    error = null,
+                )
+            }
+        }
+        if (published) eventChannel.trySend(DraftEffect.Finish(message))
+    }
 
     init {
         viewModelScope.launch {
@@ -216,19 +275,22 @@ internal abstract class DraftViewModel(
     }
 
     fun closeEditor() {
-        if (!state.value.initialized || state.value.busy) return
-        if (state.value.draft == null && capture) {
-            eventChannel.trySend(DraftEffect.Finish())
+        val ui = state.value
+        if (!ui.initialized || ui.busy || ui.locked || (capture && ui.captureGeneration != captureGeneration)) return
+        val generation = ui.captureGeneration
+        if (ui.draft == null && capture) {
+            tryFinishCapture(generation)
             return
         }
-        if (state.value.dirty && !isCurrent()) {
+        if (ui.dirty && !isCurrent()) {
             sessionMoved()
             return
         }
         runAction {
             if (state.value.dirty) persist()
             if (capture) {
-                eventChannel.send(DraftEffect.Finish())
+                val hasSavedContent = state.value.draft?.frozen == false && state.value.hasContent
+                finishCapture(generation, if (hasSavedContent) "已暂存到本机草稿" else null)
             } else {
                 selected = null
                 mutableState.update { it.copy(draft = null, content = DraftContent(""), images = emptyList(), notice = null) }
@@ -248,38 +310,43 @@ internal abstract class DraftViewModel(
         }
     }
 
-    fun save(row: DraftSummary? = null) = runAction {
-        val active = requireCurrent()
-        val target = getTarget(active, row)
-        if (active == SessionSnapshot.Guest && state.value.online) throw IOException("请登录 Spark 后继续。")
-        if (!state.value.online || state.value.access == DraftAccess.OFFLINE) {
-            if (target.frozen) {
-                mutableState.update { it.copy(error = "联网后可用原内容重试。") }
+    fun save(row: DraftSummary? = null) {
+        val ui = state.value
+        if (ui.locked || (capture && ui.captureGeneration != captureGeneration)) return
+        val generation = ui.captureGeneration
+        runAction {
+            val active = requireCurrent()
+            val target = getTarget(active, row)
+            if (active == SessionSnapshot.Guest && state.value.online) throw IOException("登录后即可保存到收件箱。")
+            if (!state.value.online || state.value.access == DraftAccess.OFFLINE) {
+                if (target.frozen) {
+                    mutableState.update { it.copy(error = "恢复网络后，点「重试保存」即可继续。") }
+                    return@runAction
+                }
+                queue(active, target, generation)
                 return@runAction
             }
-            queue(active, target)
-            return@runAction
-        }
-        mutableState.update { it.copy(notice = "正在保存到收件箱…") }
-        try {
-            val remaining = submission.send(active, target) { updateImageProgress(target.id, it) }
-            requireCurrent(active)
-            if (remaining == null) completeSave("已保存到收件箱")
-            else if (row == null || !remaining.frozen) showDraft(active, remaining)
-            else loadRows(active)
-        } catch (error: ApiError) {
-            if (error.isSessionExpired) {
-                markSignedOut(active)
-                return@runAction
+            mutableState.update { it.copy(notice = "正在保存到收件箱…") }
+            try {
+                val remaining = submission.send(active, target) { updateImageProgress(target.id, it) }
+                requireCurrent(active)
+                if (remaining == null) completeSave("已保存到收件箱", generation)
+                else if (row == null || !remaining.frozen) showDraft(active, remaining)
+                else loadRows(active)
+            } catch (error: ApiError) {
+                if (error.isSessionExpired) {
+                    markSignedOut(active)
+                    return@runAction
+                }
+                // Session verification failed before POST. A frozen row must stay frozen.
+                if (error.code == "network_error" && !target.frozen &&
+                    drafts.read(active, target.id)?.revision == target.revision
+                ) {
+                    queue(active, target, generation)
+                    return@runAction
+                }
+                mutableState.update { it.copy(notice = null, error = "暂时连不上 Spark，草稿已保留，稍后再试。") }
             }
-            // Session verification failed before POST. A frozen row must stay frozen.
-            if (error.code == "network_error" && !target.frozen &&
-                drafts.read(active, target.id)?.revision == target.revision
-            ) {
-                queue(active, target)
-                return@runAction
-            }
-            mutableState.update { it.copy(notice = null, error = "暂时无法连接 Spark，请稍后重试。") }
         }
     }
 
@@ -326,11 +393,16 @@ internal abstract class DraftViewModel(
         }
     }
 
-    fun delete(row: DraftSummary? = null) = runAction {
-        val active = requireCurrent()
-        val target = getTarget(active, row)
-        submission.delete(active, target)
-        completeSave("已删除本机草稿")
+    fun delete(row: DraftSummary? = null) {
+        val ui = state.value
+        if (ui.locked || (capture && ui.captureGeneration != captureGeneration)) return
+        val generation = ui.captureGeneration
+        runAction {
+            val active = requireCurrent()
+            val target = getTarget(active, row)
+            submission.delete(active, target)
+            completeSave("已删除本机草稿", generation)
+        }
     }
 
     fun openPicker(kind: CatalogKind) {
@@ -405,7 +477,10 @@ internal abstract class DraftViewModel(
         loadRows(requireCurrent(), (state.value.page + delta).coerceIn(0, MAX_PAGE))
     }
 
-    fun retrySession() = refresh(state.value.online)
+    fun retrySession() {
+        if (state.value.locked) return
+        refresh(state.value.online)
+    }
 
     protected open suspend fun initialDraft(snapshot: SessionSnapshot): DraftEntity? = null
 
@@ -426,25 +501,37 @@ internal abstract class DraftViewModel(
     }
 
     protected fun replaceCapture(id: String?, error: String?, online: Boolean, prepare: () -> Unit) {
+        val targetGeneration = ++captureGeneration
+        consumedClosingGeneration = null
+        mutableState.update { it.copy(closing = null, replacingCapture = true) }
         replacement?.cancel()
         replacement = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
-            action?.join()
-            val previousRefresh = verification
-            previousRefresh?.cancel()
-            previousRefresh?.join()
-            reportFailures {
-                if (isCurrent()) persist()
-                cancelAutosave()
-                closePicker()
-                selected = id
-                handoff = null
-                completedLogin = null
-                prepare()
-                val ui = state.value
-                mutableState.value = DraftUiState(
-                    identity = ui.identity, online = online, shareError = error, activeImageImports = ui.activeImageImports,
-                )
-                refresh(online)
+            try {
+                action?.join()
+                val previousRefresh = verification
+                previousRefresh?.cancel()
+                previousRefresh?.join()
+                reportFailures {
+                    if (isCurrent()) persist()
+                    cancelAutosave()
+                    closePicker()
+                    selected = id
+                    handoff = null
+                    completedLogin = null
+                    prepare()
+                    val ui = state.value
+                    mutableState.value = DraftUiState(
+                        identity = ui.identity, online = online, shareError = error,
+                        activeImageImports = ui.activeImageImports,
+                        captureGeneration = targetGeneration,
+                        sessionGeneration = sessionGeneration,
+                    )
+                    refresh(online)
+                }
+            } finally {
+                if (captureGeneration == targetGeneration && state.value.replacingCapture) {
+                    mutableState.update { it.copy(replacingCapture = false, captureGeneration = targetGeneration) }
+                }
             }
         }
     }
@@ -460,10 +547,17 @@ internal abstract class DraftViewModel(
                 val active = credentials.currentSnapshot()
                 val changed = snapshot != null && snapshot != active
                 if (changed) {
+                    sessionGeneration++
                     closePicker()
                     account = null
                     mutableState.update {
-                        DraftUiState(online = online, shareError = it.shareError, activeImageImports = it.activeImageImports)
+                        DraftUiState(
+                            online = online, shareError = it.shareError,
+                            activeImageImports = it.activeImageImports,
+                            replacingCapture = it.replacingCapture,
+                            captureGeneration = it.captureGeneration,
+                            sessionGeneration = sessionGeneration,
+                        )
                     }
                 }
                 snapshot = active
@@ -519,7 +613,7 @@ internal abstract class DraftViewModel(
                     if (state.value.draft == null) {
                         if (!capture) loadRows(active)
                         else if (selected != null && state.value.shareError == null) mutableState.update {
-                            it.copy(error = "当前账号无法打开这条草稿。切回原账号后可在本机草稿中继续。")
+                            it.copy(error = "这条草稿属于另一个账号，切回原账号即可继续。")
                         }
                     }
                     if (state.value.picker != null) loadPicker(active)
@@ -564,7 +658,7 @@ internal abstract class DraftViewModel(
         if (!online || verified == null) {
             mutableState.update { it.copy(picker = picker.copy(loading = false,
                 notice = if (!online || state.value.access == DraftAccess.OFFLINE)
-                    "离线 · 可使用已缓存的" + picker.kind.label else "联网验证账号后可刷新目录。")) }
+                    "离线中，以下为已缓存的" + picker.kind.label else "联网验证账号后可刷新目录。")) }
             return
         }
         mutableState.update { it.copy(picker = picker.copy(loading = true, notice = null)) }
@@ -585,7 +679,7 @@ internal abstract class DraftViewModel(
                     markSignedOut(active)
                 } else {
                     mutableState.update { it.copy(picker = picker.copy(
-                        notice = "无法刷新目录，可使用已缓存的" + picker.kind.label + "。",
+                        notice = "暂时刷不出最新目录，先用已缓存的" + picker.kind.label + "。",
                     )) }
                 }
             } catch (_: DraftAccountChanged) {
@@ -596,14 +690,14 @@ internal abstract class DraftViewModel(
         }
     }
 
-    private suspend fun queue(active: SessionSnapshot, target: DraftEntity) {
+    private suspend fun queue(active: SessionSnapshot, target: DraftEntity, expectedGeneration: Long) {
         submission.queue(active, target)
         requireCurrent(active)
-        completeSave("已存为待发送草稿")
+        completeSave("已存为待发送草稿", expectedGeneration)
     }
 
-    private suspend fun completeSave(message: String) {
-        if (capture) eventChannel.send(DraftEffect.Finish(message))
+    private suspend fun completeSave(message: String, expectedGeneration: Long = captureGeneration) {
+        if (capture) finishCapture(expectedGeneration, message)
         else {
             selected = null
             mutableState.update { it.copy(draft = null, content = DraftContent(""), images = emptyList(), dirty = false,
@@ -660,7 +754,9 @@ internal abstract class DraftViewModel(
 
     private suspend fun reloadDraftChanges() {
         val ui = state.value
-        if (!ui.initialized || ui.busy) return
+        if (!ui.initialized || ui.busy || ui.locked) return
+        if (capture && ui.captureGeneration != captureGeneration) return
+        val generation = ui.captureGeneration
         val active = current() ?: return
         val previous = ui.draft
         if (previous == null) {
@@ -670,8 +766,8 @@ internal abstract class DraftViewModel(
         val updated = drafts.read(active, previous.id)
         val images = if (updated == null) emptyList() else readImages(active, updated.id)
         requireCurrent(active)
-        if (updated == null && state.value.draft == previous && !state.value.busy && !state.value.dirty) {
-            if (capture) eventChannel.trySend(DraftEffect.Finish()) else completeSave("草稿已从本机列表移除")
+        if (updated == null && state.value.draft == previous && !state.value.busy && !state.value.dirty && !state.value.isClosing) {
+            if (capture) tryFinishCapture(generation) else completeSave("这条草稿已发出或移除")
             return
         }
         mutableState.update {
@@ -696,7 +792,7 @@ internal abstract class DraftViewModel(
                 content = if (opened == null) DraftContent("") else ui.content,
                 images = if (opened == null) emptyList() else ui.images,
                 dirty = ui.dirty && opened != null, notice = null,
-                error = "会话已过期。请重新登录后继续。",
+                error = "登录已过期，重新登录后继续，草稿不会丢失。",
             )
         }
         if (!capture && opened == null) loadRows(active)
@@ -720,11 +816,16 @@ internal abstract class DraftViewModel(
         val draft = ui.draft ?: return@withLock
         if (!ui.dirty) return@withLock
         val active = requireCurrent()
-        val saved = drafts.edit(active, draft.id, draft.revision, ui.content)
-        requireCurrent(active)
-        mutableState.update {
-            if (it.draft?.id != saved.id) it
-            else it.copy(draft = saved, dirty = it.content != ui.content, notice = null)
+        mutableState.update { it.copy(persisting = true) }
+        try {
+            val saved = drafts.edit(active, draft.id, draft.revision, ui.content)
+            requireCurrent(active)
+            mutableState.update {
+                if (it.draft?.id != saved.id) it
+                else it.copy(draft = saved, dirty = it.content != ui.content, notice = null)
+            }
+        } finally {
+            mutableState.update { it.copy(persisting = false) }
         }
     }
 
@@ -766,15 +867,21 @@ internal abstract class DraftViewModel(
     }
 
     private fun sessionMoved(online: Boolean = state.value.online) {
+        sessionGeneration++
         closePicker()
         account = null
         cancelAutosave()
         mutableState.update {
-            DraftUiState(online = online, busy = action?.isActive == true, shareError = it.shareError,
-                activeImageImports = it.activeImageImports)
+            DraftUiState(
+                online = online, busy = action?.isActive == true, shareError = it.shareError,
+                activeImageImports = it.activeImageImports,
+                replacingCapture = it.replacingCapture,
+                captureGeneration = it.captureGeneration,
+                sessionGeneration = sessionGeneration,
+            )
         }
         if (foreground && snapshot != credentials.currentSnapshot()) refresh(online)
-        else mutableState.update { it.copy(initialized = true, error = "账号状态已变更，请重新验证。") }
+        else mutableState.update { it.copy(initialized = true, error = "登录账号已变化，请刷新后再试。") }
     }
 
     private fun current(): SessionSnapshot? = snapshot?.takeIf { credentials.currentSnapshot() == it }

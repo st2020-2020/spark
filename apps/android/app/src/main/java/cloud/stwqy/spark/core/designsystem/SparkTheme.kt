@@ -1,5 +1,9 @@
 package cloud.stwqy.spark.core.designsystem
 
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -9,7 +13,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -41,6 +51,32 @@ fun SparkTheme(
     dark: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit,
 ) {
+    val context = LocalContext.current
+    var reducedMotion by remember(context) { mutableStateOf(SparkMotion.isReducedMotion(context)) }
+    DisposableEffect(context) {
+        val resolver = context.contentResolver
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                reducedMotion = SparkMotion.isReducedMotion(context)
+            }
+        }
+        val uri = Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE)
+        val registered = try {
+            resolver.registerContentObserver(uri, false, observer)
+            true
+        } catch (_: RuntimeException) {
+            false
+        }
+        onDispose {
+            if (registered) {
+                try {
+                    resolver.unregisterContentObserver(observer)
+                } catch (_: RuntimeException) {
+                    // Ignore observer teardown issues in synthetic host environments.
+                }
+            }
+        }
+    }
     val colors = SparkTokens.colors(palette, dark)
     val status = SparkTokens.status(dark)
     val base = if (dark) darkColorScheme() else lightColorScheme()
@@ -82,7 +118,11 @@ fun SparkTheme(
         surfaceContainerHigh = colors.surfaceMuted,
         surfaceContainerHighest = colors.surfaceMuted,
     )
-    CompositionLocalProvider(LocalSparkColors provides colors, LocalSparkStatusColors provides status) {
+    CompositionLocalProvider(
+        LocalSparkColors provides colors,
+        LocalSparkStatusColors provides status,
+        LocalSparkReducedMotion provides reducedMotion,
+    ) {
         MaterialTheme(colorScheme = material, shapes = sparkShapes, typography = sparkTypography, content = content)
     }
 }

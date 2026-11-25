@@ -31,6 +31,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -40,8 +41,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -456,6 +459,145 @@ class DraftFlowTest {
         disk.observeSession(snapshot)
         server.enqueue(session(user))
         return submission.verify(snapshot).also { assertEquals("/api/v1/auth/session", request().path) }
+    }
+
+    @Test fun captureClosingLocksSaveSurvivesReobserveAndCancelsOnNewShareAndAccountSwitchBumpsGeneration(): Unit = runBlocking {
+        runModels {
+            server.enqueue(session(USER_A))
+            val model = capture()
+            try {
+                model.resume(online = true)
+                await { model.state.value.initialized && model.state.value.access == DraftAccess.VERIFIED }
+                assertEquals("/api/v1/auth/session", request().path)
+                val initialSessionGen = model.state.value.sessionGeneration
+
+                // Close ("暂存") persists draft, sets closing state, and locks edit/save.
+                model.closeEditor()
+                await { model.state.value.closing != null }
+                val closing = checkNotNull(model.state.value.closing)
+                assertEquals("已暂存到本机草稿", closing.message)
+                assertFalse(model.state.value.canEdit)
+                assertFalse(model.state.value.canSend)
+                assertFalse(model.edit(DraftContent("关闭期间不应写入")))
+                model.save()
+                assertNull(server.takeRequest(150, TimeUnit.MILLISECONDS))
+
+                // New incoming share invalidates the stale closing generation before it can close the new capture
+                // and bumps captureGeneration so the sheet explicitly re-expands if hide() was mid-flight.
+                model.receive(sharedText(OTHER_DRAFT, "新分享内容"), null, online = false)
+                await { model.state.value.draft?.id == OTHER_DRAFT && model.state.value.closing == null }
+                assertEquals(1L, model.state.value.captureGeneration)
+                assertEquals(false to null, model.consumeClosing(closing.generation))
+
+                // Closing the new share can only be consumed once.
+                model.closeEditor()
+                await { model.state.value.closing != null }
+                val second = checkNotNull(model.state.value.closing)
+                assertNotEquals(closing.generation, second.generation)
+                assertEquals(true to "已暂存到本机草稿", model.consumeClosing(second.generation))
+                assertEquals(false to null, model.consumeClosing(second.generation))
+
+                // Switching sessions increments sessionGeneration immediately so list/editor subtrees reset without fade leak.
+                active = bob
+                model.resume(online = false)
+                await { model.state.value.sessionGeneration > initialSessionGen }
+            } finally {
+                model.viewModelScope.cancel()
+            }
+        }
+    }
+
+    @Test fun staleInFlightSaveCannotCloseReplacementShareAndDeleteEventPreservesSuccessMessage(): Unit = runBlocking {
+        val firstPostStarted = CountDownLatch(1)
+        val releaseFirstPost = CountDownLatch(1)
+        val postCount = AtomicInteger(0)
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = when (request.path) {
+                "/api/v1/auth/session" -> session(USER_A)
+                "/api/v1/collections" -> {
+                    val key = requireNotNull(request.getHeader("Idempotency-Key"))
+                    if (postCount.incrementAndGet() == 1) {
+                        firstPostStarted.countDown()
+                        releaseFirstPost.await(3, TimeUnit.SECONDS)
+                    }
+                    json(201, """{"id":"$key"}""")
+                }
+                else -> MockResponse().setResponseCode(404)
+            }
+        }
+        runModels {
+            val model = capture()
+            val observedClosings = mutableListOf<CaptureClosing>()
+            val observedFinishes = mutableListOf<DraftEffect.Finish>()
+            val stateCollector = model.viewModelScope.launch {
+                model.state.collect { ui -> ui.closing?.let(observedClosings::add) }
+            }
+            val effectCollector = model.viewModelScope.launch {
+                model.effects.collect { effect -> if (effect is DraftEffect.Finish) observedFinishes.add(effect) }
+            }
+            try {
+                model.resume(online = true)
+                await { model.state.value.initialized && model.state.value.access == DraftAccess.VERIFIED }
+                assertEquals(0L, model.state.value.captureGeneration)
+
+                // Start an in-flight save whose server response completes after a new share arrives.
+                model.save()
+                assertTrue(withContext(Dispatchers.IO) { firstPostStarted.await(3, TimeUnit.SECONDS) })
+                model.receive(sharedText(OTHER_DRAFT, "覆盖的新分享"), null, online = true)
+                assertTrue(model.state.value.replacingCapture)
+                assertTrue(model.state.value.locked)
+                // Actions on the outgoing card during handover must be ignored and never close the incoming share.
+                model.closeEditor()
+                model.save()
+                releaseFirstPost.countDown()
+                await {
+                    model.state.value.draft?.id == OTHER_DRAFT &&
+                        model.state.value.initialized &&
+                        !model.state.value.busy &&
+                        !model.state.value.replacingCapture &&
+                        model.state.value.access == DraftAccess.VERIFIED
+                }
+                delay(50)
+                assertNull(disk.read(alice, DRAFT))
+                assertNull(model.state.value.closing)
+                assertEquals(1L, model.state.value.captureGeneration)
+                assertTrue("No closing state may be published during share handover", observedClosings.isEmpty())
+                assertTrue("No Finish effect may be emitted during share handover", observedFinishes.isEmpty())
+
+                // Editing the replacement share and immediately receiving a third share while Room persist is pending
+                // must also lock closeEditor() so the third share cannot be closed before it loads.
+                assertTrue(model.edit(DraftContent("已编辑但待落盘的草稿"), composing = true))
+                val thirdId = UUID.randomUUID().toString()
+                model.receive(sharedText(thirdId, "第三条分享"), null, online = true)
+                assertTrue(model.state.value.replacingCapture)
+                model.closeEditor()
+                await {
+                    model.state.value.draft?.id == thirdId &&
+                        model.state.value.initialized &&
+                        !model.state.value.replacingCapture &&
+                        model.state.value.access == DraftAccess.VERIFIED
+                }
+                delay(50)
+                assertEquals("已编辑但待落盘的草稿", disk.read(alice, OTHER_DRAFT)?.body)
+                assertNull(model.state.value.closing)
+                assertEquals(2L, model.state.value.captureGeneration)
+                assertTrue("No closing state may be published during persist handover", observedClosings.isEmpty())
+                assertTrue("No Finish effect may be emitted during persist handover", observedFinishes.isEmpty())
+
+                // Now save the latest replacement share cleanly and confirm Room's delete event preserves the success message.
+                model.save()
+                await { model.state.value.closing != null }
+                delay(100)
+                assertEquals("已保存到收件箱", model.state.value.closing?.message)
+                assertEquals(listOf("已保存到收件箱"), observedFinishes.map { it.message })
+                assertEquals(2, postCount.get())
+            } finally {
+                releaseFirstPost.countDown()
+                stateCollector.cancel()
+                effectCollector.cancel()
+                model.viewModelScope.cancel()
+            }
+        }
     }
 
     private fun capture() = ShareCaptureViewModel(
