@@ -116,7 +116,7 @@ describe('T08 Trash & permanent purge UI', () => {
     await screen.findByRole('heading', { name: '回收站' });
 
     expect(await screen.findByText('准备永久删除的测试收藏')).toBeInTheDocument();
-    expect(screen.getByText(/预计到期：/)).toBeInTheDocument();
+    expect(screen.getByText(/剩余约 30 天后自动清理/)).toBeInTheDocument();
     expect(screen.getByText(/剩余约 30 天/)).toBeInTheDocument();
 
     // Open confirmation modal -> background restore & purge buttons become disabled (mutual exclusion)

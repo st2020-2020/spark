@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useLocation } from 'react-router-dom';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { GitCommitHorizontal, PenLine } from 'lucide-react';
+import { GitCommitHorizontal, MessageSquarePlus } from 'lucide-react';
 import type { Collection, CollectionThreadItem } from '../api/types';
 import { useApi } from '../context/ApiContext';
 import { useFollowUp } from '../context/FollowUpContext';
@@ -103,7 +103,7 @@ export function CollectionThreadTimeline({
           className="sp-btn sp-btn--sm"
           onClick={() => openFollowUp(toFollowUpSourceFromCollection(collection))}
         >
-          <PenLine size={14} strokeWidth={2} aria-hidden="true" />
+          <MessageSquarePlus size={14} strokeWidth={2} aria-hidden="true" />
           <span>续写</span>
         </button>
       </div>

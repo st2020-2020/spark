@@ -272,7 +272,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     expect(write).toHaveBeenCalledExactlyOnceWith({ ai_enabled: true, consent_version: 'spark-ai-extension-archive-v1' });
     expect(restart).toHaveBeenCalledTimes(1);
     await ui.click(screen.getByRole('button', { name: '重新整理' }));
-    await screen.findByText('整理排队中');
+    await screen.findAllByText('整理中');
     expect(restart).toHaveBeenCalledTimes(2);
     expect(upload).not.toHaveBeenCalled();
     expect(imageWrite).not.toHaveBeenCalled();
@@ -302,7 +302,7 @@ describe('T05 image analysis consent, detail view and search snippets', () => {
     snapshot.organization = { ...waiting, status: 'running', image_material_status: undefined, stages: [] };
     event();
     await screen.findByText('网格间隔 24');
-    await screen.findByText('正在整理');
+    await screen.findAllByText('整理中');
     expect(screen.queryByText('本次整理使用了图片识别结果。')).toBeNull();
     snapshot.organization = { ...snapshot.organization, status: 'succeeded', image_material_status: 'included' };
     snapshot.has_suggestion = true;

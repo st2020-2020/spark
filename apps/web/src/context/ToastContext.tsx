@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, X } from 'lucide-react';
 import { generateUuid } from '../lib/idempotency';
-import { canAnimateMotion, TOAST_EXIT_MS } from '../lib/motion';
+import { canAnimateMotion, TOAST_EXIT_MS, useFlipList } from '../lib/motion';
 
 export interface ToastItem {
   id: string;
@@ -30,6 +30,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const timersRef = useRef<Map<string, number>>(new Map());
   const exitTimersRef = useRef<Map<string, number>>(new Map());
   const consumedActionsRef = useRef<Set<string>>(new Set());
+  // Stacked toasts make room for each other instead of jumping when one arrives or leaves.
+  const regionRef = useRef<HTMLDivElement | null>(null);
+  useFlipList(regionRef, toasts.map((t) => t.id).join('|'), { animateEnter: false });
 
   const clearTimer = useCallback((id: string) => {
     const timer = timersRef.current.get(id);
@@ -63,8 +66,26 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     [clearTimer],
   );
 
+  // Hovering or focusing a toast holds it; leaving gives a short grace period to finish reading.
+  const holdToast = useCallback((id: string) => {
+    const timer = timersRef.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      timersRef.current.delete(id);
+    }
+  }, []);
+  const releaseToast = useCallback(
+    (id: string) => {
+      if (timersRef.current.has(id) || exitTimersRef.current.has(id)) return;
+      timersRef.current.set(id, window.setTimeout(() => dismissToast(id), 2500));
+    },
+    [dismissToast],
+  );
+
   const pushToast = useCallback(
-    (toast: Omit<ToastItem, 'id'>, durationMs = 5000) => {
+    (toast: Omit<ToastItem, 'id'>, requestedDurationMs?: number) => {
+      // An undo needs time to be noticed and reached; plain confirmations can go sooner.
+      const durationMs = requestedDurationMs ?? (toast.onAction ? 7000 : 4000);
       const nextId = generateUuid();
       setToasts((prev) => {
         if (toast.dedupeKey) {
@@ -120,10 +141,17 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ pushToast, dismissToast, clearAllToasts }}>
       {children}
-      <div className="sp-toast-region" aria-live="polite" aria-atomic="false">
+      <div className="sp-toast-region" aria-live="polite" aria-atomic="false" ref={regionRef}>
         {toasts.map((toast) => (
           <div
             key={toast.id}
+            data-flip-key={toast.id}
+            onMouseEnter={() => holdToast(toast.id)}
+            onMouseLeave={() => releaseToast(toast.id)}
+            onFocus={() => holdToast(toast.id)}
+            onBlur={(e) => {
+              if (!e.currentTarget.contains(e.relatedTarget as Node | null)) releaseToast(toast.id);
+            }}
             className={`sp-toast ${toast.tone === 'error' ? 'sp-toast--error' : ''} ${
               toast.variant === 'ai-suggestion' ? 'sp-toast--ai' : ''
             } ${toast.closing ? 'is-closing' : ''}`}

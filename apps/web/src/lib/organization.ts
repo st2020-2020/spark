@@ -192,7 +192,7 @@ export function classifyOrganizationDisplay(params: {
   if (organization.status === 'queued' || organization.status === 'running') {
     return {
       kind: 'active',
-      badgeLabel: organization.image_material_status === 'waiting' ? '等待图片识别' : organization.status === 'queued' ? '整理排队中' : '正在整理',
+      badgeLabel: organization.image_material_status === 'waiting' ? '等待图片识别' : '整理中',
       pillTone: 'default',
       description:
         organization.image_material_status === 'waiting'
@@ -558,9 +558,7 @@ export function classifyCollectionFiling(params: {
         ? '正在按已有线索自动归类'
         : imageMaterial === 'waiting'
           ? '等待图片识别'
-          : organization.status === 'queued'
-            ? '整理排队中'
-            : '正在整理';
+          : '整理中';
     const reason =
       backfillState === 'applying'
         ? '正在复用已有具体标签与原文线索匹配或创建项目，不消耗模型额度。'

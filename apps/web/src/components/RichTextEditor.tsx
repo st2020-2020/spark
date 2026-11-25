@@ -383,7 +383,12 @@ export function RichTextEditor({
 
   const canUndo = editor?.can().undo() ?? false;
   const canRedo = editor?.can().redo() ?? false;
-  const hasAaActive = Boolean(editor?.isActive('bold') || editor?.isActive('highlight'));
+  const hasAaActive = Boolean(
+    editor?.isActive('bold') ||
+      editor?.isActive('highlight') ||
+      editor?.isActive('bulletList') ||
+      editor?.isActive('orderedList'),
+  );
 
   return (
     <div>
@@ -566,41 +571,43 @@ export function RichTextEditor({
                 >
                   <Highlighter size={18} strokeWidth={2} aria-hidden="true" />
                 </button>
+                <span className="sp-toolbar-divider" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="sp-tool-btn"
+                  aria-label="无序列表"
+                  data-tooltip="无序列表"
+                  data-tooltip-placement="top"
+                  aria-pressed={editor?.isActive('bulletList') ?? false}
+                  disabled={disabled}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onToolbarInteractRef.current?.();
+                    editor?.chain().focus().toggleBulletList().run();
+                  }}
+                >
+                  <List size={18} strokeWidth={2} aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  className="sp-tool-btn"
+                  aria-label="有序列表"
+                  data-tooltip="有序列表"
+                  data-tooltip-placement="top"
+                  aria-pressed={editor?.isActive('orderedList') ?? false}
+                  disabled={disabled}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    onToolbarInteractRef.current?.();
+                    editor?.chain().focus().toggleOrderedList().run();
+                  }}
+                >
+                  <ListOrdered size={18} strokeWidth={2} aria-hidden="true" />
+                </button>
               </div>
             )}
           </div>
-
-          <button
-            type="button"
-            className="sp-tool-btn"
-            aria-label="无序列表"
-            data-tooltip="无序列表"
-            aria-pressed={editor?.isActive('bulletList') ?? false}
-            disabled={disabled}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              onToolbarInteractRef.current?.();
-              editor?.chain().focus().toggleBulletList().run();
-            }}
-          >
-            <List size={18} strokeWidth={2} aria-hidden="true" />
-          </button>
-
-          <button
-            type="button"
-            className="sp-tool-btn"
-            aria-label="有序列表"
-            data-tooltip="有序列表"
-            aria-pressed={editor?.isActive('orderedList') ?? false}
-            disabled={disabled}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => {
-              onToolbarInteractRef.current?.();
-              editor?.chain().focus().toggleOrderedList().run();
-            }}
-          >
-            <ListOrdered size={18} strokeWidth={2} aria-hidden="true" />
-          </button>
 
           <span className="sp-toolbar-divider" aria-hidden="true" />
 

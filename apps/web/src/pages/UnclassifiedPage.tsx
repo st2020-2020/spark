@@ -1,5 +1,6 @@
 import { MoreProjectChoices, useProjectChoices } from '../components/ProjectChoices';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { useFlipList, useSegmentIndicator } from '../lib/motion';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, FolderPlus, Sparkles, X } from 'lucide-react';
@@ -17,7 +18,7 @@ import { projectToneClass } from '../lib/projectTone';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
 import { ProjectSuggestionEvidence } from '../components/ProjectSuggestionEvidence';
-import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
+import { EmptyState, ErrorBanner, LoadMore, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { useToast } from '../context/ToastContext';
@@ -114,6 +115,12 @@ export function UnclassifiedPage() {
   });
 
   const items = unclassifiedQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  // The suggestions view only earns a tab while there is something to confirm (or it is open).
+  const showViewTabs = pendingSuggestionsCount > 0 || activeTab === 'suggested';
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const tabsRef = useRef<HTMLDivElement | null>(null);
+  useFlipList(listRef, items.map((c) => c.id).join('|'));
+  useSegmentIndicator(tabsRef, `${activeTab}:${showViewTabs}`);
   const projects = projectsQuery.data?.pages.flatMap(page => page.items) ?? [];
   const activeQuickProjects = projects.filter((p) => p.state === 'active').slice(0, 6);
 
@@ -246,13 +253,12 @@ export function UnclassifiedPage() {
         title="待归类"
         actions={
           <div className="sp-row">
-            <Link
-              to="/unclassified/triage"
-              className={`sp-btn sp-btn--sm ${items.length > 0 ? 'sp-btn--primary' : ''}`}
-            >
-              <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
-              <span>开始整理</span>
-            </Link>
+            {items.length > 0 && (
+              <Link to="/unclassified/triage" className="sp-btn sp-btn--sm sp-btn--primary">
+                <Sparkles size={15} strokeWidth={2} aria-hidden="true" />
+                <span>开始整理</span>
+              </Link>
+            )}
             <Link to="/projects" className="sp-btn--quiet">
               <FolderPlus size={16} strokeWidth={2} aria-hidden="true" />
               <span>管理项目</span>
@@ -261,7 +267,8 @@ export function UnclassifiedPage() {
         }
       />
 
-      <div className="sp-filter-tabs" aria-label="待归类视图筛选">
+      {showViewTabs && (
+      <div className="sp-filter-tabs" aria-label="待归类视图筛选" ref={tabsRef}>
         <button
           type="button"
           className={`sp-filter-tab ${activeTab === 'all' ? 'active' : ''}`}
@@ -278,10 +285,13 @@ export function UnclassifiedPage() {
         >
           <span>待确认 AI 建议</span>
           {pendingSuggestionsCount > 0 && (
-            <span className="sp-filter-count">{pendingSuggestionsCount}</span>
+            <span key={pendingSuggestionsCount} className="sp-filter-count sp-tick">
+              {pendingSuggestionsCount}
+            </span>
           )}
         </button>
       </div>
+      )}
 
       <MoreProjectChoices query={projectsQuery} />
       {projects.length === 0 && projectsQuery.isSuccess && (
@@ -335,30 +345,28 @@ export function UnclassifiedPage() {
         />
       )}
 
-      <div className="sp-note-list sp-note-list--loose">
+      <div className="sp-note-list sp-note-list--loose" ref={listRef}>
         {items.map((col) => {
           const tray = renderQuickClassify(col);
           return (
-            <div key={col.id} className={tray ? 'sp-classify-group' : undefined}>
-              <CollectionCard collection={col} />
+            <div
+              key={col.id}
+              data-flip-key={col.id}
+              className={tray ? 'sp-classify-group' : undefined}
+            >
+              <CollectionCard collection={col} flipKey={null} />
               {tray}
             </div>
           );
         })}
       </div>
 
-      {unclassifiedQuery.hasNextPage && (
-        <div className="sp-load-more">
-          <button
-            type="button"
-            className="sp-btn"
-            disabled={unclassifiedQuery.isFetchingNextPage}
-            onClick={() => void unclassifiedQuery.fetchNextPage()}
-          >
-            加载更多
-          </button>
-        </div>
-      )}
+      <LoadMore
+        hasNextPage={unclassifiedQuery.hasNextPage}
+        isFetching={unclassifiedQuery.isFetchingNextPage}
+        isError={unclassifiedQuery.isFetchNextPageError}
+        onLoad={() => void unclassifiedQuery.fetchNextPage()}
+      />
     </div>
   );
 }

@@ -67,15 +67,36 @@ export function showAccountAppearance(value: typeof accountAppearance) {
   syncDocument();
 }
 
+// The very first paint applies the theme instantly; later switches cross-fade the whole page.
+let firstSyncDone = false;
+
 function syncDocument(): void {
   const root = document.documentElement;
-  root.setAttribute('data-palette', accountAppearance?.palette ?? readPalette());
-  root.setAttribute('data-mode', resolveMode(accountAppearance?.theme ?? readThemePref()));
+  const palette = accountAppearance?.palette ?? readPalette();
+  const mode = resolveMode(accountAppearance?.theme ?? readThemePref());
+  const changed =
+    root.getAttribute('data-palette') !== palette || root.getAttribute('data-mode') !== mode;
 
-  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-  if (meta) {
-    const bg = getComputedStyle(root).getPropertyValue('--sp-bg').trim();
-    if (bg) meta.content = bg;
+  const apply = () => {
+    root.setAttribute('data-palette', palette);
+    root.setAttribute('data-mode', mode);
+    const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (meta) {
+      const bg = getComputedStyle(root).getPropertyValue('--sp-bg').trim();
+      if (bg) meta.content = bg;
+    }
+  };
+
+  const reduceMotion =
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const canCrossFade =
+    firstSyncDone && changed && !reduceMotion && typeof document.startViewTransition === 'function';
+  firstSyncDone = true;
+  if (canCrossFade) {
+    document.startViewTransition(apply);
+  } else {
+    apply();
   }
 }
 

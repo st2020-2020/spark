@@ -348,7 +348,35 @@ export function AppShell({
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
   const isInbox = location.pathname === '/inbox';
   const androidWorkspace = navigator.userAgent.split(/\s+/).includes('SparkAndroid/2');
-  const inMoreSection = !['inbox', 'projects', 'collections'].includes(location.pathname.split('/')[1]);
+  // A note opened from a list belongs to that list: keep the list's tab lit instead of jumping
+  // to "全部收藏" just because the detail route lives under /collections.
+  const routeSection = (path: string) => path.split('?')[0].split('/')[1] ?? '';
+  const detailFrom = (location.state as { from?: string } | null)?.from;
+  const activeSection =
+    /^\/collections\/[^/]+/.test(location.pathname) && detailFrom
+      ? routeSection(detailFrom)
+      : routeSection(location.pathname);
+  const inMoreSection = !['inbox', 'projects', 'collections'].includes(activeSection);
+  const navClass = (base: string, section: string) =>
+    `${base} ${activeSection === section ? 'active' : ''}`;
+  const navCurrent = (section: string) => (activeSection === section ? 'page' : undefined);
+
+  // Page motion follows the route's depth: going into a note pushes in from the right,
+  // coming back slides in from the left, switching between sections cross-fades in place.
+  const pageMotionRef = useRef<{ path: string; motion: 'push' | 'pop' | 'swap' }>({
+    path: location.pathname,
+    motion: 'swap',
+  });
+  if (pageMotionRef.current.path !== location.pathname) {
+    const depth = (path: string) => path.split('/').filter(Boolean).length;
+    const from = depth(pageMotionRef.current.path);
+    const to = depth(location.pathname);
+    pageMotionRef.current = {
+      path: location.pathname,
+      motion: to > from ? 'push' : to < from ? 'pop' : 'swap',
+    };
+  }
+  const pageMotion = pageMotionRef.current.motion;
   const badgeText = formatBadgeCount(pendingSuggestionsCount);
 
   // On the inbox the composer is already on screen: focus it in place so the draft and scroll
@@ -423,13 +451,14 @@ export function AppShell({
             item.to === '/unclassified' && pendingSuggestionsCount > 0;
           return (
             <li key={item.to} className="sp-nav-item">
-              <NavLink
+              <Link
                 to={item.to}
-                className={({ isActive }) => `sp-nav-link ${isActive ? 'active' : ''}`}
+                className={navClass('sp-nav-link', routeSection(item.to))}
+                aria-current={navCurrent(routeSection(item.to))}
               >
                 <Icon size={17} strokeWidth={2} aria-hidden="true" />
                 <span>{item.label}</span>
-              </NavLink>
+              </Link>
               {showSuggestionBadge && (
                 <Link
                   to="/unclassified?tab=suggested"
@@ -437,7 +466,7 @@ export function AppShell({
                   aria-label={`${pendingSuggestionsCount} 条待确认 AI 建议`}
                   title={`${pendingSuggestionsCount} 条待确认 AI 建议`}
                 >
-                  {badgeText}
+                  <span key={badgeText} className="sp-tick">{badgeText}</span>
                 </Link>
               )}
             </li>
@@ -609,7 +638,7 @@ export function AppShell({
                 aria-label={`待确认建议 ${pendingSuggestionsCount} 条`}
               >
                 <SparkGlyph size={12} />
-                <span>{badgeText} 条待确认</span>
+                <span><span key={badgeText} className="sp-tick">{badgeText}</span> 条待确认</span>
               </Link>
             )}
             {!isInbox && (
@@ -725,7 +754,7 @@ export function AppShell({
           </div>
         </aside>
 
-        <main key={location.pathname} className="sp-main-column sp-page-stage">
+        <main key={location.pathname} className="sp-main-column sp-page-stage" data-nav={pageMotion}>
           {children}
         </main>
       </div>
@@ -735,23 +764,23 @@ export function AppShell({
         className={`sp-tabbar ${inputFocusedMobile ? 'sp-tabbar--hidden' : ''}`}
         aria-label="手机底部导航"
       >
-        <NavLink to="/inbox" className={({ isActive }) => `sp-tab ${isActive ? 'active' : ''}`}>
+        <Link to="/inbox" className={navClass('sp-tab', 'inbox')} aria-current={navCurrent('inbox')}>
           <Inbox size={22} strokeWidth={1.9} aria-hidden="true" />
           <span>收件箱</span>
-        </NavLink>
-        <NavLink to="/projects" className={({ isActive }) => `sp-tab ${isActive ? 'active' : ''}`}>
+        </Link>
+        <Link to="/projects" className={navClass('sp-tab', 'projects')} aria-current={navCurrent('projects')}>
           <Folder size={22} strokeWidth={1.9} aria-hidden="true" />
           <span>项目</span>
-        </NavLink>
+        </Link>
         <button type="button" className="sp-tab sp-tab--capture" aria-label="记一条" onClick={handleQuickCapture}>
           <span className="sp-tab-capture-disc" aria-hidden="true">
             <Plus size={24} strokeWidth={2.4} />
           </span>
         </button>
-        <NavLink to="/collections" className={({ isActive }) => `sp-tab ${isActive ? 'active' : ''}`}>
+        <Link to="/collections" className={navClass('sp-tab', 'collections')} aria-current={navCurrent('collections')}>
           <Search size={22} strokeWidth={1.9} aria-hidden="true" />
           <span>搜索</span>
-        </NavLink>
+        </Link>
         <button
           type="button"
           className={`sp-tab ${drawerOpen || inMoreSection ? 'active' : ''}`}
@@ -764,7 +793,7 @@ export function AppShell({
             <MoreHorizontal size={22} strokeWidth={1.9} aria-hidden="true" />
             {pendingSuggestionsCount > 0 && (
               <span className="sp-tab-badge" aria-hidden="true">
-                {badgeText}
+                <span key={badgeText} className="sp-tick">{badgeText}</span>
               </span>
             )}
           </span>

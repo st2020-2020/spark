@@ -98,6 +98,14 @@ describe('Spark Web key flows', () => {
     const project = path.includes(':id')
       ? await adapter.createProject({ name: '图片手记', description: '', focus_points: [] }, 'image-project')
       : undefined;
+    if (path === '/inbox') {
+      // The inbox shows its filters only once there is something to filter.
+      await adapter.createCollection({
+        id: crypto.randomUUID(),
+        document: { schema_version: 1, content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '筛选前的笔记' }] }] } },
+        intent: '', upload_ids: [], project_ids: [], tag_ids: [],
+      }, 'inbox-filter-seed');
+    }
     const list = vi.spyOn(adapter, 'listCollections');
     const user = userEvent.setup();
     renderWithAdapter([project ? path.replace(':id', project.id) : path], adapter);

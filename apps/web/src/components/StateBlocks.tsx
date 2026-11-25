@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { ApiError } from '../api/errors';
 import { splitHighlightSegments } from '../lib/highlight';
+import { useAutoLoadMore } from '../lib/motion';
 import { SparkGlyph } from './Brand';
 import { JarScene, NotebookScene, SearchScene } from './Illustrations';
 
@@ -75,6 +76,51 @@ export function ErrorBanner({
           重试
         </button>
       )}
+    </div>
+  );
+}
+
+/**
+ * Pagination for long lists: the next page loads by itself as the end comes into view.
+ * The button stays for keyboard users, failed loads and browsers without IntersectionObserver.
+ */
+export function LoadMore({
+  hasNextPage,
+  isFetching,
+  isError = false,
+  onLoad,
+  label = '加载更多',
+}: {
+  hasNextPage: boolean | undefined;
+  isFetching: boolean;
+  isError?: boolean;
+  onLoad: () => void;
+  label?: string;
+}) {
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useAutoLoadMore(sentinelRef, {
+    enabled: Boolean(hasNextPage) && !isFetching && !isError,
+    onLoad,
+  });
+  if (!hasNextPage) return null;
+  return (
+    <div className="sp-load-more" ref={sentinelRef}>
+      <button type="button" className="sp-btn sp-btn--quiet" disabled={isFetching} onClick={onLoad}>
+        {isFetching ? (
+          <>
+            <span className="sp-load-more-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+            <span>加载中…</span>
+          </>
+        ) : isError ? (
+          '加载失败，重试'
+        ) : (
+          label
+        )}
+      </button>
     </div>
   );
 }
