@@ -1,10 +1,5 @@
-import type {
-  BulletList,
-  Collection,
-  OrderedList,
-  Paragraph,
-  SparkDocument,
-} from '../api/types';
+import type { Collection } from '../api/types';
+import { derivePlainText } from './document';
 
 export type ShareCardTemplate = 'paper' | 'midnight' | 'gallery' | 'quote';
 
@@ -28,70 +23,6 @@ export function selectDefaultShareTemplate(body: string, imageCount: number): Sh
   return 'paper';
 }
 
-const URL_LIKE_NODE_RE = /^(?:https?:\/\/|www\.)\S+$/iu;
-
-type ParagraphChild = NonNullable<Paragraph['content']>[number];
-
-function getLinkMarkHref(node: ParagraphChild): string | null {
-  if (node.type !== 'text' || !node.marks) return null;
-  const linkMark = node.marks.find((m) => m.type === 'link');
-  if (!linkMark) return null;
-  const href = (linkMark.attrs as { href?: unknown } | undefined)?.href;
-  return typeof href === 'string' && href.trim() ? href.trim() : '__link__';
-}
-
-function extractShareDocumentText(doc: SparkDocument): string {
-  const lines: string[] = [];
-
-  const readParagraph = (p: Paragraph): string => {
-    if (!p.content) return '';
-    const parts: string[] = [];
-    let index = 0;
-    while (index < p.content.length) {
-      const node = p.content[index];
-      if (node.type !== 'text') {
-        parts.push('\n');
-        index += 1;
-        continue;
-      }
-      const linkHref = getLinkMarkHref(node);
-      if (linkHref === null) {
-        parts.push(node.text);
-        index += 1;
-        continue;
-      }
-      // Merge consecutive text nodes sharing the same link href before testing URL shape,
-      // so bolded/highlighted segments inside a single URL don't leave query/hash tails behind.
-      let runText = node.text;
-      index += 1;
-      while (index < p.content.length && getLinkMarkHref(p.content[index]) === linkHref) {
-        const nextNode = p.content[index];
-        if (nextNode.type === 'text') runText += nextNode.text;
-        index += 1;
-      }
-      if (!URL_LIKE_NODE_RE.test(runText.trim())) {
-        parts.push(runText);
-      }
-    }
-    return parts.join('');
-  };
-
-  const walkBlocks = (blocks: Array<Paragraph | BulletList | OrderedList>): void => {
-    for (const block of blocks) {
-      if (block.type === 'paragraph') {
-        lines.push(readParagraph(block));
-      } else {
-        for (const item of block.content) {
-          walkBlocks(item.content);
-        }
-      }
-    }
-  };
-
-  walkBlocks(doc.content.content);
-  return lines.join('\n');
-}
-
 function stripUrlsFromShareBody(raw: string): string {
   return raw
     .replace(/(?:https?:\/\/|www\.)[^\s<>"]+/giu, (match) => {
@@ -110,9 +41,9 @@ function stripUrlsFromShareBody(raw: string): string {
 }
 
 export function shareText(collection: Collection, showSource: boolean, showProjects: boolean) {
-  // Strip link-marked URL runs and full whitespace-delimited URLs before normalizing blanks so query/hash tokens never leak.
+  // Derive full visible paragraph text before stripping URLs so split marks or partial links are removed consistently.
   const rawBody = [
-    extractShareDocumentText(collection.document),
+    derivePlainText(collection.document),
     ...(collection.image_notes ?? []).map((note) => note.text),
   ]
     .filter(Boolean)

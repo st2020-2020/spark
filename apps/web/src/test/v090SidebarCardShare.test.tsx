@@ -953,6 +953,88 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     expect(extracted.body).not.toContain('apo-secret');
     expect(extracted.body).not.toContain("O'Brien");
     expect(extracted.body).not.toContain('https://');
+
+    // Mark-boundary invariance: prefix has link mark while trailing ?token=secret has no mark
+    const partialLinkDoc = {
+      ...docCollection,
+      id: 'col-partial-link-mark',
+      document: {
+        schema_version: 1,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '灵感摘录 ' },
+                {
+                  type: 'text',
+                  text: 'https://example.com/article',
+                  marks: [{ type: 'link', attrs: { href: 'https://example.com/article' } }],
+                },
+                { type: 'text', text: '?token=secret#frag 后半句保留' },
+              ],
+            },
+          ],
+        },
+      },
+    } as unknown as Collection;
+
+    const fullLinkDoc = {
+      ...partialLinkDoc,
+      id: 'col-full-link-mark',
+      document: {
+        schema_version: 1,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '灵感摘录 ' },
+                {
+                  type: 'text',
+                  text: 'https://example.com/article?token=secret#frag',
+                  marks: [
+                    { type: 'link', attrs: { href: 'https://example.com/article?token=secret#frag' } },
+                  ],
+                },
+                { type: 'text', text: ' 后半句保留' },
+              ],
+            },
+          ],
+        },
+      },
+    } as unknown as Collection;
+
+    const plainTextDoc = {
+      ...partialLinkDoc,
+      id: 'col-plain-url',
+      document: {
+        schema_version: 1,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: '灵感摘录 https://example.com/article?token=secret#frag 后半句保留',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    } as unknown as Collection;
+
+    const partialBody = shareCardLib.shareText(partialLinkDoc, false, false).body;
+    const fullBody = shareCardLib.shareText(fullLinkDoc, false, false).body;
+    const plainBody = shareCardLib.shareText(plainTextDoc, false, false).body;
+    expect(partialBody).toBe('灵感摘录 后半句保留');
+    expect(fullBody).toBe(partialBody);
+    expect(plainBody).toBe(partialBody);
   });
 
   it('prunes archived pinned projects from localStorage once full active list loads without flashing on remount', async () => {
