@@ -669,4 +669,195 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
       (globalThis as { ClipboardItem?: unknown }).ClipboardItem = origClipItem;
     }
   });
+
+  it('strips URLs containing CJK punctuation and link marks completely from share card body', () => {
+    const now = '2026-04-20T09:00:00Z';
+    const docCollection = {
+      id: 'col-cjk-doc',
+      owner_user_id: 'u-1',
+      kind: 'link',
+      title: '文档标题',
+      content_text:
+        '参考 https://example.com/条目（一）?token=secret#frag，详情见官网 https://example.org/路径、说明?auth=abc 。',
+      document: {
+        schema_version: 1,
+        content: {
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: '开头保留 ' },
+                {
+                  type: 'text',
+                  text: 'https://example.com/条目（一）?token=secret#frag',
+                  marks: [{ type: 'link', attrs: { href: 'https://example.com/条目（一）?token=secret#frag' } }],
+                },
+                { type: 'text', text: ' 结尾保留，裸链接 https://example.org/路径（二）?key=topsecret#part。' },
+              ],
+            },
+          ],
+        },
+      },
+      summary: '',
+      original_url: 'https://example.com/条目（一）?token=secret#frag',
+      source_host: 'example.com',
+      projects: [],
+      tags: [],
+      attachments: [],
+      created_at: now,
+      updated_at: now,
+      deleted_at: null,
+      read_at: now,
+      resource_version: 1,
+    } as unknown as Collection;
+
+    const extracted = shareCardLib.shareText(docCollection, false, false);
+    expect(extracted.body).toContain('开头保留');
+    expect(extracted.body).toContain('结尾保留');
+    expect(extracted.body).not.toContain('token=secret');
+    expect(extracted.body).not.toContain('key=topsecret');
+    expect(extracted.body).not.toContain('#frag');
+    expect(extracted.body).not.toContain('#part');
+    expect(extracted.body).not.toContain('https://');
+  });
+
+  it('persists pinned 51st project metadata across search clear and remount, and guards drawer Escape during IME', async () => {
+    const { api } = await admin();
+    for (let i = 1; i <= 51; i += 1) {
+      await api.createProject(
+        { name: i === 1 ? '第51号星标项目' : `批量项目-${String(i).padStart(2, '0')}`, description: '', focus_points: [] },
+        `proj-51-${i}`,
+      );
+    }
+
+    const ui = userEvent.setup();
+    const firstMount = mount(api, '/inbox');
+    await screen.findByText('批量项目-51');
+    expect(screen.queryByRole('link', { name: '第51号星标项目' })).not.toBeInTheDocument();
+
+    await ui.click(screen.getByRole('button', { name: '自定义常用项目' }));
+    const searchInput = await screen.findByPlaceholderText('搜索进行中项目…');
+    await ui.type(searchInput, '第51号星标项目');
+    const pinBtn = await screen.findByRole('button', { name: /第51号星标项目/ });
+    await ui.click(pinBtn);
+
+    // Close popover with Escape (clears search) -> pinned #51 must stay visible via cached meta
+    await ui.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByPlaceholderText('搜索进行中项目…')).not.toBeInTheDocument());
+    expect(screen.getByRole('link', { name: '第51号星标项目' })).toBeInTheDocument();
+
+    // Test drawer Escape IME guard while still mounted
+    await ui.click(screen.getByRole('button', { name: '更多导航' }));
+    expect(screen.getByRole('dialog', { name: '导航菜单' })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true, keyCode: 229 });
+    expect(screen.getByRole('dialog', { name: '导航菜单' })).toBeInTheDocument();
+    await ui.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '导航菜单' })).not.toBeInTheDocument());
+
+    firstMount.unmount();
+
+    // Remount -> cached metadata keeps #51 pinned in sidebar on initial page-1 load
+    mount(api, '/inbox');
+    await screen.findByRole('link', { name: '第51号星标项目' });
+  });
+
+  it('positions quote template footer strictly below rendered images', async () => {
+    const drawImageCalls: unknown[][] = [];
+    const fillTextCalls: unknown[][] = [];
+    const createdCanvases: HTMLCanvasElement[] = [];
+
+    const origCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation(((tagName: string, options?: ElementCreationOptions) => {
+      const el = origCreateElement(tagName, options);
+      if (tagName.toLowerCase() === 'canvas') {
+        const canvas = el as HTMLCanvasElement;
+        createdCanvases.push(canvas);
+        const mockCtx = {
+          font: '',
+          fillStyle: '',
+          strokeStyle: '',
+          lineWidth: 1,
+          lineJoin: 'round',
+          textAlign: 'left',
+          textBaseline: 'alphabetic',
+          globalAlpha: 1,
+          shadowColor: '',
+          shadowBlur: 0,
+          shadowOffsetX: 0,
+          shadowOffsetY: 0,
+          createLinearGradient: () => ({ addColorStop: () => undefined }),
+          createRadialGradient: () => ({ addColorStop: () => undefined }),
+          translate: () => undefined,
+          scale: () => undefined,
+          arc: () => undefined,
+          bezierCurveTo: () => undefined,
+          quadraticCurveTo: () => undefined,
+          closePath: () => undefined,
+          fillRect: () => undefined,
+          strokeRect: () => undefined,
+          fillText: (...args: unknown[]) => {
+            fillTextCalls.push(args);
+          },
+          measureText: (txt: string) => ({ width: txt.length * 18 }),
+          save: () => undefined,
+          restore: () => undefined,
+          beginPath: () => undefined,
+          roundRect: () => undefined,
+          clip: () => undefined,
+          moveTo: () => undefined,
+          lineTo: () => undefined,
+          stroke: () => undefined,
+          fill: () => undefined,
+          drawImage: (...args: unknown[]) => {
+            drawImageCalls.push(args);
+          },
+        } as unknown as CanvasRenderingContext2D;
+        canvas.getContext = (() => mockCtx) as unknown as typeof canvas.getContext;
+        canvas.toBlob = ((cb: BlobCallback) => {
+          cb(new Blob(['png'], { type: 'image/png' }));
+        }) as typeof canvas.toBlob;
+      }
+      return el;
+    }) as typeof document.createElement);
+
+    const mockImg = { width: 1200, height: 900 } as unknown as HTMLImageElement;
+    const blob = await shareCardLib.renderShareCard(
+      {
+        body: '第一行灵感\n第二行记录\n第三行补充',
+        date: '2026 年 4 月 20 日',
+        source: '',
+        projects: '测试项目',
+      },
+      [mockImg, mockImg, mockImg, mockImg],
+      'quote',
+    );
+
+    expect(blob).toBeInstanceOf(Blob);
+    expect(drawImageCalls).toHaveLength(4);
+    const maxImageBottom = Math.max(
+      ...drawImageCalls.map((args) => Number(args[6]) + Number(args[8])),
+    );
+    const footerDateCall = fillTextCalls.find((args) => args[0] === '2026 年 4 月 20 日');
+    expect(footerDateCall).toBeDefined();
+    const footerDateY = Number(footerDateCall?.[2]);
+    expect(footerDateY).toBeGreaterThan(maxImageBottom);
+    expect(createdCanvases[0]?.height).toBeGreaterThan(footerDateY);
+  });
+
+  it('does not show empty project creation prompt when paused projects query fails', async () => {
+    const { api } = await admin();
+    const origListProjects = api.listProjects.bind(api);
+    vi.spyOn(api, 'listProjects').mockImplementation(async (params) => {
+      if (params?.state === 'paused') {
+        throw new Error('network paused failure');
+      }
+      return origListProjects(params);
+    });
+
+    mount(api, '/projects');
+    expect(await screen.findByText('当前没有进行中的项目')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '查看已归档' })).toBeInTheDocument();
+    expect(screen.queryByText('还没有项目')).not.toBeInTheDocument();
+  });
 });

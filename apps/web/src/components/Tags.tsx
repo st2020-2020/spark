@@ -9,7 +9,7 @@ import { isApiErrorCode } from '../api/errors';
 import {
   DEFAULT_SIDEBAR_ITEMS,
   resolveSidebarTags,
-  togglePinnedId,
+  togglePinnedWithMeta,
 } from '../lib/sidebarPrefs';
 import { SidebarCustomizePopover } from './SidebarCustomizePopover';
 import { ErrorBanner } from './StateBlocks';
@@ -27,12 +27,14 @@ function useTags(q: string, enabled: boolean) {
 
 export function TagNavigation({
   pinnedTagIds,
+  pinnedTagMeta,
   onUpdatePinnedTags,
   onOpenAllTags,
   onNavigate,
 }: {
   pinnedTagIds: string[] | null;
-  onUpdatePinnedTags: (next: string[] | null) => void;
+  pinnedTagMeta?: Record<string, string>;
+  onUpdatePinnedTags: (nextIds: string[] | null, nextMeta: Record<string, string>) => void;
   onOpenAllTags: () => void;
   onNavigate?: () => void;
 }) {
@@ -70,11 +72,37 @@ export function TagNavigation({
     return [...pages, ...searched.filter((t) => !seen.has(t.id))];
   }, [tagsQuery.data, remoteSearchQuery.data]);
 
+  const allTagsLoaded = tagsQuery.isSuccess && !tagsQuery.hasNextPage;
   const { visible, isCustomized, validPinnedIds } = useMemo(
-    () => resolveSidebarTags(allTags, pinnedTagIds, DEFAULT_SIDEBAR_ITEMS),
-    [allTags, pinnedTagIds],
+    () =>
+      resolveSidebarTags(allTags, pinnedTagIds, DEFAULT_SIDEBAR_ITEMS, {
+        meta: pinnedTagMeta,
+        allTagsLoaded,
+      }),
+    [allTags, pinnedTagIds, pinnedTagMeta, allTagsLoaded],
   );
   const validPinnedSet = useMemo(() => new Set(validPinnedIds), [validPinnedIds]);
+  const tagMap = useMemo(() => new Map(allTags.map((t) => [t.id, t])), [allTags]);
+  const popoverTagItems = useMemo(() => {
+    const base = allTags.map((t) => ({
+      id: t.id,
+      label: `#${t.name}`,
+      count: t.collection_count,
+      pinned: validPinnedSet.has(t.id),
+    }));
+    const seen = new Set(allTags.map((t) => t.id));
+    for (const id of validPinnedIds) {
+      if (!seen.has(id) && pinnedTagMeta?.[id]) {
+        base.push({
+          id,
+          label: `#${pinnedTagMeta[id]}`,
+          count: 0,
+          pinned: true,
+        });
+      }
+    }
+    return base;
+  }, [allTags, validPinnedIds, validPinnedSet, pinnedTagMeta]);
 
   return (
     <div className="sp-sidebar-section sp-tag-nav">
@@ -112,21 +140,18 @@ export function TagNavigation({
         searchLabel="搜索标签"
         searchPlaceholder="搜索标签…"
         emptyText="没有匹配的标签"
-        items={allTags.map((t) => ({
-          id: t.id,
-          label: `#${t.name}`,
-          count: t.collection_count,
-          pinned: validPinnedSet.has(t.id),
-        }))}
+        items={popoverTagItems}
         isCustomized={isCustomized}
         hasMore={Boolean(tagsQuery.hasNextPage)}
         isLoadingMore={tagsQuery.isFetchingNextPage}
         onLoadMore={() => void tagsQuery.fetchNextPage()}
         onQueryChange={setPopoverSearch}
-        onTogglePin={(id) =>
-          onUpdatePinnedTags(togglePinnedId(pinnedTagIds, id))
-        }
-        onReset={() => onUpdatePinnedTags(null)}
+        onTogglePin={(id) => {
+          const name = tagMap.get(id)?.name ?? pinnedTagMeta?.[id] ?? '';
+          const next = togglePinnedWithMeta(pinnedTagIds, pinnedTagMeta, id, name);
+          onUpdatePinnedTags(next.ids, next.meta);
+        }}
+        onReset={() => onUpdatePinnedTags(null, {})}
         onClose={() => setCustomizeOpen(false)}
         anchorRef={customizeBtnRef}
       />

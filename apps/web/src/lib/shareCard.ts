@@ -1,5 +1,10 @@
-import type { Collection } from '../api/types';
-import { derivePlainText } from './document';
+import type {
+  BulletList,
+  Collection,
+  OrderedList,
+  Paragraph,
+  SparkDocument,
+} from '../api/types';
 
 export type ShareCardTemplate = 'paper' | 'midnight' | 'gallery' | 'quote';
 
@@ -23,15 +28,67 @@ export function selectDefaultShareTemplate(body: string, imageCount: number): Sh
   return 'paper';
 }
 
-export function shareText(collection: Collection, showSource: boolean, showProjects: boolean) {
-  // Strip all full URLs (including query strings & fragments) first so partial original_url matches never leave ?token=... behind.
-  let body = [derivePlainText(collection.document), ...(collection.image_notes ?? []).map(note => note.text)].filter(Boolean).join('\n\n');
-  body = body
-    .replace(/(?:https?:\/\/|www\.)[^\s<>\u3000，。！？、）】」』]+/giu, '')
+const URL_LIKE_NODE_RE = /^(?:https?:\/\/|www\.)\S+$/iu;
+
+function extractShareDocumentText(doc: SparkDocument): string {
+  const lines: string[] = [];
+
+  const readParagraph = (p: Paragraph): string => {
+    if (!p.content) return '';
+    return p.content
+      .map((node) => {
+        if (node.type !== 'text') return '\n';
+        const hasLinkMark = node.marks?.some((m) => m.type === 'link');
+        if (hasLinkMark && URL_LIKE_NODE_RE.test(node.text.trim())) {
+          return '';
+        }
+        return node.text;
+      })
+      .join('');
+  };
+
+  const walkBlocks = (blocks: Array<Paragraph | BulletList | OrderedList>): void => {
+    for (const block of blocks) {
+      if (block.type === 'paragraph') {
+        lines.push(readParagraph(block));
+      } else {
+        for (const item of block.content) {
+          walkBlocks(item.content);
+        }
+      }
+    }
+  };
+
+  walkBlocks(doc.content.content);
+  return lines.join('\n');
+}
+
+function stripUrlsFromShareBody(raw: string): string {
+  return raw
+    .replace(/(?:https?:\/\/|www\.)[^\s<>'"]+/giu, (match) => {
+      // Preserve trailing sentence-ending punctuation only when no query/fragment exists
+      // and never break early inside URLs containing CJK brackets/commas.
+      if (!match.includes('?') && !match.includes('#')) {
+        const trailing = match.match(/([，。！？；：])$/u);
+        if (trailing) return trailing[1];
+      }
+      return '';
+    })
     .replace(/[ \t]+\n/g, '\n')
     .replace(/[ \t]{2,}/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+export function shareText(collection: Collection, showSource: boolean, showProjects: boolean) {
+  // Strip link-marked URL runs and full whitespace-delimited URLs before normalizing blanks so query/hash tokens never leak.
+  const rawBody = [
+    extractShareDocumentText(collection.document),
+    ...(collection.image_notes ?? []).map((note) => note.text),
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  const body = stripUrlsFromShareBody(rawBody);
   let source = '';
   if (showSource && collection.original_url) {
     try {
@@ -372,19 +429,30 @@ export async function renderShareCard(
     const lineHeight = isShort ? 72 : 60;
     ctx.font = `500 ${fontSize}px ${SERIF_FONT}`;
     const lines = wrapTextLines(ctx, content.body, contentWidth - 40, 10);
-    const bodyHeight = Math.max(120, lines.length * lineHeight);
+
+    const textStartY = 232;
+    const textBottomY =
+      lines.length > 0 ? textStartY + (lines.length - 1) * lineHeight + 24 : 196;
 
     const quoteCols = images.length <= 3 ? Math.max(1, images.length) : 3;
     const quoteThumbGap = 16;
     const quoteThumbSize = images.length <= 3 ? 152 : 136;
     const quoteRows = images.length > 0 ? Math.ceil(images.length / quoteCols) : 0;
-    const previewImgHeight = quoteRows > 0
-      ? quoteRows * quoteThumbSize + (quoteRows - 1) * quoteThumbGap
-      : 0;
+    const imgStartY = textBottomY + 28;
+    const previewImgHeight =
+      quoteRows > 0 ? quoteRows * quoteThumbSize + (quoteRows - 1) * quoteThumbGap : 0;
+    const contentBottomY =
+      images.length > 0 ? imgStartY + previewImgHeight : textBottomY;
 
-    const topSpace = 170;
-    const bottomFooterHeight = 140 + metaHeight;
-    canvas.height = Math.max(760, topSpace + bodyHeight + (previewImgHeight ? previewImgHeight + 48 : 0) + bottomFooterHeight);
+    const footerContentHeight =
+      42 + (content.projects ? 36 : 0) + (content.source ? 36 : 0) + 32 + 38 + 56;
+    const minLineY = 760 - footerContentHeight;
+    const lineY = Math.max(contentBottomY + 44, minLineY);
+    let calcMetaY = lineY + 42;
+    if (content.projects) calcMetaY += 36;
+    if (content.source) calcMetaY += 36;
+    const badgeY = calcMetaY + 32;
+    canvas.height = badgeY + 38 + 56;
 
     const grad = ctx.createRadialGradient(
       CANVAS_WIDTH * 0.5,
@@ -416,14 +484,13 @@ export async function renderShareCard(
     // Centered body
     ctx.fillStyle = '#F5F1E8';
     ctx.font = `500 ${fontSize}px ${SERIF_FONT}`;
-    let cursorY = 232;
+    let cursorY = textStartY;
     for (const line of lines) {
       ctx.fillText(line, CANVAS_WIDTH / 2, cursorY);
       cursorY += lineHeight;
     }
 
     if (images.length > 0) {
-      const startY = cursorY + 22;
       images.forEach((img, idx) => {
         const row = Math.floor(idx / quoteCols);
         const col = idx % quoteCols;
@@ -434,7 +501,7 @@ export async function renderShareCard(
           ctx,
           img,
           startX + col * (quoteThumbSize + quoteThumbGap),
-          startY + row * (quoteThumbSize + quoteThumbGap),
+          imgStartY + row * (quoteThumbSize + quoteThumbGap),
           quoteThumbSize,
           quoteThumbSize,
           16,
@@ -442,8 +509,7 @@ export async function renderShareCard(
       });
     }
 
-    // Centered hairline & footer
-    const lineY = canvas.height - 156 - metaHeight;
+    // Centered hairline & footer positioned strictly below contentBottomY
     ctx.strokeStyle = 'rgba(206, 238, 223, 0.18)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -465,7 +531,7 @@ export async function renderShareCard(
     }
 
     ctx.textAlign = 'left';
-    drawSparkJarBadge(ctx, CANVAS_WIDTH / 2 - 66, canvas.height - 102, '#B6E5D0', '#FFE4B8', '#E9F5EF');
+    drawSparkJarBadge(ctx, CANVAS_WIDTH / 2 - 66, badgeY, '#B6E5D0', '#FFE4B8', '#E9F5EF');
 
     return new Promise((resolve, reject) =>
       canvas.toBlob(

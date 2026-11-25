@@ -37,7 +37,7 @@ import {
   loadSidebarPrefs,
   resolveSidebarProjects,
   saveSidebarPrefs,
-  togglePinnedId,
+  togglePinnedWithMeta,
   type SidebarPrefs,
 } from '../lib/sidebarPrefs';
 import { BrandLink, SparkGlyph } from './Brand';
@@ -198,10 +198,11 @@ export function AppShell({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.stopPropagation();
-        setDrawerOpen(false);
-      }
+      if (event.key !== 'Escape') return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (document.querySelector('.sp-sidebar-customize-popover')) return;
+      event.stopPropagation();
+      setDrawerOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => {
@@ -266,18 +267,46 @@ export function AppShell({
     { to: '/collections', label: '全部收藏', icon: Search },
   ];
 
+  const allActiveLoaded = activeProjectsQuery.isSuccess && !activeProjectsQuery.hasNextPage;
   const {
     visible: sidebarProjects,
     isCustomized: projectsCustomized,
     validPinnedIds: validPinnedProjectIds,
   } = useMemo(
-    () => resolveSidebarProjects(activeItems, sidebarPrefs.pinnedProjectIds, DEFAULT_SIDEBAR_ITEMS),
-    [activeItems, sidebarPrefs.pinnedProjectIds],
+    () =>
+      resolveSidebarProjects(activeItems, sidebarPrefs.pinnedProjectIds, DEFAULT_SIDEBAR_ITEMS, {
+        meta: sidebarPrefs.pinnedProjectMeta,
+        allActiveLoaded,
+      }),
+    [activeItems, sidebarPrefs.pinnedProjectIds, sidebarPrefs.pinnedProjectMeta, allActiveLoaded],
   );
   const validPinnedProjectSet = useMemo(
     () => new Set(validPinnedProjectIds),
     [validPinnedProjectIds],
   );
+  const projectMap = useMemo(() => new Map(activeItems.map((p) => [p.id, p])), [activeItems]);
+  const popoverProjectItems = useMemo(() => {
+    const base = activeItems.map((p) => ({
+      id: p.id,
+      label: p.name,
+      count: p.collection_count,
+      pinned: validPinnedProjectSet.has(p.id),
+      accentClass: projectToneClass(p.id),
+    }));
+    const seen = new Set(activeItems.map((p) => p.id));
+    for (const id of validPinnedProjectIds) {
+      if (!seen.has(id) && sidebarPrefs.pinnedProjectMeta?.[id]) {
+        base.push({
+          id,
+          label: sidebarPrefs.pinnedProjectMeta[id],
+          count: 0,
+          pinned: true,
+          accentClass: projectToneClass(id),
+        });
+      }
+    }
+    return base;
+  }, [activeItems, validPinnedProjectIds, validPinnedProjectSet, sidebarPrefs.pinnedProjectMeta]);
   const showAllProjectsLink =
     !hasTrulyZeroProjects &&
     (activeItems.length > sidebarProjects.length ||
@@ -437,24 +466,29 @@ export function AppShell({
             searchLabel="搜索常用项目"
             searchPlaceholder="搜索进行中项目…"
             emptyText="没有匹配的项目"
-            items={activeItems.map((p) => ({
-              id: p.id,
-              label: p.name,
-              count: p.collection_count,
-              pinned: validPinnedProjectSet.has(p.id),
-              accentClass: projectToneClass(p.id),
-            }))}
+            items={popoverProjectItems}
             isCustomized={projectsCustomized}
             hasMore={Boolean(activeProjectsQuery.hasNextPage)}
             isLoadingMore={activeProjectsQuery.isFetchingNextPage}
             onLoadMore={() => void activeProjectsQuery.fetchNextPage()}
             onQueryChange={setProjectPopoverSearch}
-            onTogglePin={(id) =>
+            onTogglePin={(id) => {
+              const name =
+                projectMap.get(id)?.name ?? sidebarPrefs.pinnedProjectMeta?.[id] ?? '';
+              const next = togglePinnedWithMeta(
+                sidebarPrefs.pinnedProjectIds,
+                sidebarPrefs.pinnedProjectMeta,
+                id,
+                name,
+              );
               updateSidebarPrefs({
-                pinnedProjectIds: togglePinnedId(sidebarPrefs.pinnedProjectIds, id),
-              })
+                pinnedProjectIds: next.ids,
+                pinnedProjectMeta: next.meta,
+              });
+            }}
+            onReset={() =>
+              updateSidebarPrefs({ pinnedProjectIds: null, pinnedProjectMeta: {} })
             }
-            onReset={() => updateSidebarPrefs({ pinnedProjectIds: null })}
             onClose={() => setProjectCustomizeOpen(false)}
             anchorRef={customizeAnchorRef}
           />
@@ -497,7 +531,10 @@ export function AppShell({
 
         <TagNavigation
           pinnedTagIds={sidebarPrefs.pinnedTagIds}
-          onUpdatePinnedTags={(next) => updateSidebarPrefs({ pinnedTagIds: next })}
+          pinnedTagMeta={sidebarPrefs.pinnedTagMeta}
+          onUpdatePinnedTags={(nextIds, nextMeta) =>
+            updateSidebarPrefs({ pinnedTagIds: nextIds, pinnedTagMeta: nextMeta })
+          }
           onOpenAllTags={() => openCommandPalette('#')}
           onNavigate={compactMobile ? () => setDrawerOpen(false) : undefined}
         />

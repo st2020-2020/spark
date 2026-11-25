@@ -221,14 +221,14 @@ export function ProjectsPage() {
           title={
             effectiveTab === 'archived'
               ? '没有已归档的项目'
-              : archivedItems.length > 0
+              : !archivedConfirmedEmpty
                 ? '当前没有进行中的项目'
                 : '还没有项目'
           }
           description={
             effectiveTab === 'archived'
               ? '暂停或结束的项目会收纳在这里，历史收藏仍会保留。'
-              : archivedItems.length > 0
+              : !archivedConfirmedEmpty
                 ? '你可以在「已归档」中查看历史项目，或新建一个进行中的项目。'
                 : '先建立一个你正在持续关注的事情，也可以在收件箱直接开始记录。'
           }
@@ -238,7 +238,7 @@ export function ProjectsPage() {
                 <Plus size={16} strokeWidth={2} aria-hidden="true" />
                 <span>新建项目</span>
               </button>
-              {effectiveTab === 'active' && archivedItems.length > 0 && (
+              {effectiveTab === 'active' && !archivedConfirmedEmpty && (
                 <button type="button" className="sp-btn" onClick={() => setViewTab('archived')}>
                   查看已归档
                 </button>
