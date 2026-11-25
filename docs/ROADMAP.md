@@ -4,6 +4,12 @@
 
 2026-11-19 生产 Worker 重启恢复修复已通过 OrbStack 隔离演练。使用生产 Compose、独立 Docker 守护进程和空测试库，第一次重启后 PostgreSQL、API 和 Worker 均恢复健康。主动停止 Worker 后再次重启，PostgreSQL 和 API 恢复健康，Worker 保持停止；显式启动后恢复健康。
 
+## Android v0.3 交互极简、文案与统一动效打磨（2026-11-24，独立分支候选）
+
+在 `feat/android-v0.3-foundation`（已基于 `origin/main` `3534e62` 变基，未合入 `main`）完成 Android 端交互极简、文案与统一动效体系升级。新增 `SparkMotion.kt`（对齐 Web `tokens.css` 的 `100 / 160 / 220 / 300ms` 与 `EaseOut / EaseSpring / EaseSheet / EaseExit`）、原生转场资源及系统 `ANIMATOR_DURATION_SCALE` 实时监听；补齐悬浮卡片交接锁、代次绑定退出状态、账号切换零淡出残留、离线层触摸立即放行与绘制阶段按压/导入脉冲。
+
+19 组共 97 项 Android JVM 单元测试全部通过，`prodDebug`、`devDebug` 与 `prodRelease`（含 R8 压缩）三种 APK 构建通过；变基后 Web 端类型检查、21 个文件 210 项测试与生产构建通过。独立只读复核经 5 轮排查后给出 `APPROVE`。本机 `device_open` 因宿主缺少带 `libx264` 编码器的 `ffmpeg` 未能打开模拟器，真机交互、明暗主题实拍与帧率验收留待实机安装 `app-prod-debug.apk` 后确认。
+
 ## v0.8.1 网页收藏恢复整理（2026-11-22，隔离验收）
 
 在 v0.8.0 的真实浏览器与隔离 PostgreSQL/River 环境复现：供应商替身明确返回长度终止后，页面显示整理失败。点击通用重试得到 202，仍指向原任务。保留该合成样本原地升级 v19→v20，原结算与任务均保留，升级未触发模型。

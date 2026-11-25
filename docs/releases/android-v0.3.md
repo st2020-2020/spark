@@ -3,11 +3,11 @@
 | 项 | 内容 |
 | --- | --- |
 | 版本 | Android `0.3.0`（`versionCode = 3`，覆盖升级自 `0.1.0` / `0.2.0`） |
-| 状态 | Batch 1–3 已通过总控评审，Batch 4 已通过本地验证，待总控评审 |
+| 状态 | Batch 1–4、审查修复与交互/文案/动效打磨均已完成并获独立复核 `APPROVE`（独立分支 `feat/android-v0.3-foundation`，待真机验收） |
 | 上游架构设计 | [docs/design/MOBILE.md](../design/MOBILE.md)（v1.1，唯一架构事实来源） |
 | 关联决策 | [D-0018](../DECISIONS.md#d-0018-移动端采用统一契约与双原生轻量工程)、[D-0019](../DECISIONS.md#d-0019-移动工作区只加载同源-get-主文档) |
 | 关联契约与规范 | [AGENTS.md](../../AGENTS.md)、[CONTRIBUTING.md](../../CONTRIBUTING.md)、[OpenAPI](../../contracts/openapi.json)、[document.schema.json](../../contracts/document.schema.json)、[API.md](../design/API.md)、[WEB-VISUAL.md](../design/WEB-VISUAL.md)、[tokens.css](../../apps/web/src/styles/tokens.css) |
-| 更新日期 | 2026-11-22 |
+| 更新日期 | 2026-11-24 |
 
 本文面向接手开发 `apps/android/` 重构与 `apps/web/` 极薄桥接适配的开发者或 AI Agent，提供可直接落地执行的工程结构、数据库迁移、协议细节、状态机边界、分批任务清单与验证标准。架构选型理由与 iOS 远期规划见 [MOBILE.md](../design/MOBILE.md)，本文不重复论述。
 
