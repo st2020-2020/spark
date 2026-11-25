@@ -1,13 +1,14 @@
 import { MoreProjectChoices, useProjectChoices } from '../components/ProjectChoices';
 import { contentTypeLabels } from '../lib/format';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useFlipList } from '../lib/motion';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { SlidersHorizontal, X } from 'lucide-react';
 import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
 import { PageHeader } from '../components/PageHeader';
-import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
+import { EmptyState, ErrorBanner, LoadMore, LoadingState } from '../components/StateBlocks';
 import { useApi } from '../context/ApiContext';
 
 export function CollectionsPage() {
@@ -107,6 +108,8 @@ export function CollectionsPage() {
   const activeProjectName = projects.find((p) => p.id === projectId)?.name;
   const hasFilters = Boolean(debouncedQ || tagId || projectId || typeFilter || readFilter);
   const hits = listOrSearchQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useFlipList(listRef, hits.map((hit) => hit.collection.id).join('|'));
 
   return (
     <div>
@@ -236,7 +239,7 @@ export function CollectionsPage() {
       {debouncedQ && !listOrSearchQuery.isLoading && !listOrSearchQuery.isError && (
         <div className="sp-result-summary" role="status">
           {listOrSearchQuery.hasNextPage
-            ? `搜索「${debouncedQ}」结果：已加载 ${hits.length} 条（可继续加载更多）`
+            ? `搜索「${debouncedQ}」结果：${hits.length} 条以上`
             : `搜索「${debouncedQ}」结果：共 ${hits.length} 条`}
         </div>
       )}
@@ -259,24 +262,20 @@ export function CollectionsPage() {
               : '去收件箱记下你的第一条资料。'
           }
           action={
-            <>
-              {hasFilters && (
-                <button type="button" className="sp-btn" onClick={clearAllFilters}>
-                  清除筛选
-                </button>
-              )}
-              <Link to="/unclassified" className="sp-btn">
-                查看待归类
-              </Link>
+            hasFilters ? (
+              <button type="button" className="sp-btn sp-btn--primary" onClick={clearAllFilters}>
+                清除筛选
+              </button>
+            ) : (
               <Link to="/inbox" className="sp-btn sp-btn--primary">
                 去收件箱
               </Link>
-            </>
+            )
           }
         />
       )}
 
-      <div className="sp-note-list">
+      <div className="sp-note-list" ref={listRef}>
         {hits.map((hit) => (
           <CollectionCard
             key={hit.collection.id}
@@ -287,18 +286,12 @@ export function CollectionsPage() {
         ))}
       </div>
 
-      {listOrSearchQuery.hasNextPage && (
-        <div className="sp-load-more">
-          <button
-            type="button"
-            className="sp-btn"
-            disabled={listOrSearchQuery.isFetchingNextPage}
-            onClick={() => void listOrSearchQuery.fetchNextPage()}
-          >
-            {listOrSearchQuery.isFetchingNextPage ? '加载中…' : '加载更多'}
-          </button>
-        </div>
-      )}
+      <LoadMore
+        hasNextPage={listOrSearchQuery.hasNextPage}
+        isFetching={listOrSearchQuery.isFetchingNextPage}
+        isError={listOrSearchQuery.isFetchNextPageError}
+        onLoad={() => void listOrSearchQuery.fetchNextPage()}
+      />
     </div>
   );
 }

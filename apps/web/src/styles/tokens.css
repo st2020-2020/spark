@@ -76,14 +76,27 @@
   --sp-text-title: 26px;
   --sp-leading-body: 1.75;
 
+  /*
+   * Motion language (the only place timing is defined; components never invent curves).
+   *   ease-out    things arriving or changing state: fast start, long gentle settle
+   *   ease-move   things travelling on screen (list reflow, sliding indicators, page push)
+   *   ease-spring popovers and toasts that should land with a barely-there settle (~2%)
+   *   ease-sheet  large surfaces following a finger (sheets, drawers)
+   *   ease-exit   things leaving: accelerate away, always shorter than their entrance
+   * Durations scale with travel distance; repeated actions use the shorter tokens.
+   *   instant  press feedback          fast   colour, hover, icon swaps, tiny moves
+   *   normal   popovers, reflow, pages sheet   large surfaces
+   */
   --sp-ease-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --sp-ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.15);
+  --sp-ease-move: cubic-bezier(0.32, 0.72, 0.24, 1);
+  --sp-ease-spring: cubic-bezier(0.3, 1.18, 0.5, 1);
   --sp-ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
   --sp-ease-exit: cubic-bezier(0.4, 0, 1, 1);
   --sp-dur-instant: 100ms;
   --sp-dur-fast: 160ms;
-  --sp-dur-normal: 220ms;
-  --sp-dur-sheet: 300ms;
+  --sp-dur-normal: 240ms;
+  --sp-dur-sheet: 320ms;
+  --sp-press-scale: 0.97;
 
   --sp-topbar-h: 56px;
   --sp-tabbar-h: 62px;

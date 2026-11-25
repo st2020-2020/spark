@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useSegmentIndicator } from '../lib/motion';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Folder, Plus, X } from 'lucide-react';
@@ -97,6 +98,8 @@ export function ProjectsPage() {
   const showFilterTabs = !archivedConfirmedEmpty;
   const effectiveTab: ProjectViewTab = archivedConfirmedEmpty ? 'active' : viewTab;
   const items = effectiveTab === 'active' ? activeItems : archivedItems;
+  const statusTabsRef = useRef<HTMLDivElement | null>(null);
+  useSegmentIndicator(statusTabsRef, `${effectiveTab}:${showFilterTabs}`);
   const isLoading =
     effectiveTab === 'active'
       ? activeProjectsQuery.isLoading
@@ -182,7 +185,7 @@ export function ProjectsPage() {
       />
 
       {showFilterTabs && (
-        <div className="sp-filter-tabs" role="tablist" aria-label="项目状态筛选">
+        <div className="sp-filter-tabs" role="tablist" aria-label="项目状态筛选" ref={statusTabsRef}>
           {([
             ['active', '进行中'],
             ['archived', '已归档'],

@@ -56,9 +56,10 @@ export function formatRemainingTrashDays(purgeAfter?: string): string {
 }
 
 export function organizationStatusLabel(status: string): string {
+  // Waiting in the queue and actively running look the same to the reader: still being filed.
   const labels: Record<string, string> = {
-    queued: '整理排队中',
-    running: '正在整理',
+    queued: '整理中',
+    running: '整理中',
     succeeded: '已整理',
     partial: '部分整理',
     failed: '整理失败',

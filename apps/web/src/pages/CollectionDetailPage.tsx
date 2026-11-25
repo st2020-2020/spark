@@ -7,12 +7,14 @@ import {
   Ban,
   Check,
   History,
+  ImageDown,
   ImagePlus,
   Loader2,
   Mail,
   MailOpen,
-  PenLine,
+  MessageSquarePlus,
   Pencil,
+  Plus,
   RefreshCw,
   RotateCcw,
   Sparkles,
@@ -1454,29 +1456,14 @@ export function CollectionDetailPage() {
 
         {!isInTrash && (
           <div className="sp-detail-actions">
-            {!isEditing && <button className="sp-btn--quiet" onClick={() => setSharing(true)}>生成卡片</button>}
-            <button
-              type="button"
-              className="sp-btn--quiet"
-              onClick={() => setRead({ read: !displayedRead })}
-              disabled={readMutation.isPending && !readMutation.variables.automatic}
-            >
-              {displayedRead ? (
-                <Mail size={16} strokeWidth={2} aria-hidden="true" />
-              ) : (
-                <MailOpen size={16} strokeWidth={2} aria-hidden="true" />
-              )}
-              <span className="sp-collapse-label">
-                {displayedRead ? '标为未读' : '标为已读'}
-              </span>
-            </button>
+            {/* Most-used first; the destructive action sits apart at the far end. */}
             {!isEditing && (
               <button
                 type="button"
                 className="sp-btn--quiet"
                 onClick={() => openFollowUp(toFollowUpSourceFromCollection(collection))}
               >
-                <PenLine size={16} strokeWidth={2} aria-hidden="true" />
+                <MessageSquarePlus size={16} strokeWidth={2} aria-hidden="true" />
                 <span className="sp-collapse-label">续写</span>
               </button>
             )}
@@ -1487,9 +1474,33 @@ export function CollectionDetailPage() {
               </button>
             )}
             {!isEditing && (
+              <button type="button" className="sp-btn--quiet" onClick={() => setSharing(true)}>
+                <ImageDown size={16} strokeWidth={2} aria-hidden="true" />
+                <span className="sp-collapse-label">生成卡片</span>
+              </button>
+            )}
+            <button
+              type="button"
+              className="sp-btn--quiet"
+              onClick={() => setRead({ read: !displayedRead })}
+              disabled={readMutation.isPending && !readMutation.variables.automatic}
+            >
+              <span key={displayedRead ? 'read' : 'unread'} className="sp-icon-swap">
+                {displayedRead ? (
+                  <Mail size={16} strokeWidth={2} aria-hidden="true" />
+                ) : (
+                  <MailOpen size={16} strokeWidth={2} aria-hidden="true" />
+                )}
+              </span>
+              <span className="sp-collapse-label">
+                {displayedRead ? '标为未读' : '标为已读'}
+              </span>
+            </button>
+            {!isEditing && <span className="sp-detail-actions-gap" aria-hidden="true" />}
+            {!isEditing && (
               <button
                 type="button"
-                className="sp-btn--quiet sp-btn--danger-text"
+                className="sp-btn--quiet sp-detail-trash"
                 title="移入回收站"
                 onClick={() => {
                   if (trashMutation.isPending) return;
@@ -1852,19 +1863,27 @@ export function CollectionDetailPage() {
         )}
 
         {/* Intent */}
-        {!isEditing && (
+        {!isEditing && collection.intent && (
           <section className="sp-section">
             <div className="sp-section-head">
               <h2 className="sp-section-title">用途</h2>
             </div>
-            <p
-              className={`sp-intent-text sp-break-anywhere ${
-                collection.intent ? '' : 'sp-intent-text--empty'
-              }`}
-            >
-              {collection.intent || '尚未填写'}
-            </p>
+            <p className="sp-intent-text sp-break-anywhere">{collection.intent}</p>
           </section>
+        )}
+        {/* No empty "尚未填写" block: offer the one useful action instead. */}
+        {!isEditing && !isInTrash && !collection.intent && (
+          <button
+            type="button"
+            className="sp-btn--quiet sp-btn--sm sp-intent-add"
+            onClick={() => {
+              startEditing(collection);
+              requestAnimationFrame(() => document.getElementById('edit-intent')?.focus());
+            }}
+          >
+            <Plus size={14} strokeWidth={2} aria-hidden="true" />
+            <span>补一句用途</span>
+          </button>
         )}
 
         <CollectionTags key={collection.id} collection={collection} />

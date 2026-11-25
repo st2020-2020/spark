@@ -196,9 +196,9 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     await user.click(screen.getByRole('button', { name: `归入项目 ${project.name}` }));
     expect(await screen.findByText('已归入项目')).toBeInTheDocument();
 
-    // Empty unclassified list demotes primary 开始整理 button
+    // With nothing left to file, 开始整理 has no job and steps out of the header
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: '开始整理' })).not.toHaveClass('sp-btn--primary');
+      expect(screen.queryByRole('link', { name: '开始整理' })).not.toBeInTheDocument();
     });
 
     // Click undo in toast to restore collection to unclassified

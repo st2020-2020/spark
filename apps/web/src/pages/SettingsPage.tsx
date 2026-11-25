@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useSegmentIndicator } from '../lib/motion';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Monitor, Moon, Sun } from 'lucide-react';
 import { ApiError, getFriendlyErrorMessage } from '../api/errors';
@@ -32,6 +33,8 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
 
   const themePref = user?.theme ?? 'system';
+  const themeSegRef = useRef<HTMLDivElement | null>(null);
+  useSegmentIndicator(themeSegRef, themePref);
   const palette = user?.palette ?? 'mint';
   function chooseAppearance(patch: { palette?: PaletteId; theme?: ThemePref }) {
     void saveAppearance(patch).catch(error => pushToast({ message: getFriendlyErrorMessage(error), tone: 'error' }));
@@ -147,7 +150,7 @@ export function SettingsPage() {
           </div>
 
           <h3 className="sp-card-subtitle">明暗模式</h3>
-          <div className="sp-segmented" role="group" aria-label="选择明暗模式">
+          <div className="sp-segmented" role="group" aria-label="选择明暗模式" ref={themeSegRef}>
             {([
               { id: 'system', label: '跟随系统', Icon: Monitor },
               { id: 'light', label: '浅色', Icon: Sun },

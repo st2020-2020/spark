@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useSegmentIndicator } from '../lib/motion';
 import { Download } from 'lucide-react';
 import { ApiError } from '../api/errors';
 import { useApi } from '../context/ApiContext';
@@ -10,6 +11,8 @@ type DownloadFile = { href: string; name: string };
 export function DataExport() {
   const api = useApi();
   const [format, setFormat] = useState<ExportFormat>('markdown');
+  const formatSegRef = useRef<HTMLDivElement | null>(null);
+  useSegmentIndicator(formatSegRef, format);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [retryAt, setRetryAt] = useState<number | null>(null);
@@ -76,7 +79,7 @@ export function DataExport() {
       <div className="sp-stack">
         <p className="sp-help">将你的项目和未删除的收藏下载为 ZIP 文件，每十分钟可导出一次。</p>
         <div className="sp-setting-row">
-          <div className="sp-segmented" role="group" aria-label="导出格式">
+          <div className="sp-segmented" role="group" aria-label="导出格式" ref={formatSegRef}>
             {(['markdown', 'json'] as const).map((value) => (
               <button type="button" className="sp-segmented-btn" key={value} aria-pressed={format === value}
                 disabled={pending} onClick={() => {

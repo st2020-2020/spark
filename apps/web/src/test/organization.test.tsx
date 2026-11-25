@@ -440,12 +440,12 @@ describe('Platform AI organization & UI states', () => {
       collection_id: col.id, status, has_suggestion: false,
     }));
     emit('queued');
-    await screen.findByText('整理排队中');
+    await screen.findAllByText('整理中');
     vi.spyOn(api, 'getCollection').mockResolvedValue({ ...col, display_title: '整理后的标题',
       organization: { ...col.organization, status: 'succeeded' } });
     emit('succeeded');
     await screen.findByRole('article', { name: '整理后的标题' });
-    expect(screen.queryByText('整理排队中')).toBeNull();
+    expect(screen.queryByText('整理中')).toBeNull();
     expect(screen.getByText('保留这段摘录')).toBeVisible();
     expect(search).toHaveBeenCalledTimes(1);
   });

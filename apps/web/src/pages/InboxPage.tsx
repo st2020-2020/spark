@@ -1,5 +1,6 @@
 import { contentTypeLabels } from '../lib/format';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import { useFlipList, useSegmentIndicator } from '../lib/motion';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, SlidersHorizontal, Sparkles } from 'lucide-react';
@@ -11,7 +12,7 @@ import { useActivity, useLocalCalendar, validDate } from '../lib/revisit';
 import { CollectionComposer } from '../components/CollectionComposer';
 import { PageHeader } from '../components/PageHeader';
 import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner';
-import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
+import { EmptyState, ErrorBanner, LoadMore, LoadingState } from '../components/StateBlocks';
 import { JarScene } from '../components/Illustrations';
 import { useApi } from '../context/ApiContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
@@ -62,17 +63,26 @@ export function InboxPage() {
   });
 
   const items = collectionsQuery.data?.pages.flatMap((p) => p.items) ?? [];
-  const hasUnclassifiedInLoaded = useMemo(
+  // A dedicated triage pass only pays off once a few notes are waiting; for one or two,
+  // the card itself is the quicker place to file them.
+  const unclassifiedLoadedCount = useMemo(
     () =>
-      items.some(
+      items.filter(
         (c) =>
           !c.projects.some(
             (p) => p.decision === 'manual' || p.decision === 'confirmed' || p.decision === 'auto',
           ),
-      ),
+      ).length,
     [items],
   );
   const dayGroups = useMemo(() => groupByDay(items, (c) => c.created_at), [items]);
+  const filtersActive = Boolean(unreadOnly || typeFilter || date);
+  // Filters only help once there is something to filter; an empty inbox shows just the jar.
+  const showFilterBar = filtersActive || items.length > 0;
+  const journalRef = useRef<HTMLDivElement | null>(null);
+  const filterTabsRef = useRef<HTMLDivElement | null>(null);
+  useFlipList(journalRef, items.map((c) => c.id).join('|'));
+  useSegmentIndicator(filterTabsRef, `${unreadOnly}:${showFilterBar}`);
   const headerLine = `${greeting()}，${todayLine()}`;
 
   const updateFilter = (next: { unreadOnly?: boolean; type?: CollectionType | ''; clearDate?: boolean }) => {
@@ -103,8 +113,9 @@ export function InboxPage() {
       {!date && <Resurface key={user?.id} />}
       <PendingSuggestionsBanner />
 
+      {showFilterBar && (
       <div className="sp-filter-bar">
-        <div className="sp-filter-tabs" aria-label="收件箱筛选">
+        <div className="sp-filter-tabs" aria-label="收件箱筛选" ref={filterTabsRef}>
           <button
             type="button"
             className={`sp-filter-tab ${!unreadOnly ? 'active' : ''}`}
@@ -132,8 +143,9 @@ export function InboxPage() {
           <SlidersHorizontal size={16} strokeWidth={2} aria-hidden="true" />
         </button>
       </div>
+      )}
 
-      {showSecondaryFilter && (
+      {showFilterBar && showSecondaryFilter && (
         <div className="sp-filter-panel">
           <label htmlFor="inbox-type-filter" className="sp-filter-panel-label">
             内容类型
@@ -163,12 +175,12 @@ export function InboxPage() {
 
       {!collectionsQuery.isLoading &&
         !collectionsQuery.isError &&
-        hasUnclassifiedInLoaded &&
+        unclassifiedLoadedCount >= 3 &&
         pendingSuggestionsCount === 0 && (
         <div className="sp-triage-hint-bar">
           <Link to="/unclassified/triage" className="sp-triage-hint">
             <Sparkles size={14} strokeWidth={2} aria-hidden="true" />
-            <span>有待归类的收藏，开始整理</span>
+            <span>{unclassifiedLoadedCount} 条还没归入项目，一次整理完</span>
             <ArrowRight size={14} strokeWidth={2} aria-hidden="true" />
           </Link>
         </div>
@@ -207,10 +219,12 @@ export function InboxPage() {
           </div>
         ))}
 
-      <div className="sp-journal">
+      <div className="sp-journal" ref={journalRef}>
         {dayGroups.map((group) => (
           <section key={group.stamp.key} className="sp-day">
             <h2
+              data-flip-key={`day:${group.stamp.key}`}
+              data-flip-measure="parent"
               className={`sp-day-stamp ${date || group.stamp.relative === '今天' ? 'sp-day-stamp--today' : ''}`}
               aria-label={group.stamp.label}
             >
@@ -233,18 +247,12 @@ export function InboxPage() {
         ))}
       </div>
 
-      {collectionsQuery.hasNextPage && (
-        <div className="sp-load-more">
-          <button
-            type="button"
-            className="sp-btn"
-            disabled={collectionsQuery.isFetchingNextPage}
-            onClick={() => void collectionsQuery.fetchNextPage()}
-          >
-            {collectionsQuery.isFetchingNextPage ? '加载中…' : '加载更多'}
-          </button>
-        </div>
-      )}
+      <LoadMore
+        hasNextPage={collectionsQuery.hasNextPage}
+        isFetching={collectionsQuery.isFetchingNextPage}
+        isError={collectionsQuery.isFetchNextPageError}
+        onLoad={() => void collectionsQuery.fetchNextPage()}
+      />
     </div>
   );
 }

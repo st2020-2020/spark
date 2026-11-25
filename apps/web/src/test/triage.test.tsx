@@ -66,33 +66,39 @@ describe('Triage mode (/unclassified/triage)', () => {
       id: '10000000-0000-4000-8000-000000000001',
       text: '待归类的收件箱笔记',
     });
+    // The inbox only suggests a triage pass once a few notes are waiting.
+    for (const n of [2, 3]) {
+      await seedAdminCollection(adapter, {
+        id: `10000000-0000-4000-8000-00000000000${n}`,
+        text: `待归类的收件箱笔记 ${n}`,
+      });
+    }
 
     const listSpy = vi.spyOn(adapter, 'listCollections');
     const user = userEvent.setup();
     renderWithAdapter(['/inbox'], adapter);
 
     await screen.findByText('待归类的收件箱笔记');
-    expect(await screen.findByRole('link', { name: /有待归类的收藏，开始整理/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /3 条还没归入项目/ })).toBeInTheDocument();
     expect(listSpy.mock.calls.some(([q]) => q?.scope === 'unclassified')).toBe(false);
 
     // Clicking Inbox triage hint navigates to /unclassified/triage
-    await user.click(screen.getByRole('link', { name: /有待归类的收藏，开始整理/ }));
+    await user.click(screen.getByRole('link', { name: /3 条还没归入项目/ }));
     await screen.findByRole('heading', { name: '快速整理' });
-    await screen.findByText('待归类的收件箱笔记');
 
-    // Classify the only unclassified note, then verify Inbox hides hint cleanly
-    await user.click(await screen.findByRole('button', { name: /归类目标/ }));
+    // Classify every waiting note, then verify Inbox hides hint cleanly
+    for (let i = 0; i < 3; i += 1) {
+      await user.click(await screen.findByRole('button', { name: /归类目标/ }));
+    }
     await screen.findByRole('heading', { name: '本轮整理完成' });
     await user.click(screen.getByRole('link', { name: '返回收件箱' }));
     await screen.findByText('待归类的收件箱笔记');
-    expect(screen.queryByRole('link', { name: /有待归类的收藏，开始整理/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /还没归入项目/ })).not.toBeInTheDocument();
 
-    // UnclassifiedPage still provides header "开始整理" primary link
+    // With everything filed, UnclassifiedPage drops the "开始整理" action it no longer needs
     await user.click(within(screen.getByRole('complementary', { name: '主导航' })).getByRole('link', { name: '待归类' }));
-    expect(await screen.findByRole('link', { name: '开始整理' })).toHaveAttribute(
-      'href',
-      '/unclassified/triage',
-    );
+    await screen.findByText('没有待归类的收藏');
+    expect(screen.queryByRole('link', { name: '开始整理' })).not.toBeInTheDocument();
     expect(proj.id).toBeTruthy();
     expect(colUnclassified.id).toBeTruthy();
   });

@@ -11,7 +11,8 @@ import type { Accepted, CollectionPage, CollectionSummary } from '../api/types';
 import { getFriendlyErrorMessage, isApiErrorCode } from '../api/errors';
 import { PageHeader } from '../components/PageHeader';
 import { PurgeConfirmModal } from '../components/PurgeConfirmModal';
-import { EmptyState, ErrorBanner, LoadingState } from '../components/StateBlocks';
+import { EmptyState, ErrorBanner, LoadMore, LoadingState } from '../components/StateBlocks';
+import { useFlipList } from '../lib/motion';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -235,6 +236,8 @@ export function TrashPage() {
   }
 
   const items = trashQuery.data?.pages.flatMap((p) => p.items) ?? [];
+  const listRef = useRef<HTMLDivElement | null>(null);
+  useFlipList(listRef, items.map((c) => c.id).join('|'));
   const restoringId = restoreMutation.isPending ? restoreMutation.variables?.id : undefined;
   const purgingId = purgeMutation.isPending ? purgeMutation.variables?.col.id : undefined;
   const acceptedIds = new Set(acceptedPurges.map((item) => item.collectionId));
@@ -243,6 +246,7 @@ export function TrashPage() {
     <div>
       <PageHeader
         title="回收站"
+        showSearch={false}
         subtitle={purgeEnabled ? '保留期 30 天，到期后自动清理。永久删除后无法恢复。' : '可在这里查看或恢复已删除的收藏。'}
       />
 
@@ -266,9 +270,6 @@ export function TrashPage() {
                 <div className="sp-purge-status-main">
                   <div className="sp-row">
                     <strong>{purgeStatusLabel(rec.status)}</strong>
-                    <span className="sp-pill sp-tabular">
-                      操作 {rec.operationId.slice(0, 8)}
-                    </span>
                   </div>
                   <div className="sp-banner-detail">
                     {purgeStatusDescription(rec.status)}
@@ -320,7 +321,7 @@ export function TrashPage() {
         <EmptyState title="回收站是空的" description="移入回收站的收藏会暂时保留在这里。" />
       )}
 
-      <div className="sp-note-list">
+      <div className="sp-note-list" ref={listRef}>
         {items.map((col) => {
           const estExpiry = estimateTrashPurgeAfter(col.updated_at);
           const showTitle =
@@ -334,12 +335,12 @@ export function TrashPage() {
             acceptedIds.has(col.id);
 
           return (
-            <article key={col.id} className="sp-note">
+            <article key={col.id} data-flip-key={col.id} className={`sp-note ${restoringId === col.id ? 'is-leaving' : ''}`}>
               <div className="sp-note-meta sp-trash-meta">
                 <time dateTime={col.updated_at}>移入于 {formatDateTime(col.updated_at)}</time>
                 {purgeEnabled && estExpiry && (
-                  <span className="sp-trash-expiry">
-                    预计到期：{formatDateTime(estExpiry)}（{formatRemainingTrashDays(estExpiry)}）
+                  <span className="sp-trash-expiry" title={`预计 ${formatDateTime(estExpiry)} 自动清理`}>
+                    {formatRemainingTrashDays(estExpiry)}后自动清理
                   </span>
                 )}
               </div>
@@ -382,7 +383,7 @@ export function TrashPage() {
                   </button>
                   {purgeEnabled && <button
                     type="button"
-                    className="sp-btn sp-btn--sm sp-btn--danger"
+                    className="sp-btn--quiet sp-btn--sm sp-btn--danger-text sp-trash-purge"
                     disabled={isBusy}
                     onClick={() => {
                       setActionError(null);
@@ -399,18 +400,12 @@ export function TrashPage() {
         })}
       </div>
 
-      {trashQuery.hasNextPage && (
-        <div className="sp-load-more">
-          <button
-            type="button"
-            className="sp-btn"
-            disabled={trashQuery.isFetchingNextPage}
-            onClick={() => void trashQuery.fetchNextPage()}
-          >
-            加载更多
-          </button>
-        </div>
-      )}
+      <LoadMore
+        hasNextPage={trashQuery.hasNextPage}
+        isFetching={trashQuery.isFetchingNextPage}
+        isError={trashQuery.isFetchNextPageError}
+        onLoad={() => void trashQuery.fetchNextPage()}
+      />
 
       <PurgeConfirmModal
         open={purgeEnabled && Boolean(confirmTarget)}

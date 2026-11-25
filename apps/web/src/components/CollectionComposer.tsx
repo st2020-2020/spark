@@ -1,6 +1,6 @@
 import { MoreProjectChoices, useProjectChoices } from './ProjectChoices';
 import { useCallback, useEffect, useMemo, useRef, useState, type FocusEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowUp, Check, Folder, ImagePlus, Link2, Loader2, Sparkles, WifiOff, X } from 'lucide-react';
 import type { SparkDocument } from '../api/types';
@@ -167,6 +167,28 @@ export function CollectionComposer({
 
   const [storageWarning, setStorageWarning] = useState<string | null>(() => initialState.error ?? null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const navigate = useNavigate();
+  // "Save" pressed while images are still uploading: keep the intent and finish it ourselves.
+  const [saveWhenUploaded, setSaveWhenUploaded] = useState(false);
+  // Brief tick on the send button after a save, so the press visibly completed.
+  const [justSaved, setJustSaved] = useState(false);
+  const justSavedTimerRef = useRef<number | null>(null);
+  const flashSaved = useCallback(() => {
+    setJustSaved(true);
+    if (justSavedTimerRef.current !== null) window.clearTimeout(justSavedTimerRef.current);
+    justSavedTimerRef.current = window.setTimeout(() => {
+      justSavedTimerRef.current = null;
+      setJustSaved(false);
+    }, 1200);
+  }, []);
+  useEffect(
+    () => () => {
+      if (justSavedTimerRef.current !== null) window.clearTimeout(justSavedTimerRef.current);
+    },
+    [],
+  );
+  // Only animate the send glyph once it has actually changed, not on first paint.
+  const sendIconSwappedRef = useRef(false);
   const [resetToken, setResetToken] = useState(0);
   const [isOnline, setIsOnline] = useState(
     typeof navigator !== 'undefined' ? navigator.onLine : true,
@@ -463,17 +485,16 @@ export function CollectionComposer({
         setIsActivated(false);
       }
 
-      const isQueued =
-        created.organization.status === 'queued' || created.organization.status === 'running';
-      pushToast({
-        message: followUpSource
-          ? isQueued
-            ? '已保存续写，正在后台整理'
-            : '已保存续写'
-          : isQueued
-            ? '已保存，正在后台整理'
-            : '已保存',
-      });
+      // Inline on a list, the new card landing right below is the confirmation, and the send
+      // button flashes a tick. From a sheet the list is not on screen, so say where it went.
+      flashSaved();
+      if (variant === 'sheet' || followUpSource) {
+        pushToast({
+          message: followUpSource ? '已保存续写' : '已保存到收件箱',
+          actionLabel: '查看',
+          onAction: () => navigate(`/collections/${created.id}`),
+        });
+      }
       void queryClient.invalidateQueries({ queryKey: ['tags'] });
       void queryClient.invalidateQueries({ queryKey: ['collections'] });
       void queryClient.invalidateQueries({ queryKey: ['collection'] });
@@ -499,7 +520,9 @@ export function CollectionComposer({
   const handleSubmit = useCallback(() => {
     if (saveMutation.isPending || creatingTag) return;
     if (uploader.hasInFlight) {
-      setSubmitError('请等待图片上传完成或取消后再保存。');
+      // Nothing to decide here: remember the intent and save as soon as the images land.
+      setSubmitError(null);
+      setSaveWhenUploaded(true);
       return;
     }
     if (uploader.hasFailed) {
@@ -509,6 +532,16 @@ export function CollectionComposer({
     setSubmitError(null);
     saveMutation.mutate();
   }, [saveMutation, creatingTag, uploader.hasFailed, uploader.hasInFlight]);
+
+  useEffect(() => {
+    if (!saveWhenUploaded || uploader.hasInFlight) return;
+    setSaveWhenUploaded(false);
+    if (uploader.hasFailed) {
+      setSubmitError('有图片没有传上去，重试或移除后再保存。');
+      return;
+    }
+    handleSubmit();
+  }, [saveWhenUploaded, uploader.hasInFlight, uploader.hasFailed, handleSubmit]);
 
   const toggleProject = (pid: string) => {
     projectsTouchedRef.current = true;
@@ -582,10 +615,10 @@ export function CollectionComposer({
     Boolean(submitError) ||
     projectPickerOpen;
 
+  if (saveMutation.isPending || saveWhenUploaded || justSaved) sendIconSwappedRef.current = true;
   const saveDisabled =
-    saveMutation.isPending || creatingTag ||
+    saveMutation.isPending || creatingTag || saveWhenUploaded ||
     !hasContent ||
-    uploader.hasInFlight ||
     uploader.hasFailed ||
     totalChars > MAX_TEXT_AND_INTENT_CHARS;
   const showCharCounter = totalChars >= 300;
@@ -1003,18 +1036,36 @@ export function CollectionComposer({
             <button
               ref={saveBtnRef}
               type="button"
-              className={`sp-send-btn ${saveMutation.isPending ? 'sp-send-btn--pending' : ''}`}
-              aria-label={saveMutation.isPending ? '正在保存收藏' : '保存收藏'}
-              aria-busy={saveMutation.isPending}
-              data-tooltip={shortcutHintText("保存收藏", "Enter")}
+              className={`sp-send-btn ${
+                saveMutation.isPending || saveWhenUploaded ? 'sp-send-btn--pending' : ''
+              } ${justSaved ? 'sp-send-btn--saved' : ''}`}
+              aria-label={
+                saveWhenUploaded
+                  ? '图片传完后自动保存'
+                  : saveMutation.isPending
+                    ? '正在保存收藏'
+                    : '保存收藏'
+              }
+              aria-busy={saveMutation.isPending || saveWhenUploaded}
+              data-tooltip={
+                saveWhenUploaded ? '图片传完后自动保存' : shortcutHintText('保存收藏', 'Enter')
+              }
               data-tooltip-placement="right"
               disabled={saveDisabled}
               onClick={handleSubmit}
             >
-              {saveMutation.isPending ? (
-                <Loader2 size={18} strokeWidth={2} className="sp-spin" aria-hidden="true" />
+              {saveMutation.isPending || saveWhenUploaded ? (
+                <span key="saving" className="sp-icon-swap">
+                  <Loader2 size={18} strokeWidth={2} className="sp-spin" aria-hidden="true" />
+                </span>
+              ) : justSaved ? (
+                <span key="saved" className="sp-icon-swap">
+                  <Check size={19} strokeWidth={2.6} aria-hidden="true" />
+                </span>
               ) : (
-                <ArrowUp size={19} strokeWidth={2.4} aria-hidden="true" />
+                <span key="idle" className={sendIconSwappedRef.current ? 'sp-icon-swap' : undefined}>
+                  <ArrowUp size={19} strokeWidth={2.4} aria-hidden="true" />
+                </span>
               )}
             </button>
           </div>

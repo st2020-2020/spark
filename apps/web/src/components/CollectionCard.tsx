@@ -12,7 +12,7 @@ import {
   Mail,
   MailOpen,
   MoreHorizontal,
-  PenLine,
+  MessageSquarePlus,
   Pencil,
   Trash2,
 } from 'lucide-react';
@@ -22,7 +22,7 @@ import { useApi } from '../context/ApiContext';
 import { useFollowUp } from '../context/FollowUpContext';
 import { useToast } from '../context/ToastContext';
 import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from '../lib/authSession';
-import { canAnimateMotion } from '../lib/motion';
+import { canAnimateMotion, SHEET_EXIT_MS, usePresence } from '../lib/motion';
 import {
   formatDateTime,
   formatRelativeTime,
@@ -63,6 +63,7 @@ export function CollectionCard({
   snippets,
   searchQuery = '',
   timeStyle = 'relative',
+  flipKey,
 }: {
   collection: CollectionSummary;
   attachments?: Attachment[];
@@ -70,6 +71,8 @@ export function CollectionCard({
   searchQuery?: string;
   /** "clock" inside day-grouped lists, where the day is already shown by the group stamp. */
   timeStyle?: 'relative' | 'clock';
+  /** List motion key; pass null when a wrapper around the card owns the motion instead. */
+  flipKey?: string | null;
 }) {
   const api = useApi();
   const { pushToast } = useToast();
@@ -80,6 +83,8 @@ export function CollectionCard({
   const { openFollowUp } = useFollowUp();
 
   const [menuOpen, setMenuOpen] = useState(false);
+  // Phones show this menu as a bottom sheet, which needs the longer sheet exit.
+  const menuPresence = usePresence(menuOpen, SHEET_EXIT_MS);
   const menuWrapRef = useRef<HTMLDivElement | null>(null);
   const moreBtnRef = useRef<HTMLButtonElement | null>(null);
   const isUnread = !collection.read_at;
@@ -278,6 +283,8 @@ export function CollectionCard({
   });
 
   const trashMutation = useMutation({
+    // Respond on press: the menu closes and the card starts leaving before the server answers.
+    onMutate: () => setMenuOpen(false),
     mutationFn: async () => {
       const session = captureAuthSession();
       const trashed = await api.trashCollection(collection.id, {
@@ -353,9 +360,11 @@ export function CollectionCard({
       : '';
 
   const showTitle = shouldShowDistinctTitle(collection);
+  // Queued and running are one thing to the reader: the system is still filing this note.
+  const isOrganizing =
+    collection.organization_status === 'queued' || collection.organization_status === 'running';
   const showOrgStatus =
-    collection.organization_status === 'queued' ||
-    collection.organization_status === 'running' ||
+    isOrganizing ||
     collection.organization_status === 'failed' ||
     collection.organization_status === 'blocked';
 
@@ -426,7 +435,11 @@ export function CollectionCard({
           e.preventDefault(); toggleReadMutation.mutate(Boolean(isUnread));
         }
       }}
-      className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''}`}
+      data-flip-key={flipKey === null ? undefined : (flipKey ?? collection.id)}
+      aria-busy={trashMutation.isPending || undefined}
+      className={`sp-note ${isJustCreated(collection.created_at) ? 'sp-note--fresh' : ''} ${
+        trashMutation.isPending ? 'is-leaving' : ''
+      }`}
     >
       <div className="sp-note-meta">
         <CollectionLink
@@ -476,7 +489,8 @@ export function CollectionCard({
               {organizationStatusLabel(collection.organization_status)}
             </CollectionLink>
           ) : (
-            <span className="sp-pill">
+            <span className="sp-note-organizing" role="status">
+              <span className="sp-note-organizing-dot" aria-hidden="true" />
               {organizationStatusLabel(collection.organization_status)}
             </span>
           ))}
@@ -500,13 +514,21 @@ export function CollectionCard({
             <MoreHorizontal size={16} strokeWidth={2} aria-hidden="true" />
           </button>
 
-          {menuOpen && (
+          {menuPresence.mounted && (
             <>
               {/* Phone-only scrim: absorbs the outside tap so it never activates the card below. */}
-              <div className="sp-sheet-scrim" aria-hidden="true" onClick={() => setMenuOpen(false)} />
               <div
-                className="sp-popover sp-popover--right sp-popover--sheet"
-                role="menu"
+                className={`sp-sheet-scrim ${menuPresence.closing ? 'is-closing' : ''}`}
+                aria-hidden="true"
+                onClick={() => setMenuOpen(false)}
+              />
+              <div
+                className={`sp-popover sp-popover--right sp-popover--sheet ${
+                  menuPresence.closing ? 'is-closing' : ''
+                }`}
+                role={menuPresence.closing ? undefined : 'menu'}
+                aria-hidden={menuPresence.closing || undefined}
+                inert={menuPresence.closing || undefined}
                 aria-label="收藏操作菜单"
               >
                 <button
@@ -532,7 +554,7 @@ export function CollectionCard({
                     openFollowUp(toFollowUpSourceFromSummary(collection));
                   }}
                 >
-                  <PenLine size={16} strokeWidth={2} aria-hidden="true" />
+                  <MessageSquarePlus size={16} strokeWidth={2} aria-hidden="true" />
                   <span>续写</span>
                 </button>
                 <button
@@ -700,7 +722,7 @@ export function CollectionCard({
               aria-label={`续写 ${collection.display_title}`}
               onClick={() => openFollowUp(toFollowUpSourceFromSummary(collection))}
             >
-              <PenLine size={13} strokeWidth={2} aria-hidden="true" />
+              <MessageSquarePlus size={13} strokeWidth={2} aria-hidden="true" />
               <span>续写</span>
             </button>
           </div>
