@@ -32,7 +32,7 @@ it.each([true, false])('preserves an explicit unread choice when initially read=
     writes.mockImplementationOnce(async (id, body) => { await delay; return write(id, body); });
   }
   mount(api, initiallyRead ? '/collections' : '/collections?read=false');
-  await ui.click(await screen.findByRole('link', { name: '查看全文' }));
+  await ui.click(await screen.findByRole('link', { name: /查看详情：/ }));
   await ui.click(await screen.findByRole('button', { name: '标为未读' }));
   release();
   await waitFor(() => expect(writes.mock.calls.map(([, body]) => body.read)).toEqual(initiallyRead ? [false] : [true, false]));

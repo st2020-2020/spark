@@ -1,10 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { ArrowRight, SlidersHorizontal } from 'lucide-react';
 import type { Collection } from '../api/types';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
 import { isApiErrorCode } from '../api/errors';
+import {
+  DEFAULT_SIDEBAR_ITEMS,
+  pruneSidebarPinnedIds,
+  resolveSidebarTags,
+  togglePinnedWithMeta,
+} from '../lib/sidebarPrefs';
+import { SidebarCustomizePopover } from './SidebarCustomizePopover';
 import { ErrorBanner } from './StateBlocks';
 
 function useTags(q: string, enabled: boolean) {
@@ -18,26 +26,178 @@ function useTags(q: string, enabled: boolean) {
   });
 }
 
-export function TagNavigation() {
-  const [open, setOpen] = useState(false);
-  const tags = useTags('', open);
+export function TagNavigation({
+  pinnedTagIds,
+  pinnedTagMeta,
+  onUpdatePinnedTags,
+  onOpenAllTags,
+  onNavigate,
+}: {
+  pinnedTagIds: string[] | null;
+  pinnedTagMeta?: Record<string, string>;
+  onUpdatePinnedTags: (nextIds: string[] | null, nextMeta: Record<string, string>) => void;
+  onOpenAllTags: () => void;
+  onNavigate?: () => void;
+}) {
+  const api = useApi();
+  const { user } = useAuth();
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [popoverSearch, setPopoverSearch] = useState('');
+  const customizeBtnRef = useRef<HTMLButtonElement | null>(null);
   const location = useLocation();
-  const selected = location.pathname === '/collections' && new URLSearchParams(location.search).get('tag_id');
-  return <div className="sp-tag-nav">
-    <button type="button" className="sp-nav-link" aria-expanded={open} onClick={() => setOpen(!open)}>标签 {open ? '▴' : '▾'}</button>
-    {open && <nav aria-label="按标签查看收藏">
-      {tags.isLoading && <p className="sp-help">正在加载标签…</p>}
-      {tags.isError && <ErrorBanner error={tags.error} onRetry={() => void tags.refetch()} />}
-      {tags.data?.pages[0].items.length === 0 && <p className="sp-help">暂无标签，可在收集时输入 # 新建。</p>}
-      {tags.data?.pages.flatMap(p => p.items).map(t => <Link key={t.id}
-        className={`sp-nav-link ${selected === t.id ? 'active' : ''}`}
-        aria-current={selected === t.id ? 'page' : undefined}
-        to={`/collections?tag_id=${encodeURIComponent(t.id)}`} state={{ tagName: t.name }}>
-        <span className="sp-truncate">#{t.name}</span><small>{t.collection_count}</small>
-      </Link>)}
-      {tags.hasNextPage && <button className="sp-btn--quiet" disabled={tags.isFetchingNextPage} onClick={() => void tags.fetchNextPage()}>更多标签</button>}
-    </nav>}
-  </div>;
+  const selected =
+    location.pathname === '/collections' && new URLSearchParams(location.search).get('tag_id');
+
+  const tagsQuery = useInfiniteQuery({
+    queryKey: ['tags', 'sidebar', user?.id],
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) => api.listTags({ cursor: pageParam, limit: 50 }),
+    getNextPageParam: (page) => page.next_cursor,
+    enabled: Boolean(user),
+    staleTime: 30_000,
+  });
+
+  const remoteTerm = popoverSearch.trim();
+  const remoteSearchQuery = useQuery({
+    queryKey: ['tags', 'sidebar-search', user?.id, remoteTerm],
+    queryFn: () => api.listTags({ q: remoteTerm, limit: 50 }),
+    enabled: Boolean(user) && customizeOpen && Boolean(remoteTerm) && Boolean(tagsQuery.hasNextPage),
+    staleTime: 15_000,
+  });
+
+  const allTags = useMemo(() => {
+    const pages = tagsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+    const searched = remoteSearchQuery.data?.items ?? [];
+    if (searched.length === 0) return pages;
+    const seen = new Set(pages.map((t) => t.id));
+    return [...pages, ...searched.filter((t) => !seen.has(t.id))];
+  }, [tagsQuery.data, remoteSearchQuery.data]);
+
+  const allTagsLoaded = tagsQuery.isSuccess && !tagsQuery.hasNextPage;
+  const onUpdatePinnedTagsRef = useRef(onUpdatePinnedTags);
+  onUpdatePinnedTagsRef.current = onUpdatePinnedTags;
+
+  useEffect(() => {
+    if (!user?.id || !allTagsLoaded || !tagsQuery.data) return;
+    const loadedTags = tagsQuery.data.pages.flatMap((p) => p.items);
+    const loadedIds = new Set(loadedTags.map((t) => t.id));
+    const loadedNames = new Map(loadedTags.map((t) => [t.id, t.name]));
+    const updated = pruneSidebarPinnedIds(user.id, 'tag', loadedIds, loadedNames);
+    if (updated) {
+      onUpdatePinnedTagsRef.current(updated.pinnedTagIds, updated.pinnedTagMeta ?? {});
+    }
+  }, [user?.id, allTagsLoaded, tagsQuery.data]);
+
+  const { visible, isCustomized, validPinnedIds } = useMemo(
+    () =>
+      resolveSidebarTags(allTags, pinnedTagIds, DEFAULT_SIDEBAR_ITEMS, {
+        meta: pinnedTagMeta,
+        allTagsLoaded,
+      }),
+    [allTags, pinnedTagIds, pinnedTagMeta, allTagsLoaded],
+  );
+  const validPinnedSet = useMemo(() => new Set(validPinnedIds), [validPinnedIds]);
+  const tagMap = useMemo(() => new Map(allTags.map((t) => [t.id, t])), [allTags]);
+  const popoverTagItems = useMemo(() => {
+    const base = allTags.map((t) => ({
+      id: t.id,
+      label: `#${t.name}`,
+      count: t.collection_count,
+      pinned: validPinnedSet.has(t.id),
+    }));
+    const seen = new Set(allTags.map((t) => t.id));
+    for (const id of validPinnedIds) {
+      if (!seen.has(id) && pinnedTagMeta?.[id]) {
+        base.push({
+          id,
+          label: `#${pinnedTagMeta[id]}`,
+          count: 0,
+          pinned: true,
+        });
+      }
+    }
+    return base;
+  }, [allTags, validPinnedIds, validPinnedSet, pinnedTagMeta]);
+
+  return (
+    <div className="sp-sidebar-section sp-tag-nav">
+      <div className="sp-sidebar-group-head">
+        <span className="sp-sidebar-group-label">标签</span>
+        <div className="sp-sidebar-group-actions">
+          {allTags.length > 0 && (
+            <button
+              ref={customizeBtnRef}
+              type="button"
+              className="sp-icon-btn sp-icon-btn--sm"
+              aria-label="自定义置顶标签"
+              aria-expanded={customizeOpen}
+              title="自定义置顶标签"
+              onClick={() => setCustomizeOpen((v) => !v)}
+            >
+              <SlidersHorizontal size={13} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
+          <button
+            type="button"
+            className="sp-sidebar-all-btn"
+            aria-label="查看全部标签"
+            onClick={onOpenAllTags}
+          >
+            <span>全部</span>
+            <ArrowRight size={12} strokeWidth={2.2} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+
+      <SidebarCustomizePopover
+        open={customizeOpen}
+        title="自定义置顶标签"
+        searchLabel="搜索标签"
+        searchPlaceholder="搜索标签…"
+        emptyText="没有匹配的标签"
+        items={popoverTagItems}
+        isCustomized={isCustomized}
+        hasMore={Boolean(tagsQuery.hasNextPage)}
+        isLoadingMore={tagsQuery.isFetchingNextPage}
+        onLoadMore={() => void tagsQuery.fetchNextPage()}
+        onQueryChange={setPopoverSearch}
+        onTogglePin={(id) => {
+          const name = tagMap.get(id)?.name ?? pinnedTagMeta?.[id] ?? '';
+          const next = togglePinnedWithMeta(pinnedTagIds, pinnedTagMeta, id, name);
+          onUpdatePinnedTags(next.ids, next.meta);
+        }}
+        onReset={() => onUpdatePinnedTags(null, {})}
+        onClose={() => setCustomizeOpen(false)}
+        anchorRef={customizeBtnRef}
+      />
+
+      {tagsQuery.isError && (
+        <ErrorBanner error={tagsQuery.error} onRetry={() => void tagsQuery.refetch()} />
+      )}
+
+      {visible.length > 0 ? (
+        <nav aria-label="按标签查看收藏" className="sp-sidebar-tags-wrap">
+          {visible.map((t) => (
+            <Link
+              key={t.id}
+              className={`sp-sidebar-tag-chip ${selected === t.id ? 'active' : ''}`}
+              aria-current={selected === t.id ? 'page' : undefined}
+              to={`/collections?tag_id=${encodeURIComponent(t.id)}`}
+              state={{ tagName: t.name }}
+              title={`#${t.name}（${t.collection_count} 条）`}
+              onClick={onNavigate}
+            >
+              <span className="sp-truncate">#{t.name}</span>
+            </Link>
+          ))}
+        </nav>
+      ) : (
+        tagsQuery.isSuccess && (
+          <p className="sp-sidebar-empty-hint">输入 # 创建标签</p>
+        )
+      )}
+    </div>
+  );
 }
 
 export function CollectionTags({ collection }: { collection: Collection }) {

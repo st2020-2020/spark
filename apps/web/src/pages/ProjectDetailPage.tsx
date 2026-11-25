@@ -358,6 +358,9 @@ export function ProjectDetailPage() {
               <option value="paused">已暂停</option>
               <option value="completed">已结束</option>
             </select>
+            <p className="sp-help">
+              进行中：参与自动归类并显示在快捷列表；暂停或结束后停止自动归类，历史收藏完整保留
+            </p>
           </div>
 
           <div className="sp-field">

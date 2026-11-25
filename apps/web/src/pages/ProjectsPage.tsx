@@ -1,8 +1,7 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronRight, Folder, Plus, X } from 'lucide-react';
-import type { ProjectState } from '../api/types';
 import { getFriendlyErrorMessage } from '../api/errors';
 import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
@@ -13,13 +12,15 @@ import { projectStateLabel } from '../lib/format';
 import { generateIdempotencyKey } from '../lib/idempotency';
 import { projectToneClass } from '../lib/projectTone';
 
+type ProjectViewTab = 'active' | 'archived';
+
 export function ProjectsPage() {
   const api = useApi();
   const { pushToast } = useToast();
   const queryClient = useQueryClient();
 
   const [searchParams, setSearchParams] = useSearchParams();
-  const [stateFilter, setStateFilter] = useState<ProjectState | 'all'>('all');
+  const [viewTab, setViewTab] = useState<ProjectViewTab>('active');
   const [modalOpen, setModalOpen] = useState(() => searchParams.get('create') === '1');
 
   useEffect(() => {
@@ -38,17 +39,85 @@ export function ProjectsPage() {
   const [createIdempotencyKey, setCreateIdempotencyKey] = useState(() => generateIdempotencyKey());
   const [formError, setFormError] = useState<string | null>(null);
 
-  const projectsQuery = useInfiniteQuery({
-    queryKey: ['projects', { stateFilter }],
+  const activeProjectsQuery = useInfiniteQuery({
+    queryKey: ['projects', 'list', 'active'],
     queryFn: ({ pageParam }) =>
       api.listProjects({
-        state: stateFilter === 'all' ? undefined : stateFilter,
+        state: 'active',
         cursor: pageParam,
         limit: 50,
       }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next_cursor,
   });
+
+  const pausedProjectsQuery = useInfiniteQuery({
+    queryKey: ['projects', 'list', 'paused'],
+    queryFn: ({ pageParam }) =>
+      api.listProjects({
+        state: 'paused',
+        cursor: pageParam,
+        limit: 50,
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor,
+  });
+
+  const completedProjectsQuery = useInfiniteQuery({
+    queryKey: ['projects', 'list', 'completed'],
+    queryFn: ({ pageParam }) =>
+      api.listProjects({
+        state: 'completed',
+        cursor: pageParam,
+        limit: 50,
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last) => last.next_cursor,
+  });
+
+  const activeItems = useMemo(
+    () => activeProjectsQuery.data?.pages.flatMap((p) => p.items) ?? [],
+    [activeProjectsQuery.data],
+  );
+  const archivedItems = useMemo(() => {
+    const paused = pausedProjectsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+    const completed = completedProjectsQuery.data?.pages.flatMap((p) => p.items) ?? [];
+    return [...paused, ...completed].sort((a, b) => {
+      const ta = Date.parse(a.updated_at);
+      const tb = Date.parse(b.updated_at);
+      if (Number.isNaN(ta) || Number.isNaN(tb)) return 0;
+      return tb - ta;
+    });
+  }, [pausedProjectsQuery.data, completedProjectsQuery.data]);
+
+  const archivedConfirmedEmpty =
+    pausedProjectsQuery.isSuccess &&
+    completedProjectsQuery.isSuccess &&
+    archivedItems.length === 0;
+  const showFilterTabs = !archivedConfirmedEmpty;
+  const effectiveTab: ProjectViewTab = archivedConfirmedEmpty ? 'active' : viewTab;
+  const items = effectiveTab === 'active' ? activeItems : archivedItems;
+  const isLoading =
+    effectiveTab === 'active'
+      ? activeProjectsQuery.isLoading
+      : (pausedProjectsQuery.isLoading || completedProjectsQuery.isLoading) &&
+        archivedItems.length === 0;
+  const activeError =
+    effectiveTab === 'active'
+      ? activeProjectsQuery.error
+      : pausedProjectsQuery.error ?? completedProjectsQuery.error;
+  const isError =
+    effectiveTab === 'active'
+      ? activeProjectsQuery.isError
+      : pausedProjectsQuery.isError || completedProjectsQuery.isError;
+  const hasNextPage =
+    effectiveTab === 'active'
+      ? activeProjectsQuery.hasNextPage
+      : Boolean(pausedProjectsQuery.hasNextPage || completedProjectsQuery.hasNextPage);
+  const isFetchingNextPage =
+    effectiveTab === 'active'
+      ? activeProjectsQuery.isFetchingNextPage
+      : pausedProjectsQuery.isFetchingNextPage || completedProjectsQuery.isFetchingNextPage;
 
   const createMutation = useMutation({
     mutationFn: () =>
@@ -68,6 +137,7 @@ export function ProjectsPage() {
       setFocusPoints([]);
       setFormError(null);
       setCreateIdempotencyKey(generateIdempotencyKey());
+      setViewTab('active');
       pushToast({ message: `项目「${created.name}」已创建` });
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
     },
@@ -99,8 +169,6 @@ export function ProjectsPage() {
     createMutation.mutate();
   };
 
-  const items = projectsQuery.data?.pages.flatMap((p) => p.items) ?? [];
-
   return (
     <div>
       <PageHeader
@@ -113,35 +181,69 @@ export function ProjectsPage() {
         }
       />
 
-      <div className="sp-filter-tabs" role="tablist" aria-label="项目状态筛选">
-        {(['all', 'active', 'paused', 'completed'] as const).map((st) => (
-          <button
-            key={st}
-            type="button"
-            role="tab"
-            aria-selected={stateFilter === st}
-            className={`sp-filter-tab ${stateFilter === st ? 'active' : ''}`}
-            onClick={() => setStateFilter(st)}
-          >
-            {st === 'all' ? '全部' : projectStateLabel(st)}
-          </button>
-        ))}
-      </div>
-
-      {projectsQuery.isLoading && <LoadingState message="正在加载项目…" />}
-      {projectsQuery.isError && (
-        <ErrorBanner error={projectsQuery.error} onRetry={() => void projectsQuery.refetch()} />
+      {showFilterTabs && (
+        <div className="sp-filter-tabs" role="tablist" aria-label="项目状态筛选">
+          {([
+            ['active', '进行中'],
+            ['archived', '已归档'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={effectiveTab === key}
+              className={`sp-filter-tab ${effectiveTab === key ? 'active' : ''}`}
+              onClick={() => setViewTab(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       )}
-      {!projectsQuery.isLoading && !projectsQuery.isError && items.length === 0 && (
+
+      {isLoading && <LoadingState message="正在加载项目…" />}
+      {isError && (
+        <ErrorBanner
+          error={activeError}
+          onRetry={() => {
+            if (effectiveTab === 'active') {
+              void activeProjectsQuery.refetch();
+            } else {
+              void pausedProjectsQuery.refetch();
+              void completedProjectsQuery.refetch();
+            }
+          }}
+        />
+      )}
+      {!isLoading && !isError && items.length === 0 && (
         <EmptyState
           art="notebook"
-          title="还没有项目"
-          description="先建立一个你正在持续关注的事情，也可以在收件箱直接开始记录。"
+          title={
+            effectiveTab === 'archived'
+              ? '没有已归档的项目'
+              : !archivedConfirmedEmpty
+                ? '当前没有进行中的项目'
+                : '还没有项目'
+          }
+          description={
+            effectiveTab === 'archived'
+              ? '暂停或结束的项目会收纳在这里，历史收藏仍会保留。'
+              : !archivedConfirmedEmpty
+                ? '你可以在「已归档」中查看历史项目，或新建一个进行中的项目。'
+                : '先建立一个你正在持续关注的事情，也可以在收件箱直接开始记录。'
+          }
           action={
-            <button type="button" className="sp-btn sp-btn--primary" onClick={() => setModalOpen(true)}>
-              <Plus size={16} strokeWidth={2} aria-hidden="true" />
-              <span>新建项目</span>
-            </button>
+            <div className="sp-row sp-wrap-gap">
+              <button type="button" className="sp-btn sp-btn--primary" onClick={() => setModalOpen(true)}>
+                <Plus size={16} strokeWidth={2} aria-hidden="true" />
+                <span>新建项目</span>
+              </button>
+              {effectiveTab === 'active' && !archivedConfirmedEmpty && (
+                <button type="button" className="sp-btn" onClick={() => setViewTab('archived')}>
+                  查看已归档
+                </button>
+              )}
+            </div>
           }
         />
       )}
@@ -184,13 +286,20 @@ export function ProjectsPage() {
         </ul>
       )}
 
-      {projectsQuery.hasNextPage && (
+      {hasNextPage && (
         <div className="sp-load-more">
           <button
             type="button"
             className="sp-btn"
-            disabled={projectsQuery.isFetchingNextPage}
-            onClick={() => void projectsQuery.fetchNextPage()}
+            disabled={isFetchingNextPage}
+            onClick={() => {
+              if (effectiveTab === 'active') {
+                void activeProjectsQuery.fetchNextPage();
+              } else {
+                if (pausedProjectsQuery.hasNextPage) void pausedProjectsQuery.fetchNextPage();
+                if (completedProjectsQuery.hasNextPage) void completedProjectsQuery.fetchNextPage();
+              }
+            }}
           >
             加载更多项目
           </button>

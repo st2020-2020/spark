@@ -10,6 +10,18 @@ function extractHost(url: string): string {
   }
 }
 
+export function formatShortUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.replace(/^www\./, '');
+    const path = parsed.pathname && parsed.pathname !== '/' ? parsed.pathname : '';
+    const full = `${host}${path}`;
+    return full.length > 64 ? `${full.slice(0, 61)}…` : full;
+  } catch {
+    return url;
+  }
+}
+
 export function LinkPreviewCard({
   originalUrl,
   preview,
@@ -43,6 +55,7 @@ export function LinkPreviewCard({
   const sourceTitle = preview?.source_title?.trim() || '';
   const summary = preview?.summary?.trim() || '';
   const hasRichPreview = status === 'succeeded' && Boolean(sourceTitle || summary);
+  const shortUrl = formatShortUrl(originalUrl);
 
   const errorBlock =
     variant === 'detail' && refreshError ? (
@@ -82,10 +95,11 @@ export function LinkPreviewCard({
           href={originalUrl}
           target="_blank"
           rel="noopener noreferrer"
+          title={originalUrl}
           className="sp-link-card-raw sp-break-anywhere"
         >
-          <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
-          <span>{originalUrl}</span>
+          <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+          <span>{variant === 'card' ? shortUrl : originalUrl}</span>
         </a>
         {errorBlock}
       </div>
@@ -93,14 +107,58 @@ export function LinkPreviewCard({
   }
 
   if (hasRichPreview) {
+    if (variant === 'card') {
+      return (
+        <div className={`sp-link-card sp-link-card--card ${className}`.trim()}>
+          <div className="sp-link-card-bar">
+            <span className="sp-link-card-site">
+              <Globe size={12} strokeWidth={2} aria-hidden="true" />
+              <span className="sp-truncate">{siteName}</span>
+            </span>
+            {sourceTitle ? (
+              <>
+                <span className="sp-link-card-sep" aria-hidden="true">·</span>
+                <a
+                  href={originalUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={originalUrl}
+                  className="sp-link-card-title sp-link-card-title--inline"
+                >
+                  <span className="sp-truncate">{sourceTitle}</span>
+                  <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+                </a>
+              </>
+            ) : (
+              <a
+                href={originalUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={originalUrl}
+                className="sp-link-card-title sp-link-card-title--inline"
+              >
+                <span className="sp-truncate">{shortUrl}</span>
+                <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+              </a>
+            )}
+          </div>
+          {summary && (
+            <p className="sp-link-card-summary sp-link-card-summary--one-line sp-break-anywhere">
+              {summary}
+            </p>
+          )}
+        </div>
+      );
+    }
+
     return (
-      <div className={`sp-link-card sp-link-card--${variant} ${className}`.trim()}>
+      <div className={`sp-link-card sp-link-card--detail ${className}`.trim()}>
         <div className="sp-link-card-head">
           <span className="sp-link-card-site sp-truncate">
             <Globe size={13} strokeWidth={2} aria-hidden="true" />
             <span className="sp-truncate">{siteName}</span>
           </span>
-          {variant === 'detail' && onRefresh && (
+          {onRefresh && (
             <button
               type="button"
               className="sp-btn sp-btn--sm sp-btn--ghost"
@@ -129,25 +187,17 @@ export function LinkPreviewCard({
         </a>
 
         {summary && (
-          <p
-            className={`sp-link-card-summary sp-break-anywhere ${
-              variant === 'card' ? 'sp-link-card-summary--clamped' : ''
-            }`.trim()}
-          >
-            {summary}
-          </p>
+          <p className="sp-link-card-summary sp-break-anywhere">{summary}</p>
         )}
 
-        {variant === 'detail' && (
-          <a
-            href={originalUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="sp-link-card-raw sp-break-anywhere"
-          >
-            <span>{originalUrl}</span>
-          </a>
-        )}
+        <a
+          href={originalUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="sp-link-card-raw sp-break-anywhere"
+        >
+          <span>{originalUrl}</span>
+        </a>
 
         {errorBlock}
       </div>
@@ -160,10 +210,11 @@ export function LinkPreviewCard({
         href={originalUrl}
         target="_blank"
         rel="noopener noreferrer"
+        title={originalUrl}
         className={`${fallbackClassName ?? 'sp-note-url'} ${className}`.trim()}
       >
-        <ExternalLink size={13} strokeWidth={2} aria-hidden="true" />
-        <span className="sp-break-anywhere">{originalUrl}</span>
+        <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+        <span className="sp-truncate">{shortUrl}</span>
       </a>
     );
   }
