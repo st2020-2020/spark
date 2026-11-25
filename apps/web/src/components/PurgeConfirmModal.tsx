@@ -3,12 +3,20 @@ import { Modal } from './Modal';
 
 export function PurgeConfirmModal({
   open,
+  title = '确认永久删除收藏',
+  warningMessage = '永久删除后，这条笔记和附件将无法恢复。',
+  confirmLabel = '确认永久删除',
+  submittingLabel = '提交中…',
   targetSummary,
   isSubmitting,
   onCancel,
   onConfirm,
 }: {
   open: boolean;
+  title?: string;
+  warningMessage?: string;
+  confirmLabel?: string;
+  submittingLabel?: string;
   targetSummary?: string;
   isSubmitting: boolean;
   onCancel: () => void;
@@ -17,7 +25,7 @@ export function PurgeConfirmModal({
   return (
     <Modal
       open={open}
-      title="确认永久删除收藏"
+      title={title}
       onClose={() => {
         if (!isSubmitting) onCancel();
       }}
@@ -25,9 +33,7 @@ export function PurgeConfirmModal({
       <div className="sp-stack">
         <div className="sp-banner sp-banner--warning">
           <AlertTriangle size={16} strokeWidth={2} aria-hidden="true" />
-          <span>
-            永久删除后，这条笔记和附件将无法恢复。
-          </span>
+          <span>{warningMessage}</span>
         </div>
 
         {targetSummary && (
@@ -50,7 +56,7 @@ export function PurgeConfirmModal({
             disabled={isSubmitting}
             onClick={onConfirm}
           >
-            {isSubmitting ? '提交中…' : '确认永久删除'}
+            {isSubmitting ? submittingLabel : confirmLabel}
           </button>
         </div>
       </div>

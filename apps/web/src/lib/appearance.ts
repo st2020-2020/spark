@@ -59,7 +59,6 @@ function resolveMode(pref: ThemePref): 'light' | 'dark' {
   return systemDarkQuery()?.matches ? 'dark' : 'light';
 }
 
-/** Writes the resolved attributes to <html> and keeps the browser chrome color in step. */
 let accountAppearance: { palette: PaletteId; theme: ThemePref } | null = null;
 
 export function showAccountAppearance(value: typeof accountAppearance) {
@@ -78,6 +77,9 @@ function syncDocument(): void {
     root.getAttribute('data-palette') !== palette || root.getAttribute('data-mode') !== mode;
 
   const apply = () => {
+    // A transition may run after another preference change, logout or system mode switch.
+    if ((accountAppearance?.palette ?? readPalette()) !== palette ||
+        resolveMode(accountAppearance?.theme ?? readThemePref()) !== mode) return;
     root.setAttribute('data-palette', palette);
     root.setAttribute('data-mode', mode);
     const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');

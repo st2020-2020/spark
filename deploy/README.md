@@ -224,6 +224,8 @@ OSS 回执默认复用附件 `oss-v2` 配置的桶、地域、官方 HTTPS 端�
 
 共用身份时合并实际需要的授权。保留附件前缀的清理权限，对回执前缀逐项验证禁止覆盖、删除对象、删除版本和修改 ACL。采用独立回执凭据时，另核对附件身份在回执前缀没有写入权限。恢复工具只检查、列举和读取回执，共用的云端身份可以有其他获准权限。探针结果单独记录，正式 `receipts/*` 的有效策略由控制面核验。桶级列表权限用精确的 `oss:Prefix` 限定。[阿里云 OSS RAM 前缀授权](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)
 
+若桶策略对外部主体授予整桶访问，须核对它在回执前缀上的实际权限。为该前缀追加禁止覆盖规则时先读回并保留原有规则，使用实际前缀（含末尾的 `/`），覆盖所有主体。另用前缀策略限制删除、修改 ACL 及外部读写。发布前只对 `probes/` 中的新合成对象验证条件创建、无条件覆盖被拒、删除被拒及原内容可读；对 `receipts/` 核对同一保护范围。[阿里云 OSS 前缀防覆盖规则](https://www.alibabacloud.com/help/en/oss/developer-reference/putbucketoverwriteconfig)
+
 <details>
 <summary>使用独立凭据时的 RAM 策略示例（含探针）</summary>
 
