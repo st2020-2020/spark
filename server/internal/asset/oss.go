@@ -37,11 +37,11 @@ type Storage interface {
 }
 
 type OSS struct {
-	config
+	OSSConfig
 	client *oss.Client
 }
 
-func newOSS(c config, key accessKey) *OSS {
+func newOSS(c OSSConfig, key accessKey) *OSS {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DisableCompression = true
 	httpClient := &http.Client{
@@ -52,7 +52,7 @@ func newOSS(c config, key accessKey) *OSS {
 		WithRegion(c.OSSRegion).WithEndpoint(c.OSSEndpoint).WithUseCName(c.OSSUseCNAME).
 		WithHttpClient(httpClient).WithRetryMaxAttempts(1).WithSignatureVersion(oss.SignatureVersionV4).
 		WithAdditionalHeaders([]string{"content-length"})
-	return &OSS{config: c, client: oss.NewClient(cfg)}
+	return &OSS{OSSConfig: c, client: oss.NewClient(cfg)}
 }
 
 func (s *OSS) Keys(uid, uploadID string) (string, string) {

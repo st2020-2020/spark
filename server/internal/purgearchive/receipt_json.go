@@ -14,8 +14,8 @@ import (
 
 var errInvalidReceipt = errors.New("invalid independent deletion receipt")
 
-// Check exact names and duplicates before decoding into Go structs. The
-// standard struct decoder otherwise accepts case variants and repeated keys.
+// Reject duplicate names before decoding. An allowlist also requires exact
+// field names and non-null values. Credential metadata uses no allowlist.
 func exactObject(data []byte, allowed ...string) (map[string]json.RawMessage, error) {
 	if !utf8.Valid(data) {
 		return nil, errInvalidReceipt
@@ -31,7 +31,7 @@ func exactObject(data []byte, allowed ...string) (map[string]json.RawMessage, er
 		if err != nil || !ok {
 			return nil, errInvalidReceipt
 		}
-		known := false
+		known := len(allowed) == 0
 		for _, field := range allowed {
 			if field == name {
 				known = true
@@ -42,7 +42,7 @@ func exactObject(data []byte, allowed ...string) (map[string]json.RawMessage, er
 			return nil, errInvalidReceipt
 		}
 		var raw json.RawMessage
-		if err := d.Decode(&raw); err != nil || bytes.Equal(raw, []byte("null")) {
+		if err := d.Decode(&raw); err != nil || len(allowed) != 0 && bytes.Equal(raw, []byte("null")) {
 			return nil, errInvalidReceipt
 		}
 		fields[name] = raw

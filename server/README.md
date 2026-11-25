@@ -69,6 +69,10 @@ dc ps
 | `SPARK_DELETION_LEDGER_OSS_CONFIG_FILE` | `/run/spark-deletion-ledger/oss.json` | `region`、`endpoint`、`bucket`、`prefix`、`object_prefix` |
 | `SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE` | `/run/secrets/spark-deletion-ledger-oss` | `access_key_id`、`access_key_secret` |
 
+归档也可读取与附件相同的 `oss-v2` 配置文件。此模式必须显式设置 `SPARK_DELETION_LEDGER_OSS_PREFIX` 为同桶的专用回执前缀。归档从原配置取得区域、区域端点、桶和附件前缀，继续从 `SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE` 读取凭据。该文件可复用平台凭据 JSON，并允许附加元数据。附件配置自身的 `credentials_file` 与签名配置不参与归档。回执端点仍使用区域地址；归档不使用 CNAME。
+
+专用回执 JSON 和预检输出的固定位置 JSON 可直接使用。恢复时可清空 `SPARK_DELETION_LEDGER_OSS_PREFIX`。如同时提供该变量，其值必须与固定位置的 `prefix` 相同。
+
 例如 `{"region":"cn-hangzhou","endpoint":"https://oss-cn-hangzhou.aliyuncs.com","bucket":"example-private","prefix":"spark/deletion-ledger/prod/","object_prefix":"spark/prod/"}`。正式环境使用相应区域的阿里云官方 HTTPS 地址，也可用该区域的 `-internal` 地址。两个前缀以 `/` 结尾且不能互为子路径。配置有附件存储时，`object_prefix` 必须与附件的专属前缀相同。纯文字安装可将其设为空字符串，此时拒绝含对象的回执。开发可用本机回环 HTTP 替身。
 
 归档桶必须为私有且从未启用版本控制。运行期间保持该状态，因为开启和暂停都会使 `x-oss-forbid-overwrite` 失效。Worker 启动及每次写入前检查桶状态。回执用带防覆盖条件的 `PutObject` 创建于 `<prefix>receipts/<uuid>.json`。收到冲突或写入结果不明时，用同一键读回与该次请求核对。只有读回身份、对象计划、时间和顺序一致时才开始不可逆清除。版本化响应和不一致回执均使清理保持待重试。连接和服务报错只记录阶段或 HTTP 状态。回执只包含操作、账号、收藏的标识、时间及对象清理计划。独立回执留存覆盖最早可恢复备份及其校验期。

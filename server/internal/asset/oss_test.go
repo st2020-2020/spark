@@ -11,7 +11,7 @@ import (
 
 func TestOSSRejectsKeysOutsideOperationScope(t *testing.T) {
 	// No OSS client: a rejected key must not reach the signer or network.
-	s := &OSS{config: config{Prefix: "spark/test/"}}
+	s := &OSS{OSSConfig: OSSConfig{Prefix: "spark/test/"}}
 	const owner = "fd330b14-90f5-4af9-970d-674c041c23dc"
 	const upload = "0867e74e-84e9-47ab-8de3-db48e285ffb6"
 	staging, final := s.Keys(owner, upload)
@@ -40,7 +40,7 @@ func TestOSSRejectsKeysOutsideOperationScope(t *testing.T) {
 }
 
 func TestDirectPresignedGrantBoundaries(t *testing.T) {
-	s := newOSS(config{OSSRegion: "cn-shanghai", OSSEndpoint: "https://oss.example.test", Bucket: "bucket-fixture", Prefix: "spark/test/", PutTTL: 600, GetTTL: 300}, accessKey{ID: "fixture-key", Secret: "fixture-secret"})
+	s := newOSS(OSSConfig{OSSRegion: "cn-shanghai", OSSEndpoint: "https://oss.example.test", Bucket: "bucket-fixture", Prefix: "spark/test/", PutTTL: 600, GetTTL: 300}, accessKey{ID: "fixture-key", Secret: "fixture-secret"})
 	stage, final := s.Keys("fd330b14-90f5-4af9-970d-674c041c23dc", "0867e74e-84e9-47ab-8de3-db48e285ffb6")
 	deadline := time.Now().Add(25 * time.Second)
 	put, err := s.SignPut(t.Context(), stage, "image/png", 167, deadline)

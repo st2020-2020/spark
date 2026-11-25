@@ -15,6 +15,7 @@ import (
 
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss"
 	"github.com/aliyun/alibabacloud-oss-go-sdk-v2/oss/credentials"
+	"spark/server/internal/asset"
 )
 
 const (
@@ -67,9 +68,9 @@ func openOSS(ctx context.Context) (*OSS, error) {
 	if configFile == "" {
 		configFile = ossConfigPath
 	}
-	var location OSSLocation
-	if err := loadJSONFile(configFile, &location, "region", "endpoint", "bucket", "prefix", "object_prefix"); err != nil {
-		return nil, errors.New("invalid deletion ledger OSS configuration")
+	location, err := loadOSSLocation(configFile, os.Getenv("SPARK_DELETION_LEDGER_OSS_PREFIX"))
+	if err != nil {
+		return nil, err
 	}
 	local, err := location.validate(env)
 	if err != nil {
@@ -79,10 +80,9 @@ func openOSS(ctx context.Context) (*OSS, error) {
 	if secretFile == "" {
 		secretFile = ossCredentialsPath
 	}
-	var key accessKey
-	if err := loadJSONFile(secretFile, &key, "access_key_id", "access_key_secret"); err != nil ||
-		strings.TrimSpace(key.ID) == "" || strings.TrimSpace(key.Secret) == "" {
-		return nil, errors.New("invalid deletion ledger OSS credentials")
+	key, err := loadAccessKey(secretFile)
+	if err != nil {
+		return nil, err
 	}
 	archive := newOSS(location, key, local)
 	if err := archive.Check(ctx); err != nil {
@@ -130,26 +130,78 @@ func newOSS(location OSSLocation, key accessKey, usePathStyle bool) *OSS {
 	return &OSS{location: location, client: oss.NewClient(cfg), httpClient: httpClient}
 }
 
-func loadJSONFile(name string, dest any, fields ...string) error {
+func loadOSSLocation(name, ledgerPrefix string) (OSSLocation, error) {
+	var location OSSLocation
+	invalid := errors.New("invalid deletion ledger OSS configuration")
+	data, err := readConfigFile(name)
+	if err != nil {
+		return location, invalid
+	}
+	fields, err := exactObject(data)
+	if err != nil {
+		return location, invalid
+	}
+	if _, shared := fields["version"]; shared {
+		if ledgerPrefix == "" {
+			return location, errors.New("SPARK_DELETION_LEDGER_OSS_PREFIX is required with an oss-v2 attachment configuration")
+		}
+		if _, err := exactObject(data, "version", "oss_region", "oss_endpoint", "oss_use_cname",
+			"bucket", "prefix", "credentials_file", "put_ttl_seconds", "get_ttl_seconds"); err != nil {
+			return location, invalid
+		}
+		var config asset.OSSConfig
+		if err := decodeJSON(data, &config); err != nil || config.Version != "oss-v2" || config.Prefix == "" || config.OSSUseCNAME {
+			return location, invalid
+		}
+		// The attachment configuration's credential path and signed URL
+		// settings do not grant authority to the archive.
+		return OSSLocation{
+			Region: config.OSSRegion, Endpoint: config.OSSEndpoint, Bucket: config.Bucket,
+			Prefix: ledgerPrefix, ObjectPrefix: config.Prefix,
+		}, nil
+	}
+	fields, err = exactObject(data, "region", "endpoint", "bucket", "prefix", "object_prefix")
+	if err != nil || len(fields) != 5 || decodeJSON(data, &location) != nil {
+		return OSSLocation{}, invalid
+	}
+	if ledgerPrefix != "" && ledgerPrefix != location.Prefix {
+		return OSSLocation{}, errors.New("SPARK_DELETION_LEDGER_OSS_PREFIX conflicts with the configured deletion ledger prefix")
+	}
+	return location, nil
+}
+
+func loadAccessKey(name string) (accessKey, error) {
+	var key accessKey
+	invalid := errors.New("invalid deletion ledger OSS credentials")
+	data, err := readConfigFile(name)
+	if err != nil {
+		return key, invalid
+	}
+	fields, err := exactObject(data)
+	if err != nil || decodeJSON(fields["access_key_id"], &key.ID) != nil ||
+		decodeJSON(fields["access_key_secret"], &key.Secret) != nil ||
+		strings.TrimSpace(key.ID) == "" || strings.TrimSpace(key.Secret) == "" {
+		return accessKey{}, invalid
+	}
+	return key, nil
+}
+
+func readConfigFile(name string) ([]byte, error) {
 	if !filepath.IsAbs(name) {
-		return errors.New("configuration file path must be absolute")
+		return nil, errors.New("configuration file path must be absolute")
 	}
 	f, err := os.Open(name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil || !stat.Mode().IsRegular() || stat.Size() > maxConfigBytes {
-		return errors.New("invalid configuration file")
+		return nil, errors.New("invalid configuration file")
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
 	if err != nil || len(data) > maxConfigBytes {
-		return errors.New("invalid configuration file")
+		return nil, errors.New("invalid configuration file")
 	}
-	object, err := exactObject(data, fields...)
-	if err != nil || len(object) != len(fields) {
-		return errors.New("missing or invalid configuration fields")
-	}
-	return decodeJSON(data, dest)
+	return data, nil
 }

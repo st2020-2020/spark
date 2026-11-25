@@ -14,7 +14,8 @@ import (
 
 const credentialsPath = "/run/secrets/spark-oss-credentials.json"
 
-type config struct {
+// OSSConfig is the shared oss-v2 configuration file format.
+type OSSConfig struct {
 	Version         string `json:"version"`
 	OSSRegion       string `json:"oss_region"`
 	OSSEndpoint     string `json:"oss_endpoint"`
@@ -47,7 +48,7 @@ func Load(env string) (*OSS, error) {
 	if path == "" {
 		path = "/run/spark-oss/config.json"
 	}
-	var c config
+	var c OSSConfig
 	if err := readJSON(path, &c); err != nil {
 		return nil, errors.New("cannot read OSS configuration")
 	}

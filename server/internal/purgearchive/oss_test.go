@@ -3,6 +3,7 @@ package purgearchive
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -327,16 +328,76 @@ func TestOSSConfigurationRejectsMixedScopesAndUnexpectedFields(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "credentials.json")
 	for _, bad := range []string{
 		`{"access_key_id":"id","access_key_id":"override","access_key_secret":"secret"}`,
-		`{"access_key_id":"id","access_key_secret":"secret","extra":"unknown"}`,
+		`{"Access_Key_ID":"id","access_key_secret":"secret"}`,
 		`{"access_key_id":"id","access_key_secret":null}`,
 		`{"access_key_id":"id","access_key_secret":"secret"} {}`,
 	} {
 		if err := os.WriteFile(path, []byte(bad), 0600); err != nil {
 			t.Fatal(err)
 		}
-		if err := loadJSONFile(path, new(accessKey), "access_key_id", "access_key_secret"); err == nil {
+		if _, err := loadAccessKey(path); err == nil {
 			t.Fatal("invalid credential JSON accepted")
 		}
+	}
+	if err := os.WriteFile(path, []byte(`{"label":"operator key","access_key_id":"id","access_key_secret":"secret","metadata":{"last_updated":null}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if key, err := loadAccessKey(path); err != nil || key != (accessKey{ID: "id", Secret: "secret"}) {
+		t.Fatalf("shared credentials with metadata failed: %v", err)
+	}
+}
+
+func TestOSSLocationSharedAndPinned(t *testing.T) {
+	cfg := filepath.Join(t.TempDir(), "oss.json")
+	attachment := `{"version":"oss-v2","oss_region":"cn-shanghai","oss_endpoint":"https://oss-cn-shanghai.aliyuncs.com","bucket":"ledger-fixture","prefix":"spark/assets/","credentials_file":"/unused.json","put_ttl_seconds":600,"get_ttl_seconds":300}`
+	write := func(data []byte) {
+		t.Helper()
+		if err := os.WriteFile(cfg, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write([]byte(attachment))
+	if _, err := loadOSSLocation(cfg, ""); err == nil || !strings.Contains(err.Error(), "SPARK_DELETION_LEDGER_OSS_PREFIX") {
+		t.Fatalf("shared config did not require an explicit prefix: %v", err)
+	}
+	location, err := loadOSSLocation(cfg, testPrefix)
+	want := OSSLocation{Region: "cn-shanghai", Endpoint: "https://oss-cn-shanghai.aliyuncs.com",
+		Bucket: testBucket, Prefix: testPrefix, ObjectPrefix: testAssets}
+	if err != nil || location != want {
+		t.Fatalf("shared config derived unexpected location: %+v, %v", location, err)
+	}
+	for _, prefix := range []string{"spark/assets/", "spark/assets/archive/", "spark/"} {
+		location, err := loadOSSLocation(cfg, prefix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := location.validate("production"); err == nil {
+			t.Fatalf("accepted overlapping archive prefix %q", prefix)
+		}
+	}
+	for _, bad := range []string{
+		strings.Replace(attachment, "oss-v2", "oss-v1", 1),
+		strings.Replace(attachment, `"bucket"`, `"bucket":"shadow","bucket"`, 1),
+		strings.Replace(attachment, `"bucket"`, `"oss_use_cname":true,"bucket"`, 1),
+		strings.Replace(attachment, `"bucket"`, `"region":"cn-shanghai","bucket"`, 1),
+	} {
+		write([]byte(bad))
+		if _, err := loadOSSLocation(cfg, testPrefix); err == nil {
+			t.Fatal("accepted malformed or incompatible attachment configuration")
+		}
+	}
+	canonical, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(canonical)
+	for _, prefix := range []string{"", testPrefix} {
+		if pinned, err := loadOSSLocation(cfg, prefix); err != nil || pinned != want {
+			t.Fatalf("pinned location did not reload: %+v, %v", pinned, err)
+		}
+	}
+	if _, err := loadOSSLocation(cfg, "spark/wrong/"); err == nil {
+		t.Fatal("environment overrode the pinned location")
 	}
 }
 
