@@ -247,13 +247,29 @@ describe('v0.10.0 project deletion and async cleanup safety', () => {
     expect(loadDraft<CollectionDraft>(user.id, 'inbox').data?.document).toEqual(makeDoc('收件箱已有草稿'));
     expect(loadDraft<CollectionDraft>(user.id, `project:${projB.id}`).data?.projectIds).toEqual([projA.id, projB.id]);
 
-    // Clear inbox so transfer to inbox is lossless, then delete projA
+    // Clear inbox so transfer to inbox is lossless, test transfer failure preserves project draft, then transfer & delete
     localStorage.removeItem(`spark:draft:v1:${user.id}:inbox`);
     await ui.click(screen.getByRole('button', { name: '删除项目' }));
     const dialog2 = await screen.findByRole('dialog', { name: '确认删除项目' });
-    expect(within(dialog2).getByText(/继续删除会将其转存到收件箱草稿/)).toBeInTheDocument();
+    expect(within(dialog2).getByText(/先转存到收件箱后再删除/)).toBeInTheDocument();
     await ui.type(within(dialog2).getByLabelText('请输入「草稿测试A」确认删除'), '草稿测试A');
-    await ui.click(within(dialog2).getByRole('button', { name: '确认删除' }));
+    expect(within(dialog2).getByRole('button', { name: '确认删除' })).toBeDisabled();
+
+    // If saving to inbox fails (e.g. storage quota), keep project draft intact & block silent loss
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    await ui.click(within(dialog2).getByRole('button', { name: '先转存到收件箱' }));
+    expect(await within(dialog2).findByText(/本地草稿存储失败|已保留原项目草稿/)).toBeInTheDocument();
+    setItemSpy.mockRestore();
+    expect(loadDraft<CollectionDraft>(user.id, `project:${projA.id}`).data?.document).toEqual(makeDoc('项目A未保存草稿'));
+
+    // Retry transfer -> succeeds before delete, enables confirm delete without losing ready image
+    await ui.click(within(dialog2).getByRole('button', { name: '先转存到收件箱' }));
+    expect(await within(dialog2).findByText('未保存草稿已转存到收件箱，可继续确认删除或先取消。')).toBeInTheDocument();
+    const confirmBtn2 = within(dialog2).getByRole('button', { name: '确认删除' });
+    expect(confirmBtn2).toBeEnabled();
+    await ui.click(confirmBtn2);
     expect(await screen.findByRole('heading', { name: '项目' })).toBeInTheDocument();
 
     // Inbox received projA's draft + ready image with deleted projectId stripped; otherProjDraft only stripped projA.id
@@ -283,6 +299,58 @@ describe('v0.10.0 project deletion and async cleanup safety', () => {
     expect(within(pendingDialog).getByRole('button', { name: '确认删除' })).toBeDisabled();
     await ui.click(within(pendingDialog).getByRole('checkbox'));
     expect(within(pendingDialog).getByRole('button', { name: '确认删除' })).toBeEnabled();
+  });
+
+  it('isolates in-flight project A delete across A->B navigation so late A settlement does not navigate B away or touch B draft', async () => {
+    const { api, user } = await setupAdmin();
+    const projA = await api.createProject({ name: '并发项目A', description: '', focus_points: [] }, 'pa-nav');
+    const projB = await api.createProject({ name: '并发项目B', description: '', focus_points: [] }, 'pb-nav');
+
+    saveDraft(user.id, `project:${projB.id}`, {
+      collectionId: crypto.randomUUID(),
+      idempotencyKey: 'k-pb-nav',
+      document: makeDoc('项目B自己的草稿'),
+      intent: '',
+      originalUrl: '',
+      manualTitle: '',
+      projectIds: [projB.id],
+      tagIds: [],
+      aiExcluded: false,
+      updatedAt: new Date().toISOString(),
+    });
+
+    let resolveDeleteA!: () => void;
+    vi.spyOn(api, 'deleteProject').mockImplementation(
+      () =>
+        new Promise<void>((res) => {
+          resolveDeleteA = res;
+        }),
+    );
+
+    const ui = userEvent.setup();
+    mount(api, `/projects/${projA.id}`);
+    await screen.findByRole('heading', { name: '并发项目A' });
+
+    await ui.click(screen.getByRole('button', { name: '删除项目' }));
+    const dialog = await screen.findByRole('dialog', { name: '确认删除项目' });
+    await ui.type(within(dialog).getByLabelText('请输入「并发项目A」确认删除'), '并发项目A');
+    await ui.click(within(dialog).getByRole('button', { name: '确认删除' }));
+    await waitFor(() => expect(resolveDeleteA).toBeTypeOf('function'));
+
+    // Navigate A -> B via sidebar while Project A deletion is still in flight
+    const sidebarLinkB = screen.getByRole('link', { name: '并发项目B' });
+    await ui.click(sidebarLinkB);
+    expect(await screen.findByRole('heading', { name: '并发项目B' })).toBeInTheDocument();
+
+    // Resolve Project A's late 204 -> must NOT navigate B away or steal/alter B's draft
+    await act(async () => {
+      resolveDeleteA();
+    });
+    expect(screen.getByRole('heading', { name: '并发项目B' })).toBeInTheDocument();
+    expect(loadDraft<CollectionDraft>(user.id, `project:${projB.id}`).data?.document).toEqual(
+      makeDoc('项目B自己的草稿'),
+    );
+    expect(loadDraft<CollectionDraft>(user.id, 'inbox').data).toBeNull();
   });
 
   it('hides note trash while editing, avoids persisting note titles in purge sessionStorage, and isolates account switches', async () => {

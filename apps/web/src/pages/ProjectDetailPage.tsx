@@ -17,7 +17,8 @@ import { captureAuthSession, isSameAuthSession, type AuthSessionSnapshot } from 
 import {
   isDraftMeaningful,
   loadDraft,
-  reconcileProjectDraftsOnDelete,
+  moveProjectDraftToInboxSafely,
+  removeProjectFromUserDrafts,
   type CollectionDraft,
 } from '../lib/drafts';
 import { contentTypeLabels, projectStateLabel } from '../lib/format';
@@ -72,15 +73,20 @@ export function ProjectDetailPage() {
     hasPendingImageFiles: boolean;
     readyImageCount: number;
     inboxHasDraft: boolean;
+    transferred: boolean;
   }>({
     hasUnsavedDraft: false,
     hasPendingImageFiles: false,
     readyImageCount: 0,
     inboxHasDraft: false,
+    transferred: false,
   });
+  const [composerResetKey, setComposerResetKey] = useState(0);
   const composerSnapshotRef = useRef<ComposerDraftSnapshot | null>(null);
   const deleteKeyRef = useRef<{ version: number; key: string } | null>(null);
-  const deleteAttemptSessionRef = useRef<AuthSessionSnapshot | null>(null);
+  const deleteAttemptRef = useRef<{ projectId: string; session: AuthSessionSnapshot } | null>(null);
+  const activeProjectIdRef = useRef(id);
+  activeProjectIdRef.current = id;
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -124,10 +130,38 @@ export function ProjectDetailPage() {
       hasPendingImageFiles: Boolean(live?.hasPendingImageFiles),
       readyImageCount: Math.max(live?.readyImageCount ?? 0, readyFromDisk),
       inboxHasDraft: isDraftMeaningful(diskInboxDraft),
+      transferred: false,
     });
     setDeleteError(null);
     setDeleteConflictVersion(null);
     setDeleteOpen(true);
+  };
+
+  const handleTransferDraftBeforeDelete = () => {
+    const res = moveProjectDraftToInboxSafely(user?.id, id, composerSnapshotRef.current?.currentDraft);
+    if (!res.ok) {
+      setDeleteError(res.error);
+      if (res.reason === 'inbox_occupied') {
+        setDeleteDraftState((prev) => ({ ...prev, inboxHasDraft: true }));
+      } else if (res.reason === 'empty') {
+        setDeleteDraftState((prev) => ({
+          ...prev,
+          hasUnsavedDraft: false,
+          readyImageCount: 0,
+        }));
+      }
+      return;
+    }
+    setDeleteError(null);
+    composerSnapshotRef.current = null;
+    setComposerResetKey((n) => n + 1);
+    setDeleteDraftState({
+      hasUnsavedDraft: false,
+      hasPendingImageFiles: false,
+      readyImageCount: 0,
+      inboxHasDraft: true,
+      transferred: true,
+    });
   };
 
   const collectionsQuery = useInfiniteQuery({
@@ -208,10 +242,16 @@ export function ProjectDetailPage() {
     updateMutation.mutate(conflictLatestVersion ?? projectQuery.data.version);
   };
 
+  const isCurrentProjectSession = (
+    targetProjectId: string,
+    session: AuthSessionSnapshot | null | undefined,
+  ): boolean =>
+    mountedRef.current &&
+    activeProjectIdRef.current === targetProjectId &&
+    isSameAuthSession(session);
+
   const finishProjectDeletionNavigation = (
-    targetUserId: string | null,
     deletedProjectId: string,
-    draftTransferResult: { movedToInbox: boolean },
     customToast?: {
       message: string;
       tone?: 'default' | 'error';
@@ -232,48 +272,46 @@ export function ProjectDetailPage() {
     void queryClient.invalidateQueries({ queryKey: ['collection-thread'] });
     void queryClient.invalidateQueries({ queryKey: ['collections-command'] });
     void queryClient.invalidateQueries({ queryKey: ['tags'] });
-    const defaultMessage = draftTransferResult.movedToInbox
-      ? `项目${projectName ? `「${projectName}」` : ''}已删除，未保存草稿已转存到收件箱`
-      : `项目${projectName ? `「${projectName}」` : ''}已删除，原关联收藏与图片已保留`;
-    pushToast(customToast ?? { message: defaultMessage });
-    if (targetUserId) {
-      // Drafts and sidebar pins already updated for targetUserId prior to UI unmount
-    }
+    pushToast(
+      customToast ?? {
+        message: `项目${projectName ? `「${projectName}」` : ''}已删除，原关联收藏与图片已保留`,
+      },
+    );
     navigate('/projects', { replace: true });
   };
 
   const deleteMutation = useMutation({
     mutationFn: async (baseVersion: number): Promise<{ session: AuthSessionSnapshot; deletedId: string }> => {
+      const targetId = id;
       const session = captureAuthSession();
-      deleteAttemptSessionRef.current = session;
+      deleteAttemptRef.current = { projectId: targetId, session };
       if (!deleteKeyRef.current || deleteKeyRef.current.version !== baseVersion) {
         deleteKeyRef.current = { version: baseVersion, key: generateIdempotencyKey() };
       }
-      await api.deleteProject(id, baseVersion, deleteKeyRef.current.key);
-      return { session, deletedId: id };
+      await api.deleteProject(targetId, baseVersion, deleteKeyRef.current.key);
+      return { session, deletedId: targetId };
     },
     onSuccess: ({ session, deletedId }) => {
-      const activeSnapshot = isSameAuthSession(session) ? composerSnapshotRef.current?.currentDraft : null;
-      const transferResult = session.userId
-        ? reconcileProjectDraftsOnDelete(session.userId, deletedId, activeSnapshot)
-        : { movedToInbox: false };
+      // Never touch the later page's composer or storage; clean only the deleted target project + captured user.
       if (session.userId) {
+        removeProjectFromUserDrafts(session.userId, deletedId);
         removeSidebarPinnedId(session.userId, 'project', deletedId);
       }
-      if (!mountedRef.current || !isSameAuthSession(session)) return;
-      finishProjectDeletionNavigation(session.userId, deletedId, transferResult);
+      if (!isCurrentProjectSession(deletedId, session)) return;
+      finishProjectDeletionNavigation(deletedId);
     },
     onError: async (err, baseVersion) => {
-      const session = deleteAttemptSessionRef.current ?? captureAuthSession();
-      if (!mountedRef.current || !isSameAuthSession(session)) return;
+      const attempt = deleteAttemptRef.current;
+      const targetId = attempt?.projectId ?? id;
+      const session = attempt?.session ?? captureAuthSession();
+      if (!isCurrentProjectSession(targetId, session)) return;
+
       if (isApiErrorCode(err, 'not_found')) {
-        const transferResult = session.userId
-          ? reconcileProjectDraftsOnDelete(session.userId, id, composerSnapshotRef.current?.currentDraft)
-          : { movedToInbox: false };
         if (session.userId) {
-          removeSidebarPinnedId(session.userId, 'project', id);
+          removeProjectFromUserDrafts(session.userId, targetId, { removeProjectScope: false });
+          removeSidebarPinnedId(session.userId, 'project', targetId);
         }
-        finishProjectDeletionNavigation(session.userId, id, transferResult, {
+        finishProjectDeletionNavigation(targetId, {
           message: '该项目已不存在或已被删除，原关联收藏仍保留。',
           tone: 'error',
         });
@@ -282,20 +320,18 @@ export function ProjectDetailPage() {
       if (isApiErrorCode(err, 'resource_conflict')) {
         setDeleteError(null);
         try {
-          const latest = await api.getProject(id);
-          if (!mountedRef.current || !isSameAuthSession(session)) return;
-          queryClient.setQueryData(['project', id], latest);
+          const latest = await api.getProject(targetId);
+          if (!isCurrentProjectSession(targetId, session)) return;
+          queryClient.setQueryData(['project', targetId], latest);
           setDeleteConflictVersion(latest.version);
         } catch (refreshErr) {
-          if (!mountedRef.current || !isSameAuthSession(session)) return;
+          if (!isCurrentProjectSession(targetId, session)) return;
           if (isApiErrorCode(refreshErr, 'not_found')) {
-            const transferResult = session.userId
-              ? reconcileProjectDraftsOnDelete(session.userId, id, composerSnapshotRef.current?.currentDraft)
-              : { movedToInbox: false };
             if (session.userId) {
-              removeSidebarPinnedId(session.userId, 'project', id);
+              removeProjectFromUserDrafts(session.userId, targetId, { removeProjectScope: false });
+              removeSidebarPinnedId(session.userId, 'project', targetId);
             }
-            finishProjectDeletionNavigation(session.userId, id, transferResult, {
+            finishProjectDeletionNavigation(targetId, {
               message: '该项目已不存在或已被删除，原关联收藏仍保留。',
               tone: 'error',
             });
@@ -409,7 +445,7 @@ export function ProjectDetailPage() {
       )}
 
       <CollectionComposer
-        key={project.id}
+        key={`${project.id}:${composerResetKey}`}
         defaultProjectId={project.id}
         draftSnapshotRef={composerSnapshotRef}
       />
@@ -645,9 +681,11 @@ export function ProjectDetailPage() {
         hasPendingImageFiles={deleteDraftState.hasPendingImageFiles}
         readyImageCount={deleteDraftState.readyImageCount}
         inboxHasDraft={deleteDraftState.inboxHasDraft}
+        draftTransferred={deleteDraftState.transferred}
         isSubmitting={deleteMutation.isPending}
         errorMessage={deleteError}
         conflictVersion={deleteConflictVersion}
+        onTransferDraftToInbox={handleTransferDraftBeforeDelete}
         onCancel={() => {
           if (!deleteMutation.isPending) setDeleteOpen(false);
         }}

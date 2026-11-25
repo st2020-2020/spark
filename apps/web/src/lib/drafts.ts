@@ -116,18 +116,12 @@ function stripProjectReferenceFromDraft(
   };
 }
 
-export function removeProjectFromUserDrafts(userId: string | undefined, projectId: string): void {
-  reconcileProjectDraftsOnDelete(userId, projectId, null);
-}
-
-export function reconcileProjectDraftsOnDelete(
+export function removeProjectFromUserDrafts(
   userId: string | undefined,
   projectId: string,
-  activeSnapshotDraft?: CollectionDraft | null,
-): { movedToInbox: boolean } {
-  if (!userId || !projectId || typeof window === 'undefined') {
-    return { movedToInbox: false };
-  }
+  options?: { removeProjectScope?: boolean },
+): void {
+  if (!userId || !projectId || typeof window === 'undefined') return;
   const projectScope = `project:${projectId}`;
   const projectStorageKey = buildKey(userId, projectScope);
 
@@ -160,25 +154,60 @@ export function reconcileProjectDraftsOnDelete(
     // Ignore storage failure during reference cleanup
   }
 
+  if (options?.removeProjectScope !== false) {
+    removeDraft(userId, projectScope);
+  }
+}
+
+export function moveProjectDraftToInboxSafely(
+  userId: string | undefined,
+  projectId: string,
+  activeSnapshotDraft?: CollectionDraft | null,
+): { ok: true } | { ok: false; reason: 'empty' | 'inbox_occupied' | 'storage_failed'; error: string } {
+  if (!userId || !projectId || typeof window === 'undefined') {
+    return { ok: false, reason: 'storage_failed', error: '未登录账号，无法转存草稿。' };
+  }
+  const projectScope = `project:${projectId}`;
   const diskDraft = loadDraft<CollectionDraft>(userId, projectScope).data;
   const sourceDraft =
     activeSnapshotDraft && isDraftMeaningful(activeSnapshotDraft) ? activeSnapshotDraft : diskDraft;
 
-  let movedToInbox = false;
-  if (sourceDraft && isDraftMeaningful(sourceDraft)) {
-    const readyImages = (sourceDraft.images ?? []).filter((img) => Boolean(img.uploadId));
-    const sanitized = stripProjectReferenceFromDraft(
-      { ...sourceDraft, images: readyImages },
-      projectId,
-    );
-    const existingInbox = loadDraft<CollectionDraft>(userId, 'inbox').data;
-    if (isDraftMeaningful(sanitized) && !isDraftMeaningful(existingInbox)) {
-      const saved = saveDraft(userId, 'inbox', sanitized);
-      if (saved.ok) movedToInbox = true;
-    }
+  if (!sourceDraft || !isDraftMeaningful(sourceDraft)) {
+    removeDraft(userId, projectScope);
+    return { ok: false, reason: 'empty', error: '当前没有需要转存的草稿。' };
   }
+
+  const readyImages = (sourceDraft.images ?? []).filter((img) => Boolean(img.uploadId));
+  const sanitized = stripProjectReferenceFromDraft(
+    { ...sourceDraft, images: readyImages },
+    projectId,
+  );
+  if (!isDraftMeaningful(sanitized)) {
+    removeDraft(userId, projectScope);
+    return { ok: false, reason: 'empty', error: '当前仅包含未完成的临时图片，无法转存。' };
+  }
+
+  const existingInbox = loadDraft<CollectionDraft>(userId, 'inbox').data;
+  if (isDraftMeaningful(existingInbox)) {
+    return {
+      ok: false,
+      reason: 'inbox_occupied',
+      error: '收件箱已有未保存草稿，无法自动转存；请先点击「取消」保存或清空。',
+    };
+  }
+
+  const saved = saveDraft(userId, 'inbox', sanitized);
+  if (!saved.ok) {
+    // Keep original project draft untouched when storage fails.
+    return {
+      ok: false,
+      reason: 'storage_failed',
+      error: saved.error ?? '转存到收件箱失败，已保留原项目草稿，请先点击「取消」保存或复制内容。',
+    };
+  }
+
   removeDraft(userId, projectScope);
-  return { movedToInbox };
+  return { ok: true };
 }
 
 /** File objects in an open upload queue cannot be recovered from the text draft. */

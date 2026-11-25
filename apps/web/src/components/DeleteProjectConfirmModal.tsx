@@ -10,9 +10,11 @@ export function DeleteProjectConfirmModal({
   hasPendingImageFiles = false,
   readyImageCount = 0,
   inboxHasDraft = false,
+  draftTransferred = false,
   isSubmitting,
   errorMessage,
   conflictVersion,
+  onTransferDraftToInbox,
   onCancel,
   onConfirm,
 }: {
@@ -23,29 +25,34 @@ export function DeleteProjectConfirmModal({
   hasPendingImageFiles?: boolean;
   readyImageCount?: number;
   inboxHasDraft?: boolean;
+  draftTransferred?: boolean;
   isSubmitting: boolean;
   errorMessage: string | null;
   conflictVersion: number | null;
+  onTransferDraftToInbox?: () => void;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const [confirmInput, setConfirmInput] = useState('');
-  const [discardPendingAck, setDiscardPendingAck] = useState(false);
+  const [discardAck, setDiscardAck] = useState(false);
 
   useEffect(() => {
     if (!open) {
       setConfirmInput('');
-      setDiscardPendingAck(false);
+      setDiscardAck(false);
     }
   }, [open]);
 
   const confirmMatched = confirmInput.trim() === projectName.trim() && projectName.trim().length > 0;
-  const needsExplicitDiscardAck = hasPendingImageFiles || (hasUnsavedDraft && inboxHasDraft);
-  const discardSatisfied = !needsExplicitDiscardAck || discardPendingAck;
+  const hasBlockingDraft = hasPendingImageFiles || hasUnsavedDraft;
+  const draftSatisfied = !hasBlockingDraft || discardAck;
+  const canTransferToInbox = Boolean(
+    hasUnsavedDraft && !hasPendingImageFiles && !inboxHasDraft && onTransferDraftToInbox,
+  );
 
   const handleSubmit = (event: FormEvent) => {
     event.preventDefault();
-    if (!confirmMatched || !discardSatisfied || isSubmitting) return;
+    if (!confirmMatched || !draftSatisfied || isSubmitting) return;
     onConfirm();
   };
 
@@ -71,21 +78,41 @@ export function DeleteProjectConfirmModal({
           </p>
         )}
 
-        {needsExplicitDiscardAck && (
+        {draftTransferred && (
+          <div className="sp-banner sp-banner--info" role="status">
+            <span>未保存草稿已转存到收件箱，可继续确认删除或先取消。</span>
+          </div>
+        )}
+
+        {hasBlockingDraft && (
           <div className="sp-stack">
             <div className="sp-banner sp-banner--error" role="alert">
               <span>
                 {hasPendingImageFiles
-                  ? '当前有未完成上传的临时图片，删除后无法保留。建议先点「取消」返回编辑区完成保存或清空。'
-                  : `当前页有未保存草稿${readyImageCount > 0 ? `（含 ${readyImageCount} 张已上传图片）` : ''}，且收件箱已有其他草稿，继续删除不会覆盖收件箱草稿并会放弃当前页草稿。建议先点「取消」返回保存或清空。`}
+                  ? '当前有未完成上传的临时图片，删除后无法保留。请先点「取消」返回编辑区保存或清空。'
+                  : inboxHasDraft
+                    ? `当前页有未保存草稿${readyImageCount > 0 ? `（含 ${readyImageCount} 张已上传图片）` : ''}，且收件箱已有其他草稿。请先点「取消」保存或清空。`
+                    : `当前页有未保存草稿${readyImageCount > 0 ? `（含 ${readyImageCount} 张已上传图片）` : ''}。可先点「取消」保存，或先转存到收件箱后再删除。`}
               </span>
             </div>
+            {canTransferToInbox && (
+              <div>
+                <button
+                  type="button"
+                  className="sp-btn sp-btn--sm"
+                  disabled={isSubmitting}
+                  onClick={onTransferDraftToInbox}
+                >
+                  先转存到收件箱
+                </button>
+              </div>
+            )}
             <label className="sp-row">
               <input
                 type="checkbox"
-                checked={discardPendingAck}
+                checked={discardAck}
                 disabled={isSubmitting}
-                onChange={(e) => setDiscardPendingAck(e.target.checked)}
+                onChange={(e) => setDiscardAck(e.target.checked)}
               />
               <span>
                 {hasPendingImageFiles
@@ -93,14 +120,6 @@ export function DeleteProjectConfirmModal({
                   : '放弃当前页未保存草稿并继续删除'}
               </span>
             </label>
-          </div>
-        )}
-
-        {!needsExplicitDiscardAck && hasUnsavedDraft && (
-          <div className="sp-banner sp-banner--info" role="status">
-            <span>
-              当前页有未保存草稿{readyImageCount > 0 ? `（含 ${readyImageCount} 张已上传图片）` : ''}。可先点「取消」返回保存或清空；继续删除会将其转存到收件箱草稿（收件箱当前为空）。
-            </span>
           </div>
         )}
 
@@ -147,7 +166,7 @@ export function DeleteProjectConfirmModal({
           <button
             type="submit"
             className="sp-btn sp-btn--danger"
-            disabled={!confirmMatched || !discardSatisfied || isSubmitting}
+            disabled={!confirmMatched || !draftSatisfied || isSubmitting}
           >
             {isSubmitting ? '删除中…' : '确认删除'}
           </button>
