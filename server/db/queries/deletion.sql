@@ -1,7 +1,8 @@
 -- name: ListDueCollectionsForPurge :many
 SELECT user_id, id, resource_version FROM collections
 WHERE deleted_at IS NOT NULL AND purge_requested_at IS NULL AND purge_after <= now()
-ORDER BY purge_after, id LIMIT $1;
+  AND purge_after >= COALESCE(sqlc.narg(expiry_start)::timestamptz, '-infinity'::timestamptz)
+ORDER BY purge_after, id LIMIT sqlc.arg(batch_size);
 
 -- name: RequestCollectionPurge :one
 -- Use the account change lock and include the cleanup job in the caller's transaction.

@@ -34,8 +34,9 @@ func schedulePurgeSweep(ctx context.Context, queue *river.Client[pgx.Tx], when t
 
 type purgeSweepWorker struct {
 	river.WorkerDefaults[purgeSweepArgs]
-	pool  *pgxpool.Pool
-	queue *river.Client[pgx.Tx]
+	pool        *pgxpool.Pool
+	queue       *river.Client[pgx.Tx]
+	expiryStart pgtype.Timestamptz
 }
 
 func (w *purgeSweepWorker) Work(ctx context.Context, _ *river.Job[purgeSweepArgs]) error {
@@ -43,7 +44,15 @@ func (w *purgeSweepWorker) Work(ctx context.Context, _ *river.Job[purgeSweepArgs
 	if err := schedulePurgeSweep(ctx, w.queue, tomorrow); err != nil {
 		return err
 	}
-	due, err := store.New(w.pool).ListDueCollectionsForPurge(ctx, purgeSweepBatch)
+	// Resume deletions already accepted even if registering a new
+	// expired collection fails later in this sweep.
+	recovered, err := w.requeueUnfinished(ctx)
+	if err != nil {
+		return err
+	}
+	due, err := store.New(w.pool).ListDueCollectionsForPurge(ctx, store.ListDueCollectionsForPurgeParams{
+		ExpiryStart: w.expiryStart, BatchSize: purgeSweepBatch,
+	})
 	if err != nil {
 		return err
 	}
@@ -55,7 +64,8 @@ func (w *purgeSweepWorker) Work(ctx context.Context, _ *river.Job[purgeSweepArgs
 			var version int64
 			err := tx.QueryRow(ctx, `SELECT resource_version FROM collections
 				WHERE user_id=$1 AND id=$2 AND deleted_at IS NOT NULL
-				  AND purge_requested_at IS NULL AND purge_after<=now()`, item.UserID, item.ID).Scan(&version)
+				  AND purge_requested_at IS NULL AND purge_after<=now()
+				  AND purge_after >= COALESCE($3::timestamptz, '-infinity'::timestamptz)`, item.UserID, item.ID, w.expiryStart).Scan(&version)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil // A concurrent restore or purge won.
 			}
@@ -68,10 +78,6 @@ func (w *purgeSweepWorker) Work(ctx context.Context, _ *river.Job[purgeSweepArgs
 		if err != nil {
 			return err
 		}
-	}
-	recovered, err := w.requeueUnfinished(ctx)
-	if err != nil {
-		return err
 	}
 	if len(due) == purgeSweepBatch || recovered == purgeSweepBatch {
 		return river.JobSnooze(time.Second)

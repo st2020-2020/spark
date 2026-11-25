@@ -34,12 +34,12 @@ type purgeWorker struct {
 	objects purgeObjectStore
 }
 
-func StartPurgeWorker(ctx context.Context, pool *pgxpool.Pool, archive *purgearchive.Archive, objects purgeObjectStore) (*river.Client[pgx.Tx], error) {
+func StartPurgeWorker(ctx context.Context, pool *pgxpool.Pool, archive *purgearchive.Archive, objects purgeObjectStore, expiryStart pgtype.Timestamptz) (*river.Client[pgx.Tx], error) {
 	if archive == nil {
 		return nil, errors.New("purge worker requires an independent deletion ledger")
 	}
 	workers := river.NewWorkers()
-	sweep := &purgeSweepWorker{pool: pool}
+	sweep := &purgeSweepWorker{pool: pool, expiryStart: expiryStart}
 	river.AddWorker(workers, &purgeWorker{pool: pool, archive: archive, objects: objects})
 	river.AddWorker(workers, sweep)
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

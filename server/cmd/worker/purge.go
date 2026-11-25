@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"spark/server/db"
 	"spark/server/internal/asset"
 	"spark/server/internal/backend"
@@ -18,6 +20,10 @@ import (
 func runPurge() error {
 	if os.Getenv("SPARK_PURGE_ENABLED") != "true" {
 		return errors.New("purge worker requires SPARK_PURGE_ENABLED=true")
+	}
+	expiryStart, err := purgeExpiryStart(os.Getenv("SPARK_PURGE_EXPIRY_START_AT"))
+	if err != nil {
+		return err
 	}
 	archive, err := purgearchive.Open(os.Getenv("SPARK_DELETION_LEDGER_DIR"))
 	if err != nil {
@@ -53,10 +59,22 @@ func runPurge() error {
 	}
 	working, cancelWorking := context.WithCancel(context.Background())
 	defer cancelWorking()
-	worker, err := backend.StartPurgeWorker(working, pool, archive, objects)
+	worker, err := backend.StartPurgeWorker(working, pool, archive, objects, expiryStart)
 	if err != nil {
 		return err
 	}
 	slog.Info("collection purge worker started")
 	return serveWorker(ctx, stop, cancelWorking, pool, worker)
+}
+
+func purgeExpiryStart(raw string) (pgtype.Timestamptz, error) {
+	if raw == "" {
+		return pgtype.Timestamptz{}, nil
+	}
+	const utcTimestamp = "2006-01-02T15:04:05Z"
+	start, err := time.Parse(utcTimestamp, raw)
+	if err != nil || start.Format(utcTimestamp) != raw {
+		return pgtype.Timestamptz{}, errors.New("SPARK_PURGE_EXPIRY_START_AT must be a UTC timestamp in YYYY-MM-DDTHH:MM:SSZ format")
+	}
+	return pgtype.Timestamptz{Time: start.UTC(), Valid: true}, nil
 }

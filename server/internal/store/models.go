@@ -322,31 +322,33 @@ type OrganizationPendingSuggestion struct {
 }
 
 type OrganizationRun struct {
-	ID                      pgtype.UUID
-	UserID                  pgtype.UUID
-	CollectionID            pgtype.UUID
-	ContentVersion          int64
-	UserPolicyVersion       int64
-	CollectionPolicyVersion int64
-	Status                  string
-	PromptVersion           string
-	MatchingPolicyVersion   string
-	Stages                  []byte
-	ProjectSnapshot         []byte
-	Result                  []byte
-	ErrorCode               pgtype.Text
-	Attempts                int32
-	AppliedAt               pgtype.Timestamptz
-	StartedAt               pgtype.Timestamptz
-	CompletedAt             pgtype.Timestamptz
-	CreatedAt               pgtype.Timestamptz
-	UpdatedAt               pgtype.Timestamptz
-	ImageWaiting            bool
-	ImageUserPolicyVersion  pgtype.Int8
-	ImageExtractionIds      []string
-	ImageArchiveStatus      pgtype.Text
-	WebArchive              bool
-	WebArchiveStatus        pgtype.Text
+	ID                        pgtype.UUID
+	UserID                    pgtype.UUID
+	CollectionID              pgtype.UUID
+	ContentVersion            int64
+	UserPolicyVersion         int64
+	CollectionPolicyVersion   int64
+	Status                    string
+	PromptVersion             string
+	MatchingPolicyVersion     string
+	Stages                    []byte
+	ProjectSnapshot           []byte
+	Result                    []byte
+	ErrorCode                 pgtype.Text
+	Attempts                  int32
+	AppliedAt                 pgtype.Timestamptz
+	StartedAt                 pgtype.Timestamptz
+	CompletedAt               pgtype.Timestamptz
+	CreatedAt                 pgtype.Timestamptz
+	UpdatedAt                 pgtype.Timestamptz
+	ImageWaiting              bool
+	ImageUserPolicyVersion    pgtype.Int8
+	ImageExtractionIds        []string
+	ImageArchiveStatus        pgtype.Text
+	WebArchive                bool
+	WebArchiveStatus          pgtype.Text
+	WebArchiveDecisionVersion pgtype.Int8
+	WebArchiveRecoveryOf      pgtype.UUID
 }
 
 type Project struct {

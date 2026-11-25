@@ -58,6 +58,8 @@ dc ps
 
 启用前为 `purge-worker` 挂载和 PostgreSQL 备份分属不同故障域的独立持久存储。创建专用目录，归运行 UID 65532 所有，权限 `0700`。使用 [删除 Compose 叠加](../deploy/compose.v0.3-purge.yaml)，设置 `SPARK_DELETION_LEDGER_HOST_PATH` 和同库的 `SPARK_PURGE_WORKER_DATABASE_URL`，并以 `SPARK_PURGE_ENABLED=true` 启动 `api purge-worker`。开发镜像用 `SPARK_API_IMAGE=spark-api:dev` 和 `SPARK_ENV=development`。保存过图片时追加 [清理 OSS 叠加](../deploy/compose.v0.3-purge-oss.yaml)，沿用图片存储的专属前缀与最小删除权限。文字收藏清理可独立运行。
 
+可选 `SPARK_PURGE_EXPIRY_START_AT` 仅由清理 Worker 读取。未设置时每日扫描沿用既有规则。首次在生产开启时，在部署配置持久写入固定 UTC 时间（`YYYY-MM-DDTHH:MM:SSZ`）。到期时间早于切换时间的收藏仍留在回收站。显式删除和未完成回执的重试照常进行。格式无效时 Worker 拒绝启动。
+
 Worker 先把只含操作 ID、归属、时间和对象清理计划的回执写入独立目录。回执采用 `0600` 权限，文件和目录条目持久化后才删数据。清理顺序与重试见 [数据设计](../docs/design/DATA.md#删除与恢复)。独立回执留存覆盖最早可恢复备份及其校验期。
 
 恢复时先在隔离环境还原 PostgreSQL 备份与对应对象数据并执行迁移。在 API 和处理任务停止时，向 `tools` 只读挂载完整独立账本目录，设置 `SPARK_DELETION_LEDGER_DIR`，在恢复库上执行 `/spark replay-deletions`。该命令还原墓碑、删除恢复库中的旧数据并持久排队对象清理。然后只对恢复环境启动清理 Worker，核对所有已重放操作完成、撤销旧会话与授权并检查附件引用后再开放流量。重复重放可继续恢复流程。 如果回执含对象而恢复库缺少对应账号，命令会以非零退出并输出操作 ID。保持环境离线，核对 PostgreSQL 与对象备份是否配对，解决该回执涉及的对象后再开放流量。

@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/rivertype"
 	"spark/server/internal/purgearchive"
@@ -273,7 +274,7 @@ func TestImageAnalysisDoesNotResendAfterDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = archive.Close() })
-	purge, err := StartPurgeWorker(context.Background(), app.Pool, archive, storage)
+	purge, err := StartPurgeWorker(context.Background(), app.Pool, archive, storage, pgtype.Timestamptz{})
 	if err != nil {
 		t.Fatal(err)
 	}

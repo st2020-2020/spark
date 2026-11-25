@@ -39,8 +39,14 @@ func (q *Queries) GetCollectionDeletion(ctx context.Context, arg GetCollectionDe
 const listDueCollectionsForPurge = `-- name: ListDueCollectionsForPurge :many
 SELECT user_id, id, resource_version FROM collections
 WHERE deleted_at IS NOT NULL AND purge_requested_at IS NULL AND purge_after <= now()
-ORDER BY purge_after, id LIMIT $1
+  AND purge_after >= COALESCE($1::timestamptz, '-infinity'::timestamptz)
+ORDER BY purge_after, id LIMIT $2
 `
+
+type ListDueCollectionsForPurgeParams struct {
+	ExpiryStart pgtype.Timestamptz
+	BatchSize   int32
+}
 
 type ListDueCollectionsForPurgeRow struct {
 	UserID          pgtype.UUID
@@ -48,8 +54,8 @@ type ListDueCollectionsForPurgeRow struct {
 	ResourceVersion int64
 }
 
-func (q *Queries) ListDueCollectionsForPurge(ctx context.Context, limit int32) ([]ListDueCollectionsForPurgeRow, error) {
-	rows, err := q.db.Query(ctx, listDueCollectionsForPurge, limit)
+func (q *Queries) ListDueCollectionsForPurge(ctx context.Context, arg ListDueCollectionsForPurgeParams) ([]ListDueCollectionsForPurgeRow, error) {
+	rows, err := q.db.Query(ctx, listDueCollectionsForPurge, arg.ExpiryStart, arg.BatchSize)
 	if err != nil {
 		return nil, err
 	}

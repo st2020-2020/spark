@@ -110,6 +110,12 @@ PATCH 字段省略表示保留，空字符串清除可清除的文字字段。or
 
 暂不支持的格式版本返回 422 unsupported_document，前端保留本地文档。旧 MyGo 内容导入时按段落构建 v1 文档，原图经新附件流程上传。
 
+## 项目删除
+
+`DELETE /projects/{id}?base_version=<version>` 需要 Web 会话、CSRF 和 `Idempotency-Key`，请求无需正文。它删除当前账号的项目，解除项目与所有收藏的关联，保留收藏、附件和其他项目决定。成功返回 `204`。在幂等窗口内，原键和原版本重试返回 `204` 及 `Idempotent-Replayed: true`。同键改版本返回 `409 idempotency_mismatch`。项目版本过期返回 `409 resource_conflict`，附带 `details.current_version`。项目不存在、已经由不同请求删除或属于其他账号时返回 `404 not_found`。
+
+受影响收藏的资源版本和决定版本会更新。客户端删除成功后应刷新项目、收藏、搜索及待归类列表。旧的收藏创建或项目决定回执若引用已删除项目，回放返回当前收藏。已删除的项目创建回执返回 `404`。
+
 ## 收藏和人工归类
 
 [创建样例](../../contracts/examples/collection-create.json) 使用虚构 UUID 和 example.com，开发联调时替换成当前账号真实项目和附件 ID。
@@ -170,7 +176,7 @@ POST /organization 以最新内容版本重新整理，已有同输入活动运�
 
 `POST /collections/{id}/purge` 接受回收站内本人收藏的 `base_resource_version`，需要 CSRF 和幂等键。返回 `202 Accepted` 及稳定的 `operation_id`。登记后收藏立即从回收站、详情和搜索排除，恢复和新附件授权也停止。重放返回原操作当前状态。
 
-`GET /collections/{id}/purge` 仅向所属账号返回已登记操作，响应包括 `operation_id` 和 `status`。 `queued` 表示独立账本待持久化，`running` 表示仍有数据库或对象待清理，`completed` 表示两者清理完成。清理按后台任务重试。开关关闭时新的永久删除请求返回 `503 integration_not_configured`。
+`GET /collections/{id}/purge` 仅向所属账号返回已登记操作，响应包括 `operation_id` 和 `status`。 `queued` 表示独立账本待持久化，`running` 表示仍有数据库或对象待清理，`completed` 表示两者清理完成。清理按后台任务重试。开关关闭时新的永久删除请求返回 `503 integration_not_configured`，已经受理的回执仍可查询和重放。配置到期切换时间后，只自动登记到期时间大于或等于切换时间的收藏。更早到期的收藏仍可恢复或手动永久删除。
 
 ## 图片理解
 
