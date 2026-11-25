@@ -6207,6 +6207,36 @@ a.sp-pill:hover {
   gap: 4px 12px;
 }
 
+.sp-trash-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--sp-surface);
+  border: 1px solid var(--sp-border);
+  border-radius: var(--sp-radius-control);
+}
+
+.sp-trash-toolbar-actions {
+  flex-wrap: wrap;
+}
+
+.sp-trash-select-all,
+.sp-trash-card-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: var(--sp-text-sm);
+}
+
+.sp-trash-note--selected {
+  border-color: color-mix(in srgb, var(--sp-accent-fg) 45%, var(--sp-border));
+}
+
 .sp-trash-expiry {
   color: var(--sp-muted);
   font-size: var(--sp-text-xs);
@@ -6216,6 +6246,11 @@ a.sp-pill:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.sp-purge-status-toolbar {
+  flex-wrap: wrap;
+  gap: 8px 12px;
 }
 
 .sp-purge-status-card {
