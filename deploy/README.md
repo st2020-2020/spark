@@ -221,6 +221,73 @@ OSS 模式使用已有阿里云 OSS 的一个经确认的私有专用前缀。�
 
 回执身份无 Delete、ACL 或桶策略管理权限。核对已有附件身份在回执和探针前缀不能写、覆盖、删对象或删版本。探针结果单独记录，正式 `receipts/*` 的读写及附件隔离由控制面实际有效策略或授权验证确认。列表权限的资源是桶，公开裸列桶无需参与验收。[阿里云 OSS RAM 前缀授权](https://www.alibabacloud.com/help/en/oss/user-guide/access-control-base-on-ram-policy)
 
+<details>
+<summary>回执写入与恢复只读 RAM 策略示例（含探针）</summary>
+
+以下是供管理员核对或配置的两份 RAM 策略示例。将 `YOUR_BUCKET` 和示例前缀替换为实际值，分别绑定到对应身份。已有更宽的 Allow 仍可能生效，须结合桶策略和其他授权核验。两份示例包含发布前合成探针所需权限。
+
+**回执写入身份**
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketVersioning"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:PutObject", "oss:GetObject"],
+      "Resource": [
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/receipts/*",
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/probes/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"],
+      "Condition": {"StringEquals": {"oss:Prefix": ["spark-deletion-ledger/probes/"]}}
+    }
+  ]
+}
+```
+
+**恢复只读身份**
+
+```json
+{
+  "Version": "1",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetBucketVersioning"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:GetObject"],
+      "Resource": [
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/receipts/*",
+        "acs:oss:*:*:YOUR_BUCKET/spark-deletion-ledger/probes/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": ["oss:ListObjects"],
+      "Resource": ["acs:oss:*:*:YOUR_BUCKET"],
+      "Condition": {"StringEquals": {"oss:Prefix": [
+        "spark-deletion-ledger/receipts/", "spark-deletion-ledger/probes/"
+      ]}}
+    }
+  ]
+}
+```
+
+</details>
+
 用已审候选镜像与获准探针身份运行一次 `/spark probe-deletion-ledger <新的随机UUID>`。部署或恢复时使用同一专用回执 JSON。命令只操作 `<prefix>probes/`，检查并发创建、防覆盖、内容未变和前缀限定列表。由受控恢复主机以实际读身份运行 `verify-deletion-ledger` 回读同一探针并生成绑定。示例在 Bash 中执行，变量由运维填写为已核验路径和 ID：
 
 ```bash
