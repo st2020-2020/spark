@@ -20,6 +20,23 @@ async function setup(path: string, prepare?: (api: ReturnType<typeof createTestA
   return api;
 }
 
+// jsdom has no View Transition API. Its DOM update callback runs asynchronously in browsers.
+function deferThemeTransition() {
+  const updates: (() => void)[] = [];
+  const original = Object.getOwnPropertyDescriptor(document, 'startViewTransition');
+  Object.defineProperty(document, 'startViewTransition', {
+    configurable: true,
+    value: (update: () => void) => { updates.push(update); },
+  });
+  return {
+    flush: () => updates.splice(0).forEach(update => update()),
+    restore: () => {
+      if (original) Object.defineProperty(document, 'startViewTransition', original);
+      else Reflect.deleteProperty(document, 'startViewTransition');
+    },
+  };
+}
+
 function paste(node: HTMLElement, text: string) {
   fireEvent.paste(node, { clipboardData: { files: [], items: [], types: ['text/plain'],
     getData: (format: string) => format === 'text/plain' ? text : '' } });
@@ -250,6 +267,52 @@ describe('capture and recall', () => {
       renderCard.mockRestore(); URL.createObjectURL = url; URL.revokeObjectURL = revoke;
       if (originalShare) Object.defineProperty(navigator, 'share', originalShare); else Reflect.deleteProperty(navigator, 'share');
       if (originalCanShare) Object.defineProperty(navigator, 'canShare', originalCanShare); else Reflect.deleteProperty(navigator, 'canShare');
+    }
+  });
+
+  it('preserves account colors when returning to the tab refreshes the session', async () => {
+    localStorage.setItem('spark:palette', 'sea');
+    localStorage.setItem('spark:theme', 'light');
+    const api = await setup('/settings', async a => {
+      await a.updatePreferences({ palette: 'matcha', theme: 'dark' });
+      const read = a.currentSession.bind(a);
+      vi.spyOn(a, 'currentSession').mockImplementation(async () => structuredClone(await read()));
+    });
+    await screen.findByRole('region', { name: '界面外观' });
+    const root = document.documentElement;
+    expect(root.dataset.palette).toBe('matcha');
+    const transition = deferThemeTransition();
+    const visible = vi.spyOn(document, 'visibilityState', 'get');
+    try {
+      vi.mocked(api.currentSession).mockClear();
+      visible.mockReturnValue('hidden');
+      fireEvent(document, new Event('visibilitychange'));
+      visible.mockReturnValue('visible');
+      await act(async () => { fireEvent(document, new Event('visibilitychange')); });
+      expect(api.currentSession).toHaveBeenCalled();
+      transition.flush();
+      expect(root.dataset.palette).toBe('matcha');
+      expect(root.dataset.mode).toBe('dark');
+    } finally {
+      visible.mockRestore();
+      transition.restore();
+    }
+  });
+
+  it('keeps signed-out colors if a pending account transition finishes after logout', async () => {
+    localStorage.setItem('spark:palette', 'sea');
+    await setup('/settings', async a => { await a.updatePreferences({ palette: 'sea' }); });
+    const panel = within(await screen.findByRole('region', { name: '界面外观' }));
+    const transition = deferThemeTransition();
+    try {
+      await userEvent.click(panel.getByRole('button', { name: /樱花雾粉/ }));
+      await waitFor(() => expect(panel.getByRole('button', { name: /樱花雾粉/ })).toHaveAttribute('aria-pressed', 'true'));
+      await userEvent.click(within(screen.getByRole('region', { name: '账号信息' })).getByRole('button', { name: '退出登录' }));
+      await screen.findByRole('button', { name: '登录' });
+      transition.flush();
+      expect(document.documentElement.dataset.palette).toBe('sea');
+    } finally {
+      transition.restore();
     }
   });
 

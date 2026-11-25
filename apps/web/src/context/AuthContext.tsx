@@ -60,11 +60,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const [appearancePending, setAppearancePending] = useState(false);
   const appearanceRequest = useRef<symbol | null>(null);
+  const signedIn = state.user !== null;
+  const palette = state.user?.palette ?? 'mint';
+  const theme = state.user?.theme ?? 'system';
   useEffect(() => {
-    const user = state.user;
-    showAccountAppearance(user ? { palette: user.palette ?? 'mint', theme: user.theme ?? 'system' } : null);
-    return () => showAccountAppearance(null);
-  }, [state.user]);
+    showAccountAppearance(signedIn ? { palette, theme } : null);
+  }, [signedIn, palette, theme]);
 
   const sessionGeneration = useRef(0);
   const currentUserIdRef = useRef<string | null>(null);
@@ -128,6 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     return () => {
       advanceAuthSession(null);
+      showAccountAppearance(null);
     };
   }, []);
 
