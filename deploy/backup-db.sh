@@ -15,8 +15,8 @@ to the spark database. For optional off-host upload, set SPARK_BACKUP_REMOTE
 and SPARK_BACKUP_RCLONE_CONFIG to an authorized remote prefix and private config.
 Restore requires an empty project started with
 compose.recovery.yaml. A schema v8+ restore also requires the matching tool
-image loaded on the recovery host. OSS ledger restores verify the known probe
-with a read-only identity before import and replay receipts before finishing.
+image loaded on the recovery host. OSS ledger restores read and verify the
+known probe before import and replay receipts before finishing.
 EOF
 }
 
@@ -114,15 +114,14 @@ case "$command" in
       oss)
         [[ "$binding" = /* ]] && read_oss_ledger_binding "$binding" ||
           die "restore requires the verified OSS binding from the deployment"
-        ledger_config="$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)"
-        ledger_credentials="$(ledger_val SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH)"
-        check_oss_ledger_files "${ledger_config:-/etc/spark/deletion-receipts/oss.json}" \
-          "${ledger_credentials:-/etc/spark/deletion-receipts/reader.json}" ||
-          die "OSS recovery requires the dedicated reader identity"
+        resolve_oss_ledger_files SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH
+        check_oss_ledger_files "$ledger_config" "$ledger_credentials" ||
+          die "OSS recovery requires verified configuration and credentials"
         recovery_compose+=(-f "$script_dir/compose.recovery-ledger-oss.yaml")
         ;;
       file)
-        [[ -z "$binding" && -z "$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)" &&
+        [[ -z "$binding" && -z "$(ledger_val SPARK_DELETION_LEDGER_OSS_PREFIX)" &&
+           -z "$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)" &&
            -z "$(ledger_val SPARK_DELETION_LEDGER_OSS_READ_CREDENTIALS_HOST_PATH)" ]] ||
           die "OSS recovery settings require SPARK_DELETION_LEDGER_BACKEND=oss"
         ;;
@@ -130,9 +129,11 @@ case "$command" in
     esac
     verified_ledger_config=""
     recovery_tool() (
-      unset SPARK_RECOVERY_DB_PASSWORD SPARK_RECOVERY_IMAGE "${!SPARK_DELETION_LEDGER_@}"
+      unset SPARK_RECOVERY_DB_PASSWORD SPARK_RECOVERY_IMAGE "${!SPARK_DELETION_LEDGER_@}" \
+        SPARK_OSS_CONFIG_HOST_PATH SPARK_OSS_CREDENTIALS_HOST_PATH
       if [[ -n "$verified_ledger_config" ]]; then
         export SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH="$verified_ledger_config"
+        export SPARK_DELETION_LEDGER_OSS_PREFIX=""
       fi
       docker compose --env-file "$env_file" "${recovery_compose[@]}" -p "$project" \
         run --rm --no-deps -T tools "$@" </dev/null

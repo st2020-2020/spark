@@ -302,30 +302,18 @@ check_purge_expiry() {
 }
 
 read_release_oss_ledger() {
-  local deploy_dir="$1" with_assets="$2" asset_credentials ledger_identity asset_identity
-  ledger_config="$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)"
-  ledger_credentials="$(ledger_val SPARK_DELETION_LEDGER_OSS_CREDENTIALS_HOST_PATH)"
-  ledger_config="${ledger_config:-/etc/spark/deletion-receipts/oss.json}"
-  ledger_credentials="${ledger_credentials:-/etc/spark/deletion-receipts/writer.json}"
+  local deploy_dir="$1"
+  resolve_oss_ledger_files SPARK_DELETION_LEDGER_OSS_CREDENTIALS_HOST_PATH
+  ledger_prefix="$(ledger_val SPARK_DELETION_LEDGER_OSS_PREFIX)"
   read_oss_ledger_binding "$deploy_dir/deletion-ledger.oss" &&
-    check_oss_ledger_files "$ledger_config" "$ledger_credentials" || return 1
-  if [[ "$with_assets" == true ]]; then
-    asset_credentials="$(ledger_val SPARK_OSS_CREDENTIALS_HOST_PATH)"
-    asset_credentials="${asset_credentials:-/etc/spark/oss/credentials.json}"
-    ledger_identity="$(ledger_file_stat "$ledger_credentials" '%d:%i' '%d:%i')" &&
-      asset_identity="$(ledger_file_stat "$asset_credentials" '%d:%i' '%d:%i')" || return 1
-    if [[ "$ledger_identity" == "$asset_identity" ]]; then
-      echo "OSS deletion ledger and attachment credentials must use separate files and identities." >&2
-      return 1
-    fi
-  fi
+    check_oss_ledger_files "$ledger_config" "$ledger_credentials"
 }
 
 check_release_ledger_settings() {
-  local deploy_dir="$1" with_assets="$2" worker_env="$3" ledger_dir ledger_mode
+  local deploy_dir="$1" worker_env="$2" ledger_dir ledger_mode
   case "$ledger_backend" in
     oss)
-      read_release_oss_ledger "$deploy_dir" "$with_assets" || return 1
+      read_release_oss_ledger "$deploy_dir" || return 1
       if grep -Fxq SPARK_PURGE_ENABLED=true <<< "$worker_env" &&
          ! grep -Fxq SPARK_DELETION_LEDGER_BACKEND=oss <<< "$worker_env"; then
         echo "Move existing file deletion receipts through an offline recovery before enabling an OSS ledger." >&2
@@ -355,6 +343,7 @@ check_release_oss_ledger() {
   shift
   actual="$("$@" run --rm --read-only --pull never \
     -e SPARK_DELETION_LEDGER_BACKEND=oss \
+    -e "SPARK_DELETION_LEDGER_OSS_PREFIX=$ledger_prefix" \
     -e SPARK_DELETION_LEDGER_OSS_CONFIG_FILE=/run/spark-deletion-ledger/oss.json \
     -e SPARK_DELETION_LEDGER_OSS_CREDENTIALS_FILE=/run/secrets/spark-deletion-ledger-oss \
     -v "$ledger_config:/run/spark-deletion-ledger/oss.json:ro" \
@@ -614,7 +603,7 @@ if [[ "$WITH_PURGE" == "true" ]]; then
   check_purge_expiry "$expiry" "$purge_env"
   ledger_backend="$(ledger_val SPARK_DELETION_LEDGER_BACKEND)"
   ledger_backend="${ledger_backend:-file}"
-  check_release_ledger_settings "$DEPLOY_DIR" "$WITH_OSS" "$purge_env"
+  check_release_ledger_settings "$DEPLOY_DIR" "$purge_env"
 elif [[ "$purge_enabled" == "true" ]]; then
   echo "SPARK_PURGE_ENABLED=true in $ENV_FILE without --with-purge; pass --with-purge or set SPARK_PURGE_ENABLED=false" >&2
   exit 1
@@ -864,7 +853,7 @@ if [[ "$RB_PURGE" == true ]]; then
   elif [[ "$snapshot_ledger" == oss ]]; then
     if [[ ! -f "$snapshot_compose/compose.v0.10-purge-ledger-oss.yaml" ]] ||
        ! cmp -s "$BDIR/deletion-ledger.oss" "$DEPLOY_DIR/deletion-ledger.oss" ||
-       ! read_release_oss_ledger "$DEPLOY_DIR" "$RB_OSS" ||
+       ! read_release_oss_ledger "$DEPLOY_DIR" ||
        ! check_release_oss_ledger "$(cat "$BDIR/image.id")" "${dcmd[@]}"; then
       capability_notice "SPARK_PURGE_ENABLED stays off (snapshot OSS ledger binding is unavailable or differs)."
       RB_PURGE=false
@@ -920,7 +909,7 @@ if [[ "$RB_PURGE" == true ]]; then
 fi
 
 dc() (
-  unset "${!SPARK_SMTP_@}" "${!SPARK_SES_@}" "${!SPARK_DELETION_LEDGER_@}" SPARK_OSS_CREDENTIALS_HOST_PATH
+  unset "${!SPARK_SMTP_@}" "${!SPARK_SES_@}" "${!SPARK_DELETION_LEDGER_@}" SPARK_OSS_CONFIG_HOST_PATH SPARK_OSS_CREDENTIALS_HOST_PATH
   SPARK_PROD_API_PORT="$API_PORT" SPARK_API_IMAGE=spark-api:prod \
     SPARK_AI_ENABLED="$RB_AI" SPARK_OSS_ENABLED="$RB_OSS" SPARK_URL_EXTRACT_ENABLED="$RB_URL" \
     SPARK_IMAGE_ANALYSIS_ENABLED="$RB_IMG" SPARK_PURGE_ENABLED="$RB_PURGE" SPARK_MAIL_MODE="$mail_mode" \
@@ -1323,7 +1312,7 @@ if [[ "$WITH_PURGE" == "true" ]]; then
   purge_expiry="$(ledger_val SPARK_PURGE_EXPIRY_START_AT)"
   purge_env="$(purge_worker_environment "$PROJECT" "${dcmd[@]}")"
   check_purge_expiry "$purge_expiry" "$purge_env"
-  check_release_ledger_settings "$DEPLOY_DIR" "$WITH_OSS" "$purge_env"
+  check_release_ledger_settings "$DEPLOY_DIR" "$purge_env"
   compose_files+=(-f "${DEPLOY_DIR}/deploy/compose.v0.3-purge.yaml")
   if [[ "$ledger_backend" == oss ]]; then
     [[ -f "${DEPLOY_DIR}/deploy.staging-${RELEASE_ID}/compose.v0.10-purge-ledger-oss.yaml" ]] ||
@@ -1334,7 +1323,7 @@ if [[ "$WITH_PURGE" == "true" ]]; then
 fi
 
 dc() (
-  unset "${!SPARK_SMTP_@}" "${!SPARK_SES_@}" "${!SPARK_DELETION_LEDGER_@}" SPARK_OSS_CREDENTIALS_HOST_PATH
+  unset "${!SPARK_SMTP_@}" "${!SPARK_SES_@}" "${!SPARK_DELETION_LEDGER_@}" SPARK_OSS_CONFIG_HOST_PATH SPARK_OSS_CREDENTIALS_HOST_PATH
   SPARK_PROD_API_PORT="$API_PORT" SPARK_MAIL_MODE="$mail_mode" SPARK_PURGE_EXPIRY_START_AT="$purge_expiry" \
     "${dcmd[@]}" compose --env-file "$ENV_FILE" "${compose_files[@]}" -p "$PROJECT" "$@"
 )

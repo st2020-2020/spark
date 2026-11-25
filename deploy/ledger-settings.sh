@@ -4,14 +4,24 @@
 read_ledger_environment() (
   local env_file="$1"
   shift
-  unset "${!SPARK_DELETION_LEDGER_@}" SPARK_PURGE_EXPIRY_START_AT SPARK_OSS_CREDENTIALS_HOST_PATH
+  unset "${!SPARK_DELETION_LEDGER_@}" SPARK_PURGE_EXPIRY_START_AT SPARK_OSS_CONFIG_HOST_PATH SPARK_OSS_CREDENTIALS_HOST_PATH
   "$@" compose --env-file "$env_file" -p spark-ledger-preflight -f - config --environment \
     <<<'services: {check: {image: scratch}}' |
-    awk '/^SPARK_(PURGE_EXPIRY_START_AT|OSS_CREDENTIALS_HOST_PATH|DELETION_LEDGER_(BACKEND|HOST_PATH|OSS_(CONFIG|CREDENTIALS|READ_CREDENTIALS|BINDING)_HOST_PATH))=/'
+    awk '/^SPARK_(PURGE_EXPIRY_START_AT|OSS_(CONFIG|CREDENTIALS)_HOST_PATH|DELETION_LEDGER_(BACKEND|HOST_PATH|OSS_(PREFIX|(CONFIG|CREDENTIALS|READ_CREDENTIALS|BINDING)_HOST_PATH)))=/'
 )
 
 ledger_val() {
   sed -n "s/^$1=//p" <<< "$ledger_env"
+}
+
+resolve_oss_ledger_files() {
+  local credential_setting="$1" asset_config asset_credentials
+  asset_config="$(ledger_val SPARK_OSS_CONFIG_HOST_PATH)"
+  asset_credentials="$(ledger_val SPARK_OSS_CREDENTIALS_HOST_PATH)"
+  ledger_config="$(ledger_val SPARK_DELETION_LEDGER_OSS_CONFIG_HOST_PATH)"
+  ledger_credentials="$(ledger_val "$credential_setting")"
+  ledger_config="${ledger_config:-${asset_config:-/etc/spark/oss/config.json}}"
+  ledger_credentials="${ledger_credentials:-${asset_credentials:-/etc/spark/oss/credentials.json}}"
 }
 
 read_oss_ledger_binding() {
@@ -39,7 +49,7 @@ check_oss_ledger_files() {
   [[ "$config" = /* && "$credentials" = /* && "$config$credentials" != *:* ]] &&
     { [[ -f "$config" ]] || sudo -n test -f "$config" 2>/dev/null; } &&
     { [[ -f "$credentials" ]] || sudo -n test -f "$credentials" 2>/dev/null; } ||
-    { echo "OSS deletion ledger requires absolute paths to its configuration and dedicated credential files." >&2; return 1; }
+    { echo "OSS deletion ledger requires absolute paths to its configuration and credentials." >&2; return 1; }
   metadata="$(ledger_file_stat "$credentials" '%u:%g:%a' '%u:%g:%Lp')" || return 1
   case "$metadata" in
     0:65532:440|65532:*:400) ;;
