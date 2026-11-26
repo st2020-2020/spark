@@ -6,6 +6,7 @@ import {
   Folder,
   Inbox,
   Layers,
+  Library,
   LogOut,
   Menu,
   MoreHorizontal,
@@ -46,11 +47,19 @@ import { BrandLink, SparkGlyph } from './Brand';
 import { CommandPalette } from './CommandPalette';
 import { SidebarCustomizePopover } from './SidebarCustomizePopover';
 import { TagNavigation } from './Tags';
-import { ActivityCalendar } from './ActivityCalendar';
 import { QuickCaptureSheet } from './QuickCaptureSheet';
 
 function formatBadgeCount(count: number): string {
   return count > 99 ? '99+' : String(count);
+}
+
+// Lists return no totals, so the nav reads one small page and says "20+" beyond it:
+// enough to tell "a few" from "a pile" without counting the whole library.
+const NAV_COUNT_LIMIT = 20;
+
+function pageCount(page: { items: unknown[]; next_cursor?: string } | undefined): string | null {
+  if (!page || page.items.length === 0) return null;
+  return page.next_cursor ? `${NAV_COUNT_LIMIT}+` : String(page.items.length);
 }
 
 export function AppShell({
@@ -184,6 +193,23 @@ export function AppShell({
     staleTime: 30_000,
   });
 
+  const unreadCountQuery = useQuery({
+    queryKey: ['collections', 'nav-count', 'unread', user?.id],
+    queryFn: ({ signal }) =>
+      api.listCollections({ scope: 'active', read: false, limit: NAV_COUNT_LIMIT }, signal),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+  });
+  const unclassifiedCountQuery = useQuery({
+    queryKey: ['collections', 'nav-count', 'unclassified', user?.id],
+    queryFn: ({ signal }) =>
+      api.listCollections({ scope: 'unclassified', limit: NAV_COUNT_LIMIT }, signal),
+    enabled: Boolean(user),
+    staleTime: 30_000,
+  });
+  const unreadCount = pageCount(unreadCountQuery.data);
+  const unclassifiedCount = pageCount(unclassifiedCountQuery.data);
+
   const hasTrulyZeroProjects =
     activeProjectsQuery.isSuccess &&
     activeItems.length === 0 &&
@@ -284,8 +310,14 @@ export function AppShell({
   const primaryNav = [
     { to: '/inbox', label: '收件箱', icon: Inbox },
     { to: '/unclassified', label: '待归类', icon: Layers },
-    { to: '/collections', label: '全部收藏', icon: Search },
+    { to: '/collections', label: '全部收藏', icon: Library },
   ];
+  const navCounts: Record<string, { text: string; description: string } | null> = {
+    '/inbox': unreadCount ? { text: `${unreadCount} 未读`, description: `${unreadCount} 条未读` } : null,
+    '/unclassified': unclassifiedCount
+      ? { text: unclassifiedCount, description: `${unclassifiedCount} 条待归类` }
+      : null,
+  };
 
   const allActiveLoaded = activeProjectsQuery.isSuccess && !activeProjectsQuery.hasNextPage;
 
@@ -346,6 +378,8 @@ export function AppShell({
       (activeProjectsQuery.isSuccess && activeItems.length === 0));
 
   const userInitial = (user?.email?.slice(0, 1) || 'S').toUpperCase();
+  // The part before "@" is enough to recognise the account; the full address is in the tooltip.
+  const accountName = user?.email?.split('@')[0] || '账号';
   const isInbox = location.pathname === '/inbox';
   const androidWorkspace = navigator.userAgent.split(/\s+/).includes('SparkAndroid/2');
   // A note opened from a list belongs to that list: keep the list's tab lit instead of jumping
@@ -442,23 +476,33 @@ export function AppShell({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const renderPrimaryNav = () => (
+  const renderPrimaryNav = (place: 'sidebar' | 'drawer') => (
     <nav aria-label="工作区页面">
       <ul className="sp-nav-list">
         {primaryNav.map((item) => {
           const Icon = item.icon;
           const showSuggestionBadge =
             item.to === '/unclassified' && pendingSuggestionsCount > 0;
+          // One indicator per row: pending AI suggestions take the slot over the plain count.
+          const count = showSuggestionBadge ? null : navCounts[item.to];
+          const countId = `sp-nav-count-${place}-${routeSection(item.to)}`;
           return (
             <li key={item.to} className="sp-nav-item">
               <Link
                 to={item.to}
                 className={navClass('sp-nav-link', routeSection(item.to))}
                 aria-current={navCurrent(routeSection(item.to))}
+                aria-describedby={count ? countId : undefined}
               >
                 <Icon size={17} strokeWidth={2} aria-hidden="true" />
                 <span>{item.label}</span>
               </Link>
+              {count && (
+                <span className="sp-nav-count" aria-hidden="true">
+                  <span key={count.text} className="sp-tick">{count.text}</span>
+                  <span id={countId} className="sp-sr-only">{count.description}</span>
+                </span>
+              )}
               {showSuggestionBadge && (
                 <Link
                   to="/unclassified?tab=suggested"
@@ -495,14 +539,14 @@ export function AppShell({
         <div className="sp-sidebar-section">
           <div className="sp-sidebar-group-head">
             <Link to="/projects" className="sp-sidebar-group-label sp-sidebar-group-link">
-              常用项目
+              项目
             </Link>
             <div className="sp-sidebar-group-actions">
               {activeItems.length > 0 && (
                 <button
                   ref={customizeAnchorRef}
                   type="button"
-                  className="sp-icon-btn sp-icon-btn--sm"
+                  className="sp-icon-btn sp-icon-btn--sm sp-sidebar-reveal"
                   aria-label="自定义常用项目"
                   aria-expanded={showPopoverHere}
                   title="自定义常用项目"
@@ -512,8 +556,9 @@ export function AppShell({
                 </button>
               )}
               <Link
-                to={hasTrulyZeroProjects ? '/projects?create=1' : '/projects'}
-                aria-label="查看或新建项目"
+                to="/projects?create=1"
+                aria-label="新建项目"
+                title="新建项目"
                 className="sp-icon-btn sp-icon-btn--sm"
               >
                 <Plus size={15} strokeWidth={2} aria-hidden="true" />
@@ -555,17 +600,24 @@ export function AppShell({
           />
 
           <ul className="sp-nav-list">
-            {sidebarProjects.map((proj) => (
-              <li key={proj.id}>
-                <NavLink
-                  to={`/projects/${proj.id}`}
-                  className={({ isActive }) => `sp-nav-link sp-nav-link--project ${isActive ? 'active' : ''}`}
-                >
-                  <span className={`sp-project-dot ${projectToneClass(proj.id)}`} aria-hidden="true" />
-                  <span className="sp-truncate">{proj.name}</span>
-                </NavLink>
-              </li>
-            ))}
+            {sidebarProjects.map((proj) => {
+              const count = projectMap.get(proj.id)?.collection_count;
+              return (
+                <li key={proj.id}>
+                  <NavLink
+                    to={`/projects/${proj.id}`}
+                    className={({ isActive }) => `sp-nav-link sp-nav-link--project ${isActive ? 'active' : ''}`}
+                    title={count !== undefined ? `${proj.name} · ${count} 条` : proj.name}
+                  >
+                    <span className={`sp-project-dot ${projectToneClass(proj.id)}`} aria-hidden="true" />
+                    <span className="sp-truncate">{proj.name}</span>
+                    {count ? (
+                      <span className="sp-nav-count sp-nav-count--inline" aria-hidden="true">{count}</span>
+                    ) : null}
+                  </NavLink>
+                </li>
+              );
+            })}
             {hasTrulyZeroProjects ? (
               <li>
                 <Link to="/projects?create=1" className="sp-nav-link sp-nav-link--muted">
@@ -591,6 +643,7 @@ export function AppShell({
         </div>
 
         <TagNavigation
+          key={user?.id}
           pinnedTagIds={sidebarPrefs.pinnedTagIds}
           pinnedTagMeta={sidebarPrefs.pinnedTagMeta}
           onUpdatePinnedTags={(nextIds, nextMeta) =>
@@ -598,11 +651,6 @@ export function AppShell({
           }
           onOpenAllTags={() => openCommandPalette('#')}
           onNavigate={compactMobile ? () => setDrawerOpen(false) : undefined}
-        />
-
-        <ActivityCalendar
-          key={user?.id}
-          onSelect={compactMobile ? () => setDrawerOpen(false) : undefined}
         />
       </div>
     );
@@ -669,14 +717,15 @@ export function AppShell({
                 </kbd>
               </button>
 
+              {/* Looks like a field so it reads as "search here"; opens the command palette. */}
               <button
                 type="button"
-                className="sp-jump-btn"
-                aria-label="快速跳转"
-                title={`快速跳转 (${formatShortcut('K')})`}
+                className="sp-sidebar-search"
+                title={`搜索收藏、项目、#标签，或跳转页面（${formatShortcut('K')}）`}
                 onClick={() => openCommandPalette('')}
               >
                 <Search size={15} strokeWidth={2} aria-hidden="true" />
+                <span>搜索或跳转</span>
                 {!isTouchDevice() && (
                   <kbd className="sp-kbd-hint" aria-hidden="true">
                     {formatShortcut('K')}
@@ -685,7 +734,7 @@ export function AppShell({
               </button>
             </div>
 
-            {renderPrimaryNav()}
+            {renderPrimaryNav('sidebar')}
           </div>
 
           {renderSpaceSection(false)}
@@ -697,33 +746,37 @@ export function AppShell({
               if (accountMenuOpen) handleMenuKeyDown(e);
             }}
           >
-            <NavLink
-              to="/trash"
-              className={({ isActive }) => `sp-nav-link sp-nav-link--muted ${isActive ? 'active' : ''}`}
-            >
-              <Trash2 size={16} strokeWidth={2} aria-hidden="true" />
-              <span>回收站</span>
-            </NavLink>
-
             <button
               type="button"
               className="sp-account-trigger"
               aria-haspopup="menu"
               aria-expanded={accountMenuOpen}
               aria-label="账号菜单"
+              title={user?.email}
               onClick={() => setAccountMenuOpen((v) => !v)}
             >
               <span className="sp-avatar" aria-hidden="true">
                 {userInitial}
               </span>
-              <span className="sp-account-text">
-                <span className="sp-account-email">{user?.email}</span>
-                <span className="sp-account-role">
-                  {user?.role === 'admin' ? '管理员' : '个人空间'}
-                </span>
-              </span>
-              <MoreHorizontal size={16} strokeWidth={2} aria-hidden="true" />
+              <span className="sp-account-name">{accountName}</span>
             </button>
+
+            <NavLink
+              to="/trash"
+              className={({ isActive }) => `sp-icon-btn sp-footer-icon ${isActive ? 'active' : ''}`}
+              aria-label="回收站"
+              title="回收站"
+            >
+              <Trash2 size={17} strokeWidth={2} aria-hidden="true" />
+            </NavLink>
+            <NavLink
+              to="/settings"
+              className={({ isActive }) => `sp-icon-btn sp-footer-icon ${isActive ? 'active' : ''}`}
+              aria-label="设置"
+              title="设置"
+            >
+              <Settings size={17} strokeWidth={2} aria-hidden="true" />
+            </NavLink>
 
             {accountMenuOpen && (
               <div className="sp-account-menu" role="menu" aria-label="账号与系统菜单">
@@ -860,14 +913,13 @@ export function AppShell({
             <button
               type="button"
               className="sp-nav-link sp-nav-link--command"
-              aria-label="搜索与跳转"
               onClick={() => openCommandPalette('')}
             >
               <Search size={16} strokeWidth={2} aria-hidden="true" />
-              <span>搜索与跳转</span>
+              <span>搜索或跳转</span>
             </button>
 
-            {renderPrimaryNav()}
+            {renderPrimaryNav('drawer')}
             {renderSpaceSection(true)}
 
             <div className="sp-drawer-footer">

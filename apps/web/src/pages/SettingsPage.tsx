@@ -97,7 +97,7 @@ export function SettingsPage() {
 
   return (
     <div>
-      <PageHeader title="设置" showSearch={false} />
+      <PageHeader title="设置" />
 
       <div className="sp-stack sp-stack--loose">
         <section className="sp-card" aria-label="账号信息">

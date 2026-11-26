@@ -150,6 +150,8 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     const user = userEvent.setup();
     mount(api, `/inbox?date=${today}`);
 
+    // The month view drops down from the inbox header.
+    await user.click(await screen.findByRole('button', { name: '灵光日历' }));
     const calendar = await screen.findByRole('region', { name: '灵光日历' });
     const todayLink = await within(calendar).findByRole('link', { current: 'date' });
     expect(todayLink).toHaveAttribute('data-today', 'true');
@@ -309,9 +311,9 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     await user.click(section.getByRole('button', { name: '今天不再显示' }));
     expect(await screen.findByText('今天先收起这条回看')).toBeInTheDocument();
 
-    // Sidebar uses 快速跳转 and opens CommandPalette with active checkmark and query highlight
+    // Sidebar 搜索或跳转 opens CommandPalette with active checkmark and query highlight
     const sidebar = within(screen.getByRole('complementary', { name: '主导航' }));
-    await user.click(sidebar.getByRole('button', { name: '快速跳转' }));
+    await user.click(sidebar.getByRole('button', { name: '搜索或跳转' }));
     const combobox = await screen.findByRole('combobox', { name: '搜索收藏、项目或命令' });
     await user.type(combobox, '薄荷晨雾');
     const paletteOption = await screen.findByRole('option', { name: '配色 · 薄荷晨雾' });
@@ -342,8 +344,9 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     fireEvent.keyDown(command, { key: 'Escape' });
     expect(textbox).toHaveFocus();
 
-    // Ctrl+K inside header <input> search box also opens CommandPalette
-    const headerSearch = screen.getByRole('searchbox', { name: '搜索收藏' });
+    // Ctrl+K inside the 全部收藏 header <input> search box also opens CommandPalette
+    await user.click(within(screen.getByRole('complementary', { name: '主导航' })).getByRole('link', { name: '全部收藏' }));
+    const headerSearch = await screen.findByRole('searchbox', { name: '搜索收藏' });
     await user.click(headerSearch);
     expect(headerSearch).toHaveFocus();
     fireEvent.keyDown(headerSearch, { key: 'k', ctrlKey: true });
@@ -1203,7 +1206,7 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     await user.click(screen.getByRole('menuitem', { name: '附加网址' }));
     const intentInput = within(composer).getByPlaceholderText('以后可能用在哪儿？');
     const urlInput = within(composer).getByLabelText('附加网址');
-    const jumpButton = screen.getByRole('button', { name: '快速跳转' });
+    const jumpButton = screen.getByRole('button', { name: '搜索或跳转' });
     const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
 
     try {

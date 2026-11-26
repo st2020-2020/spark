@@ -102,17 +102,20 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
 
     const sidebar = within(await screen.findByRole('complementary', { name: '主导航' }));
 
-    // Core navigation order: 收件箱 -> 待归类 -> 全部收藏; 快速跳转 at top
+    // Core navigation order: 收件箱 -> 待归类 -> 全部收藏; 搜索或跳转 at top
     const topNavLinks = within(sidebar.getByRole('navigation', { name: '工作区页面' })).getAllByRole('link');
     expect(topNavLinks.map((el) => el.textContent?.trim())).toEqual(['收件箱', '待归类', '全部收藏']);
-    expect(sidebar.getByRole('button', { name: '快速跳转' })).toBeInTheDocument();
+    expect(sidebar.getByRole('button', { name: '搜索或跳转' })).toBeInTheDocument();
 
-    // ActivityCalendar is collapsed by default into a single-row toggle
-    const calendarBtn = sidebar.getByRole('button', { name: /灵光日历/ });
+    // The calendar filters the inbox, so it lives in the inbox header rather than the sidebar
+    expect(sidebar.queryByRole('region', { name: '灵光日历' })).not.toBeInTheDocument();
+    const calendarBtn = screen.getByRole('button', { name: '灵光日历' });
     expect(calendarBtn).toHaveAttribute('aria-expanded', 'false');
     await ui.click(calendarBtn);
     expect(calendarBtn).toHaveAttribute('aria-expanded', 'true');
-    expect(await within(sidebar.getByRole('region', { name: '灵光日历' })).findByText(/^本月 3 条$/)).toBeInTheDocument();
+    expect(await within(screen.getByRole('region', { name: '灵光日历' })).findByText(/^本月 3 条$/)).toBeInTheDocument();
+    await ui.click(calendarBtn);
+    expect(screen.queryByRole('region', { name: '灵光日历' })).not.toBeInTheDocument();
 
     // Invalid id ignored; valid pinned project shown + 全部项目 entry shown since 7 > 1
     expect(await sidebar.findByRole('link', { name: '项目Alpha-7' })).toBeInTheDocument();
@@ -144,23 +147,25 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     expect(await tagNav.findByRole('link', { name: '#标签T1' })).toBeInTheDocument();
     await ui.click(tagDialog.getByRole('button', { name: '恢复自动推荐' }));
 
-    await ui.click(sidebar.getByRole('button', { name: '查看全部标签' }));
+    await ui.click(sidebar.getByRole('button', { name: /^查看(其余 \d+ 个|全部)标签$/ }));
     const paletteInput = await screen.findByRole('combobox', { name: '搜索收藏、项目或命令' });
     expect(paletteInput).toHaveValue('#');
     expect(await screen.findByRole('option', { name: '标签 · #标签T6' })).toBeInTheDocument();
 
-    // Navigate to /inbox?date=today -> calendar auto-expands, highlights date, and clears filter in one click
+    // Navigate to /inbox?date=today -> the calendar highlights the date, and clicking it again clears the filter
     const today = new Intl.DateTimeFormat('sv-SE').format(new Date());
     cleanup();
     mount(api, `/inbox?date=${today}`);
-    const dateSidebar = within(await screen.findByRole('complementary', { name: '主导航' }));
-    const dateCal = dateSidebar.getByRole('region', { name: '灵光日历' });
-    expect(dateSidebar.getByRole('button', { name: /灵光日历/ })).toHaveAttribute('aria-expanded', 'true');
-    expect(await within(dateCal).findByRole('link', { current: 'date' })).toHaveAttribute('data-today', 'true');
-    await ui.click(within(dateCal).getByRole('link', { name: '清除日历日期筛选' }));
+    expect(await screen.findByRole('button', { name: /清除日期筛选/ })).toBeInTheDocument();
+    await ui.click(screen.getByRole('button', { name: '灵光日历' }));
+    const dateCal = screen.getByRole('region', { name: '灵光日历' });
+    const selectedDay = await within(dateCal).findByRole('link', { current: 'date' });
+    expect(selectedDay).toHaveAttribute('data-today', 'true');
+    await ui.click(selectedDay);
     await waitFor(() => {
-      expect(within(dateCal).queryByRole('link', { current: 'date' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /清除日期筛选/ })).not.toBeInTheDocument();
     });
+    expect(screen.queryByRole('region', { name: '灵光日历' })).not.toBeInTheDocument();
 
     // Verify resolveSidebarProjects ignores deleted ids and falls back to auto top-5 when all deleted
     const fallback = resolveSidebarProjects(projects, ['only-deleted'], 5);
@@ -524,7 +529,7 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     expect(firstProjBtn).toHaveFocus();
     cleanup();
 
-    // 6. ActivityCalendar resets manual month browsing when clearing date -> browser back returns to date month
+    // 6. ActivityCalendar resets manual month browsing when the selected date changes -> browser back returns to date month
     let navFn: ReturnType<typeof useNavigate> | null = null;
     function NavProbe() {
       navFn = useNavigate();
@@ -538,14 +543,17 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
         </AppProviders>
       </MemoryRouter>,
     );
-    const cal = await screen.findByRole('region', { name: '灵光日历' });
-    expect(within(cal).getByText('2026年10月')).toBeInTheDocument();
-    await ui.click(within(cal).getByRole('button', { name: '上个月' }));
-    expect(within(cal).getByText('2026年9月')).toBeInTheDocument();
-    await ui.click(within(cal).getByRole('link', { name: '清除日历日期筛选' }));
+    await ui.click(await screen.findByRole('button', { name: '灵光日历' }));
+    const firstCal = screen.getByRole('region', { name: '灵光日历' });
+    expect(within(firstCal).getByText('2026年10月')).toBeInTheDocument();
+    await ui.click(within(firstCal).getByRole('button', { name: '上个月' }));
+    expect(within(firstCal).getByText('2026年9月')).toBeInTheDocument();
+    await ui.click(await within(firstCal).findByRole('link', { name: /^2026年9月10日/ }));
     act(() => {
       navFn!(-1);
     });
+    await ui.click(await screen.findByRole('button', { name: '灵光日历' }));
+    const cal = screen.getByRole('region', { name: '灵光日历' });
     expect(await within(cal).findByText('2026年10月')).toBeInTheDocument();
     expect(await within(cal).findByRole('link', { current: 'date' })).toHaveAttribute(
       'aria-label',

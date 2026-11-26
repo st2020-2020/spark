@@ -14,6 +14,7 @@ import { PageHeader } from '../components/PageHeader';
 import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner';
 import { EmptyState, ErrorBanner, LoadMore, LoadingState } from '../components/StateBlocks';
 import { JarScene } from '../components/Illustrations';
+import { ActivityCalendarButton } from '../components/ActivityCalendar';
 import { useApi } from '../context/ApiContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { greeting, groupByDay, todayLine } from '../lib/journal';
@@ -106,7 +107,8 @@ export function InboxPage() {
         badge={date && <button type="button" className="sp-btn sp-btn--sm" aria-label={`清除日期筛选，${dateLabel}`}
           onClick={() => updateFilter({ clearDate: true })}>
           {dateLabel} ×
-        </button>} />
+        </button>}
+        actions={<ActivityCalendarButton />} />
 
       <CollectionComposer autoFocus={shouldFocusComposer} />
 
