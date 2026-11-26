@@ -337,7 +337,9 @@ describe('capture and recall', () => {
     localStorage.setItem('spark:palette', 'matcha');
     const api = await setup('/settings', async a => { await a.updatePreferences({ palette: 'sea', theme: 'dark' }); });
     const panel = within(await screen.findByRole('region', { name: '界面外观' }));
-    expect(document.documentElement.dataset.palette).toBe('sea');
+    // The account colors reach the document in an effect after the session renders, so on a
+    // slow runner the panel can appear a beat before the stored browser palette is replaced.
+    await waitFor(() => expect(document.documentElement.dataset.palette).toBe('sea'));
     vi.spyOn(api, 'updatePreferences').mockRejectedValueOnce(new Error('保存失败'));
     await userEvent.click(panel.getByRole('button', { name: /樱花雾粉/ }));
     await screen.findByText('保存失败');
