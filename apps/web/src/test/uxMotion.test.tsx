@@ -150,13 +150,13 @@ describe('v0.9.0 UX polish and motion behaviors', () => {
     const user = userEvent.setup();
     mount(api, `/inbox?date=${today}`);
 
-    // The month view drops down from the inbox header.
-    await user.click(await screen.findByRole('button', { name: '灵光日历' }));
+    // The sidebar's two-week strip is always shown; the selected day is marked in it.
     const calendar = await screen.findByRole('region', { name: '灵光日历' });
     const todayLink = await within(calendar).findByRole('link', { current: 'date' });
     expect(todayLink).toHaveAttribute('data-today', 'true');
+    expect(screen.getByRole('button', { name: /清除日期筛选/ })).toBeInTheDocument();
 
-    // Clicking selected date toggles off back to /inbox (no date badge)
+    // Clicking selected date toggles off back to /inbox (no date chip)
     await user.click(todayLink);
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /清除日期筛选/ })).not.toBeInTheDocument();

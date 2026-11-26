@@ -729,6 +729,36 @@ button:disabled {
   box-shadow: none;
 }
 
+/* On short screens the calendar header leaves little room for projects and tags: let the whole
+   sheet scroll as one column instead of squeezing the middle, with the footer row pinned. */
+@media (min-width: 1024px) and (max-height: 880px) {
+  .sp-sidebar {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .sp-sidebar:hover,
+  .sp-sidebar:focus-within {
+    scrollbar-color: var(--sp-border-strong) transparent;
+  }
+
+  .sp-sidebar .sp-sidebar-space {
+    flex: 0 0 auto;
+    overflow: visible;
+  }
+
+  .sp-sidebar .sp-sidebar-footer {
+    position: sticky;
+    bottom: -12px;
+    margin-bottom: -12px;
+    padding-bottom: 12px;
+    background: var(--sp-surface);
+    z-index: 2;
+  }
+}
+
 /* With a mouse the sheet can be denser than the 40px touch rows, so tags still fit on a laptop. */
 @media (hover: hover) and (pointer: fine) {
   .sp-sidebar .sp-nav-link {
