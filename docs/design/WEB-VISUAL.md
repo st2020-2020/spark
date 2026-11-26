@@ -35,12 +35,12 @@ MyGo 桌面版的设计与交互另见 [docs/desktop](../desktop/README.md)。
 
 ## 3. 外观：配色 × 明暗
 
-`src/styles/tokens.css` 是唯一令牌入口。外观由两项独立选择组成，均由 `src/lib/appearance.ts` 写入 `<html>`。登录时使用当前账号的偏好，未登录时读取本机的 `spark:palette` 与 `spark:theme`：
+`src/styles/tokens.css` 是唯一令牌入口。外观由两项独立选择组成，均由 `src/lib/appearance.ts` 写入 `<html>`。登录时使用当前账号的偏好，未登录时沿用本机最近确认的外观（`spark:appearance` 仅存配色和明暗选项）。首次升级兼容旧键 `spark:palette` 和 `spark:theme`，无记录时使用薄荷配色并跟随系统：
 
 - `data-palette`：主题配色，默认 `mint`。
 - `data-mode`：明暗，由「跟随系统 / 浅色 / 深色」解析；跟随系统时监听系统切换。
 
-首屏渲染前即应用外观，避免闪烁；浏览器 `theme-color` 随当前背景色更新。设置页「界面外观」提供配色卡片与明暗分段控件。
+首屏渲染前即应用外观，避免闪烁；同一浏览器已打开的公共页面随外观缓存更新，已登录页面仍以当前账号为准。浏览器 `theme-color` 随当前背景色更新。设置页「界面外观」提供配色卡片与明暗分段控件。
 
 | 配色 | `--sp-primary` 浅 / 深 | `--sp-accent` 浅 | `--sp-spark`（第二色）浅 | `--sp-bg` 浅 / 深 |
 | --- | --- | --- | --- | --- |
