@@ -299,7 +299,7 @@ describe('capture and recall', () => {
     }
   });
 
-  it('keeps signed-out colors if a pending account transition finishes after logout', async () => {
+  it('keeps the last confirmed colors on the login page when a transition finishes after logout', async () => {
     localStorage.setItem('spark:palette', 'sea');
     await setup('/settings', async a => { await a.updatePreferences({ palette: 'sea' }); });
     const panel = within(await screen.findByRole('region', { name: '界面外观' }));
@@ -310,13 +310,30 @@ describe('capture and recall', () => {
       await userEvent.click(within(screen.getByRole('region', { name: '账号信息' })).getByRole('button', { name: '退出登录' }));
       await screen.findByRole('button', { name: '登录' });
       transition.flush();
-      expect(document.documentElement.dataset.palette).toBe('sea');
+      expect(document.documentElement.dataset.palette).toBe('sakura');
     } finally {
       transition.restore();
     }
   });
 
-  it('keeps the saved appearance on write failure and the prior signed-out appearance after logout', async () => {
+  it('updates an open public page after a browser appearance change without overriding a signed-in account', async () => {
+    await setup('/settings', async a => { await a.updatePreferences({ palette: 'matcha', theme: 'dark' }); });
+    const account = within(await screen.findByRole('region', { name: '账号信息' }));
+    const fromOtherTab = (palette: string) => {
+      localStorage.setItem('spark:appearance', JSON.stringify({ palette, theme: 'light' }));
+      window.dispatchEvent(new StorageEvent('storage', { key: 'spark:appearance', storageArea: localStorage }));
+    };
+    fromOtherTab('sea');
+    expect(document.documentElement.dataset.palette).toBe('matcha');
+    await userEvent.click(account.getByRole('button', { name: '退出登录' }));
+    await screen.findByRole('button', { name: '登录' });
+    expect(document.documentElement.dataset.palette).toBe('sea');
+    fromOtherTab('sakura');
+    expect(document.documentElement.dataset.palette).toBe('sakura');
+    expect(document.documentElement.dataset.mode).toBe('light');
+  });
+
+  it('keeps confirmed account colors after a failed save and uses the latest saved colors across public pages', async () => {
     localStorage.setItem('spark:palette', 'matcha');
     const api = await setup('/settings', async a => { await a.updatePreferences({ palette: 'sea', theme: 'dark' }); });
     const panel = within(await screen.findByRole('region', { name: '界面外观' }));
@@ -329,6 +346,14 @@ describe('capture and recall', () => {
     await waitFor(() => expect(document.documentElement.dataset.palette).toBe('sakura'));
     await userEvent.click(within(screen.getByRole('region', { name: '账号信息' })).getByRole('button', { name: '退出登录' }));
     await screen.findByRole('button', { name: '登录' });
-    expect(document.documentElement.dataset.palette).toBe('matcha');
+    expect(document.documentElement.dataset.palette).toBe('sakura');
+    expect(document.documentElement.dataset.mode).toBe('dark');
+    for (const path of ['/login', '/register', '/reset-password', '/desktop/pair', '/extension/pair']) {
+      cleanup();
+      render(<MemoryRouter initialEntries={[path]}><AppProviders api={api}><AppRoutes /></AppProviders></MemoryRouter>);
+      await screen.findByRole('heading', { level: 1 });
+      expect(document.documentElement.dataset.palette).toBe('sakura');
+      expect(document.documentElement.dataset.mode).toBe('dark');
+    }
   });
 });

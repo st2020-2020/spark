@@ -60,12 +60,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const [appearancePending, setAppearancePending] = useState(false);
   const appearanceRequest = useRef<symbol | null>(null);
-  const signedIn = state.user !== null;
+  const appearanceUserId = state.user?.id;
   const palette = state.user?.palette ?? 'mint';
   const theme = state.user?.theme ?? 'system';
   useEffect(() => {
-    showAccountAppearance(signedIn ? { palette, theme } : null);
-  }, [signedIn, palette, theme]);
+    showAccountAppearance(appearanceUserId ? { palette, theme } : null);
+  }, [appearanceUserId, palette, theme]);
 
   const sessionGeneration = useRef(0);
   const currentUserIdRef = useRef<string | null>(null);

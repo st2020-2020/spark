@@ -28,24 +28,31 @@ function isPaletteId(value: unknown): value is PaletteId {
   return PALETTES.some((p) => p.id === value);
 }
 
-export function readThemePref(): ThemePref {
-  try {
-    const val = window.localStorage.getItem(THEME_KEY);
-    if (val === 'light' || val === 'dark') return val;
-  } catch {
-    // Storage unavailable (private mode, blocked site data): fall back to the system setting.
-  }
-  return 'system';
+type Appearance = { palette: PaletteId; theme: ThemePref };
+const APPEARANCE_KEY = 'spark:appearance';
+const defaultAppearance: Appearance = { palette: DEFAULT_PALETTE, theme: 'system' };
+// A disabled or full store can still preserve the appearance until this page is closed.
+let unsavedBrowserAppearance: Appearance | null = null;
+
+function isTheme(value: unknown): value is ThemePref {
+  return value === 'dark' || value === 'light' || value === 'system';
 }
 
-export function readPalette(): PaletteId {
+function browserAppearance(): Appearance {
+  if (unsavedBrowserAppearance) return unsavedBrowserAppearance;
   try {
-    const val = window.localStorage.getItem(PALETTE_KEY);
-    if (isPaletteId(val)) return val;
+    const stored = localStorage.getItem(APPEARANCE_KEY);
+    if (stored) {
+      const pair = JSON.parse(stored);
+      if (isPaletteId(pair?.palette) && isTheme(pair?.theme)) return pair;
+    }
+    // Earlier releases stored anonymous preferences separately.
+    const palette = localStorage.getItem(PALETTE_KEY);
+    const theme = localStorage.getItem(THEME_KEY);
+    return { palette: isPaletteId(palette) ? palette : DEFAULT_PALETTE, theme: isTheme(theme) ? theme : 'system' };
   } catch {
-    // Storage unavailable: use the default palette.
+    return defaultAppearance;
   }
-  return DEFAULT_PALETTE;
 }
 
 function systemDarkQuery(): MediaQueryList | null {
@@ -59,9 +66,17 @@ function resolveMode(pref: ThemePref): 'light' | 'dark' {
   return systemDarkQuery()?.matches ? 'dark' : 'light';
 }
 
-let accountAppearance: { palette: PaletteId; theme: ThemePref } | null = null;
+let accountAppearance: Appearance | null = null;
 
 export function showAccountAppearance(value: typeof accountAppearance) {
+  if (value) {
+    try {
+      localStorage.setItem(APPEARANCE_KEY, JSON.stringify(value));
+      unsavedBrowserAppearance = null;
+    } catch {
+      unsavedBrowserAppearance = value;
+    }
+  }
   accountAppearance = value;
   syncDocument();
 }
@@ -71,15 +86,15 @@ let firstSyncDone = false;
 
 function syncDocument(): void {
   const root = document.documentElement;
-  const palette = accountAppearance?.palette ?? readPalette();
-  const mode = resolveMode(accountAppearance?.theme ?? readThemePref());
+  const { palette, theme } = accountAppearance ?? browserAppearance();
+  const mode = resolveMode(theme);
   const changed =
     root.getAttribute('data-palette') !== palette || root.getAttribute('data-mode') !== mode;
 
   const apply = () => {
     // A transition may run after another preference change, logout or system mode switch.
-    if ((accountAppearance?.palette ?? readPalette()) !== palette ||
-        resolveMode(accountAppearance?.theme ?? readThemePref()) !== mode) return;
+    const latest = accountAppearance ?? browserAppearance();
+    if (latest.palette !== palette || resolveMode(latest.theme) !== mode) return;
     root.setAttribute('data-palette', palette);
     root.setAttribute('data-mode', mode);
     const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
@@ -102,16 +117,20 @@ function syncDocument(): void {
   }
 }
 
-let systemListenerAttached = false;
+let listenersAttached = false;
 
 /** Applies the stored appearance; safe to call more than once. */
 export function initAppearance(): void {
   syncDocument();
-  if (systemListenerAttached) return;
-  const query = systemDarkQuery();
-  if (!query) return;
-  systemListenerAttached = true;
-  query.addEventListener('change', () => {
-    if ((accountAppearance?.theme ?? readThemePref()) === 'system') syncDocument();
+  if (listenersAttached) return;
+  listenersAttached = true;
+  window.addEventListener('storage', event => {
+    if (event.storageArea !== window.localStorage ||
+        ![null, APPEARANCE_KEY, PALETTE_KEY, THEME_KEY].includes(event.key)) return;
+    unsavedBrowserAppearance = null;
+    if (!accountAppearance) syncDocument();
+  });
+  systemDarkQuery()?.addEventListener('change', () => {
+    if ((accountAppearance ?? browserAppearance()).theme === 'system') syncDocument();
   });
 }
