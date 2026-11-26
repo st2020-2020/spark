@@ -48,6 +48,7 @@ import { CommandPalette } from './CommandPalette';
 import { SidebarCustomizePopover } from './SidebarCustomizePopover';
 import { TagNavigation } from './Tags';
 import { QuickCaptureSheet } from './QuickCaptureSheet';
+import { ActivityCalendar } from './ActivityCalendar';
 
 function formatBadgeCount(count: number): string {
   return count > 99 ? '99+' : String(count);
@@ -707,6 +708,7 @@ export function AppShell({
         <aside className="sp-sidebar" aria-label="主导航">
           <div className="sp-sidebar-top">
             <BrandLink className="sp-brand--sidebar" />
+            <ActivityCalendar key={user?.id} />
 
             <div className="sp-sidebar-actions">
               <button type="button" className="sp-capture-btn" onClick={handleQuickCapture}>
@@ -909,6 +911,8 @@ export function AppShell({
               </span>
               <ChevronRight size={16} strokeWidth={2} aria-hidden="true" />
             </Link>
+
+            <ActivityCalendar key={user?.id} onNavigate={() => setDrawerOpen(false)} />
 
             <button
               type="button"

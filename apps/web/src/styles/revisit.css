@@ -1,95 +1,242 @@
-/* The month heat map drops down from the inbox header (ActivityCalendarButton). */
-.sp-calendar {
-  min-width: 0;
+/* 灵光日历 in the sidebar header: one row for the last two weeks, always visible; its header
+   opens twelve weeks as a heat grid in a popover. Shading uses the palette primary, four levels. */
+.sp-activity {
+  position: relative;
+  margin: 0 0 14px;
+  padding: 0 4px;
+}
+
+.sp-drawer-panel .sp-activity {
+  margin: 4px 0 12px;
+  padding: 0 6px;
+}
+
+.sp-activity-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% + 8px);
+  margin: 0 -4px 4px;
+  padding: 3px 4px;
+  border-radius: 6px;
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
+  transition: background-color var(--sp-dur-fast) var(--sp-ease-out), color var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-activity-head:hover,
+.sp-activity-head[aria-expanded="true"] {
+  background: var(--sp-surface-hover);
   color: var(--sp-fg);
 }
 
-.sp-calendar-anchor {
-  position: relative;
-  flex-shrink: 0;
-}
-
-.sp-calendar-button svg {
-  color: var(--sp-muted);
-}
-
-.sp-calendar-button[aria-expanded="true"] {
-  background: var(--sp-surface-hover);
-  border-color: var(--sp-border-strong);
-}
-
-.sp-calendar-popover {
-  width: 272px;
-  padding: 12px 12px 10px;
-}
-.sp-calendar-head, .sp-calendar-switch, .sp-resurface-actions, .sp-revisit-setting {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sp-calendar-head {
-  justify-content: space-between;
-}
-
-.sp-calendar-month-label {
-  font-size: var(--sp-text-xs);
+.sp-activity-title {
   font-weight: 600;
   color: var(--sp-fg-soft);
 }
 
-.sp-calendar-switch { gap: 2px; font-size: var(--sp-text-xs); }
-.sp-calendar-switch button {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 26px;
-  color: var(--sp-muted);
-}
-.sp-calendar-grid {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 3px;
-  margin-top: 6px;
-  text-align: center;
-  font-size: var(--sp-text-xs);
+.sp-activity-summary {
+  margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
-.sp-calendar-grid > span { color: var(--sp-muted); }
-.sp-calendar-grid a {
+
+.sp-activity-chevron {
+  flex-shrink: 0;
+  transition: transform var(--sp-dur-normal) var(--sp-ease-move);
+}
+
+.sp-activity-head[aria-expanded="true"] .sp-activity-chevron {
+  transform: rotate(180deg);
+}
+
+.sp-activity-strip {
+  display: grid;
+  grid-template-columns: repeat(14, minmax(0, 1fr));
+  gap: 3px;
+}
+
+.sp-activity-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: -4px;
+  right: -4px;
+  z-index: 30;
+  padding: 12px 10px 8px;
+  border-radius: 14px;
+  background: var(--sp-bg);
+  border: 1px solid var(--sp-border-strong);
+  box-shadow: var(--sp-shadow-popover);
+  transform-origin: top center;
+  animation: sp-pop-in var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-heatmap-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 10px;
+}
+
+.sp-heatmap-stats div {
+  min-width: 0;
+}
+
+.sp-heatmap-stats dd {
+  margin: 0;
+  font-family: var(--sp-font-round);
+  font-size: 20px;
+  font-weight: 750;
+  line-height: 1.15;
+  color: var(--sp-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.sp-heatmap-stats dd span {
+  font-family: var(--sp-font-sans);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--sp-muted);
+}
+
+.sp-heatmap-stats dt {
+  order: 2;
+  margin-top: 1px;
+  font-size: 11px;
+  color: var(--sp-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sp-heatmap-stats div {
+  display: flex;
+  flex-direction: column;
+}
+
+.sp-heatmap-grid {
+  display: grid;
+  grid-template-rows: repeat(7, auto);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 3px;
+}
+
+.sp-heatmap-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  background: var(--sp-surface-muted);
+  transition: background-color var(--sp-dur-normal) var(--sp-ease-out),
+    box-shadow var(--sp-dur-fast) var(--sp-ease-out),
+    transform var(--sp-dur-fast) var(--sp-ease-out);
+}
+
+.sp-heatmap-cell.is-future {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sp-border) 60%, transparent);
+}
+
+.sp-heatmap-cell[data-level="1"] { background: color-mix(in srgb, var(--sp-primary) 28%, var(--sp-surface)); }
+.sp-heatmap-cell[data-level="2"] { background: color-mix(in srgb, var(--sp-primary) 55%, var(--sp-surface)); }
+.sp-heatmap-cell[data-level="3"] { background: var(--sp-primary); }
+
+.sp-heatmap-cell:hover {
+  box-shadow: 0 0 0 1.5px var(--sp-fg-soft);
+}
+
+.sp-heatmap-cell:active {
+  transform: scale(0.88);
+}
+
+/* Today is ringed; a day filtering the inbox is ringed in the foreground color and lifted. */
+.sp-heatmap-cell[data-today="true"] {
+  box-shadow: 0 0 0 1.5px var(--sp-primary);
+}
+
+.sp-heatmap-cell[aria-current="date"] {
+  box-shadow: 0 0 0 2px var(--sp-surface), 0 0 0 3.5px var(--sp-fg);
+}
+
+.sp-heatmap-cell:focus-visible {
+  outline: 2px solid var(--sp-fg);
+  outline-offset: 1px;
+}
+
+.sp-heatmap-foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.sp-heatmap-months {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 3px;
+  font-size: 10.5px;
+  line-height: 1.2;
+  color: var(--sp-muted);
+  white-space: nowrap;
+}
+
+.sp-heatmap-paging {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.sp-heatmap-paging button {
   display: grid;
   place-items: center;
-  min-height: 24px;
-  border-radius: var(--sp-radius-xs);
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--sp-muted);
+}
+
+.sp-heatmap-paging button:hover:not(:disabled) {
+  background: var(--sp-surface-hover);
   color: var(--sp-fg);
-  background: var(--sp-bg);
-  text-decoration: none;
 }
-.sp-calendar-grid a[data-level="1"] { background: color-mix(in srgb, var(--sp-primary) 16%, var(--sp-surface)); }
-.sp-calendar-grid a[data-level="2"] { background: color-mix(in srgb, var(--sp-primary) 35%, var(--sp-surface)); }
-.sp-calendar-grid a[data-level="3"] { background: var(--sp-primary); color: var(--sp-on-primary); }
-.sp-calendar-grid a[data-today="true"] {
-  position: relative;
-  font-weight: 700;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sp-primary) 55%, var(--sp-border-strong));
+
+.sp-heatmap-paging button:disabled {
+  opacity: 0.35;
 }
-.sp-calendar-grid a[data-today="true"]::after {
-  content: '';
-  position: absolute;
-  bottom: 2px;
-  left: 50%;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  transform: translateX(-50%);
-  background: var(--sp-primary);
+
+@media (hover: hover) {
+  .sp-heatmap-paging {
+    opacity: 0;
+    transition: opacity var(--sp-dur-fast) var(--sp-ease-out);
+  }
+
+  .sp-heatmap:hover .sp-heatmap-paging,
+  .sp-heatmap:focus-within .sp-heatmap-paging {
+    opacity: 1;
+  }
 }
-.sp-calendar-grid a[data-level="3"][data-today="true"]::after {
-  background: var(--sp-on-primary);
+
+.sp-heatmap-error {
+  margin: 0;
+  font-size: var(--sp-text-xs);
+  color: var(--sp-muted);
 }
-.sp-calendar-grid a:is(:hover, [aria-current]) { box-shadow: inset 0 0 0 2px var(--sp-primary); }
-.sp-calendar-grid a[aria-current], .sp-calendar-grid a:focus-visible { outline: 2px solid var(--sp-fg); outline-offset: 1px; }
-.sp-calendar-count { margin: 6px 0 0; color: var(--sp-muted); font-size: var(--sp-text-xs); }
+
+.sp-heatmap-error button {
+  margin-left: 6px;
+  color: var(--sp-primary);
+  font-weight: 600;
+}
+
+.sp-date-chip {
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sp-resurface-actions, .sp-revisit-setting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .sp-resurface { margin: 20px 0; }
 .sp-resurface-strip {
   display: flex;
@@ -131,6 +278,3 @@
 .sp-resurface-actions button { color: var(--sp-muted); margin-inline-start: auto; }
 .sp-revisit-setting { margin-top: 12px; }
 .sp-revisit-setting input { accent-color: var(--sp-primary); }
-@media (max-width: 767px) {
-  .sp-calendar-grid a, .sp-calendar-switch button { min-height: 36px; }
-}

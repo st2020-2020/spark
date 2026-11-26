@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useFlipList, useSegmentIndicator } from '../lib/motion';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { ArrowRight, SlidersHorizontal, Sparkles, X } from 'lucide-react';
 import type { CollectionType } from '../api/types';
 import { CollectionCard } from '../components/CollectionCard';
 import { Resurface } from '../components/Resurface';
@@ -14,7 +14,6 @@ import { PageHeader } from '../components/PageHeader';
 import { PendingSuggestionsBanner } from '../components/PendingSuggestionsBanner';
 import { EmptyState, ErrorBanner, LoadMore, LoadingState } from '../components/StateBlocks';
 import { JarScene } from '../components/Illustrations';
-import { ActivityCalendarButton } from '../components/ActivityCalendar';
 import { useApi } from '../context/ApiContext';
 import { useOrganizationEvents } from '../context/OrganizationEventsContext';
 import { greeting, groupByDay, todayLine } from '../lib/journal';
@@ -103,12 +102,16 @@ export function InboxPage() {
 
   return (
     <div>
+      {/* 灵光日历 lives in the sidebar (and the phone drawer); while a day filters the inbox,
+          its chip next to the title says which day and clears it. */}
       <PageHeader title="收件箱" subtitle={headerLine}
-        badge={date && <button type="button" className="sp-btn sp-btn--sm" aria-label={`清除日期筛选，${dateLabel}`}
-          onClick={() => updateFilter({ clearDate: true })}>
-          {dateLabel} ×
-        </button>}
-        actions={<ActivityCalendarButton />} />
+        badge={date && (
+          <button type="button" className="sp-btn sp-btn--sm sp-date-chip" aria-label={`清除日期筛选，${dateLabel}`}
+            onClick={() => updateFilter({ clearDate: true })}>
+            <span>{dateLabel}</span>
+            <X size={13} strokeWidth={2.2} aria-hidden="true" />
+          </button>
+        )} />
 
       <CollectionComposer autoFocus={shouldFocusComposer} />
 

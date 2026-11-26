@@ -107,15 +107,24 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     expect(topNavLinks.map((el) => el.textContent?.trim())).toEqual(['收件箱', '待归类', '全部收藏']);
     expect(sidebar.getByRole('button', { name: '搜索或跳转' })).toBeInTheDocument();
 
-    // The calendar filters the inbox, so it lives in the inbox header rather than the sidebar
-    expect(sidebar.queryByRole('region', { name: '灵光日历' })).not.toBeInTheDocument();
-    const calendarBtn = screen.getByRole('button', { name: '灵光日历' });
-    expect(calendarBtn).toHaveAttribute('aria-expanded', 'false');
-    await ui.click(calendarBtn);
-    expect(calendarBtn).toHaveAttribute('aria-expanded', 'true');
-    expect(await within(screen.getByRole('region', { name: '灵光日历' })).findByText(/^本月 3 条$/)).toBeInTheDocument();
-    await ui.click(calendarBtn);
-    expect(screen.queryByRole('region', { name: '灵光日历' })).not.toBeInTheDocument();
+    // 灵光日历 heads the sidebar as one row of the last two weeks, a single tab stop. Its header
+    // opens twelve weeks as a heat grid with totals; Escape closes it and returns focus.
+    const sidebarCal = within(sidebar.getByRole('region', { name: '灵光日历' }));
+    const stripDays = await sidebarCal.findAllByRole('link', { name: /周.+ · \d+ 条$/ });
+    expect(stripDays).toHaveLength(14);
+    expect(stripDays.filter((link) => link.tabIndex === 0)).toHaveLength(1);
+    const calToggle = sidebarCal.getByRole('button', { name: /^灵光日历/ });
+    await ui.click(calToggle);
+    const calDetail = within(await sidebarCal.findByRole('dialog', { name: '灵光日历详情' }));
+    expect(calDetail.getByText('近 12 周')).toBeInTheDocument();
+    expect(calDetail.getByText('记录天数')).toBeInTheDocument();
+    const gridDays = calDetail.getAllByRole('link', { name: /周.+ · \d+ 条$/ });
+    expect(gridDays.length).toBeGreaterThan(7 * 11);
+    expect(gridDays.filter((link) => link.tabIndex === 0)).toHaveLength(1);
+    expect(calDetail.getByRole('button', { name: '更近的 12 周' })).toBeDisabled();
+    await ui.keyboard('{Escape}');
+    expect(sidebarCal.queryByRole('dialog', { name: '灵光日历详情' })).not.toBeInTheDocument();
+    expect(calToggle).toHaveFocus();
 
     // Invalid id ignored; valid pinned project shown + 全部项目 entry shown since 7 > 1
     expect(await sidebar.findByRole('link', { name: '项目Alpha-7' })).toBeInTheDocument();
@@ -157,7 +166,6 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     cleanup();
     mount(api, `/inbox?date=${today}`);
     expect(await screen.findByRole('button', { name: /清除日期筛选/ })).toBeInTheDocument();
-    await ui.click(screen.getByRole('button', { name: '灵光日历' }));
     const dateCal = screen.getByRole('region', { name: '灵光日历' });
     const selectedDay = await within(dateCal).findByRole('link', { current: 'date' });
     expect(selectedDay).toHaveAttribute('data-today', 'true');
@@ -165,7 +173,6 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /清除日期筛选/ })).not.toBeInTheDocument();
     });
-    expect(screen.queryByRole('region', { name: '灵光日历' })).not.toBeInTheDocument();
 
     // Verify resolveSidebarProjects ignores deleted ids and falls back to auto top-5 when all deleted
     const fallback = resolveSidebarProjects(projects, ['only-deleted'], 5);
@@ -543,21 +550,32 @@ describe('v0.9.0 sidebar, card footer, share card & project status simplificatio
         </AppProviders>
       </MemoryRouter>,
     );
-    await ui.click(await screen.findByRole('button', { name: '灵光日历' }));
-    const firstCal = screen.getByRole('region', { name: '灵光日历' });
-    expect(within(firstCal).getByText('2026年10月')).toBeInTheDocument();
-    await ui.click(within(firstCal).getByRole('button', { name: '上个月' }));
-    expect(within(firstCal).getByText('2026年9月')).toBeInTheDocument();
-    await ui.click(await within(firstCal).findByRole('link', { name: /^2026年9月10日/ }));
+    const cal = within(await screen.findByRole('region', { name: '灵光日历' }));
+    const calToggle = cal.getByRole('button', { name: /^灵光日历/ });
+    // The grid opens on the page of the selected day, wherever it is
+    await ui.click(calToggle);
+    let detail = within(await cal.findByRole('dialog', { name: '灵光日历详情' }));
+    expect(detail.getByRole('link', { current: 'date' })).toHaveAttribute(
+      'aria-label',
+      expect.stringMatching(/^10月5日/),
+    );
+    // Browse 12 weeks further back and pick a day there: the popover closes, the inbox filters
+    await ui.click(detail.getByRole('button', { name: '更早的 12 周' }));
+    const olderDay = detail.getAllByRole('link', { name: /周.+ · \d+ 条$/ })[0];
+    const olderLabel = olderDay.getAttribute('aria-label')!.split(' ')[0];
+    await ui.click(olderDay);
+    expect(cal.queryByRole('dialog', { name: '灵光日历详情' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: new RegExp(`^清除日期筛选.*${olderLabel}$`) })).toBeInTheDocument();
     act(() => {
       navFn!(-1);
     });
-    await ui.click(await screen.findByRole('button', { name: '灵光日历' }));
-    const cal = screen.getByRole('region', { name: '灵光日历' });
-    expect(await within(cal).findByText('2026年10月')).toBeInTheDocument();
-    expect(await within(cal).findByRole('link', { current: 'date' })).toHaveAttribute(
+    // Back on 10-05, reopening the grid lands on that day's page again
+    await screen.findByRole('button', { name: /^清除日期筛选.*10月5日$/ });
+    await ui.click(calToggle);
+    detail = within(await cal.findByRole('dialog', { name: '灵光日历详情' }));
+    expect(detail.getByRole('link', { current: 'date' })).toHaveAttribute(
       'aria-label',
-      expect.stringMatching(/^2026年10月5日/),
+      expect.stringMatching(/^10月5日/),
     );
     cleanup();
 
