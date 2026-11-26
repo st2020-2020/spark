@@ -25,7 +25,9 @@ export function PageHeader({
   subtitle,
   badge,
   actions,
-  showSearch = true,
+  // Search lives in the sidebar ("搜索或跳转") everywhere; only the collections page keeps a
+  // header field, where it filters the list in place.
+  showSearch = false,
   searchAlwaysVisible = false,
   searchValue,
   onSearchChange,

@@ -115,6 +115,7 @@ export function CollectionsPage() {
     <div>
       <PageHeader
         title="全部收藏"
+        showSearch
         searchAlwaysVisible
         searchValue={inputQ}
         onSearchChange={setInputQ}

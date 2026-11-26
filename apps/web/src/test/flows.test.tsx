@@ -187,8 +187,8 @@ describe('Spark Web key flows', () => {
     const user = userEvent.setup();
     await loginAsAdmin(user);
 
-    await user.click(getSidebar().getByRole('link', { name: '查看或新建项目' }));
-    await user.click((await screen.findAllByRole('button', { name: '新建项目' }))[0]);
+    // The sidebar "+" goes straight to the create form.
+    await user.click(getSidebar().getByRole('link', { name: '新建项目' }));
     await user.type(await screen.findByLabelText('项目名称（必填）'), 'Spark 产品开发');
     await user.type(screen.getByLabelText('项目描述（可选，补充说明有助于自动关联）'), '多端同步与搜索设计');
     await user.click(screen.getByRole('button', { name: '创建项目' }));
@@ -400,16 +400,17 @@ describe('Spark Web key flows', () => {
     fireEvent.keyDown(command, { key: 'Escape' });
     expect(unreadTab).toHaveFocus();
 
-    // Quick search IME Enter does not jump; normal submit jumps to /collections?q=...
+    // The header search field lives on 全部收藏: IME Enter does not submit, a normal Enter does.
+    await user.click(getSidebar().getByRole('link', { name: '全部收藏' }));
+    await screen.findByRole('heading', { name: '全部收藏' });
     const searchInput = screen.getByLabelText('搜索收藏');
     searchInput.focus();
     fireEvent.compositionStart(searchInput);
     fireEvent.keyDown(searchInput, { key: 'Enter', isComposing: true, keyCode: 229 });
-    expect(screen.getByRole('heading', { name: '收件箱' })).toBeInTheDocument();
+    expect(screen.queryByText(/搜索「/)).not.toBeInTheDocument();
     fireEvent.compositionEnd(searchInput);
 
     await user.type(searchInput, 'note.example.com{Enter}');
-    await screen.findByRole('heading', { name: '全部收藏' });
     await screen.findByText(/搜索「note\.example\.com」结果/);
   });
 

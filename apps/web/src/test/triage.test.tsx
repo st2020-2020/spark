@@ -80,7 +80,12 @@ describe('Triage mode (/unclassified/triage)', () => {
 
     await screen.findByText('待归类的收件箱笔记');
     expect(await screen.findByRole('link', { name: /3 条还没归入项目/ })).toBeInTheDocument();
-    expect(listSpy.mock.calls.some(([q]) => q?.scope === 'unclassified')).toBe(false);
+    // The inbox itself never pages through unclassified notes; the only such request is the
+    // sidebar's one small page for the 待归类 count.
+    const unclassifiedCalls = listSpy.mock.calls.filter(([q]) => q?.scope === 'unclassified');
+    expect(unclassifiedCalls.every(([q]) => q?.limit === 20 && !q?.cursor)).toBe(true);
+    expect(within(screen.getByRole('complementary', { name: '主导航' })).getByRole('link', { name: '待归类' }))
+      .toHaveAccessibleDescription('3 条待归类');
 
     // Clicking Inbox triage hint navigates to /unclassified/triage
     await user.click(screen.getByRole('link', { name: /3 条还没归入项目/ }));

@@ -641,7 +641,6 @@ export function TrashPage() {
     <div>
       <PageHeader
         title="回收站"
-        showSearch={false}
         subtitle={
           purgeEnabled
             ? '保留期 30 天，到期后自动清理。永久删除后无法恢复。'

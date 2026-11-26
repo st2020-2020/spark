@@ -120,6 +120,12 @@
   color: var(--sp-accent-fg);
   font-weight: 600;
 }
+.sp-sidebar-tag-chip--more {
+  background: transparent;
+  color: var(--sp-muted);
+  box-shadow: inset 0 0 0 1px var(--sp-border);
+  font-variant-numeric: tabular-nums;
+}
 .sp-sidebar-empty-hint {
   margin: 0;
   padding: 2px 8px 6px;

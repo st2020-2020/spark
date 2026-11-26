@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowRight, SlidersHorizontal } from 'lucide-react';
+import { ChevronDown, SlidersHorizontal } from 'lucide-react';
 import type { Collection } from '../api/types';
 import { useApi } from '../context/ApiContext';
 import { useAuth } from '../context/AuthContext';
@@ -119,16 +119,47 @@ export function TagNavigation({
     return base;
   }, [allTags, validPinnedIds, validPinnedSet, pinnedTagMeta]);
 
+  // Tags beyond the pinned/frequent few stay one click away in the command palette.
+  const hiddenTagCount = allTagsLoaded ? Math.max(0, allTags.length - visible.length) : null;
+  const collapsedKey = `spark:sidebar:tags-collapsed:${user?.id ?? ''}`;
+  const [collapsed, setCollapsed] = useState(() => {
+    try {
+      return window.localStorage.getItem(collapsedKey) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const toggleCollapsed = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(collapsedKey, next ? '1' : '0');
+      } catch {
+        // Storage unavailable: the choice lasts for this page only.
+      }
+      if (next) setCustomizeOpen(false);
+      return next;
+    });
+  };
+
   return (
-    <div className="sp-sidebar-section sp-tag-nav">
+    <div className={`sp-sidebar-section sp-tag-nav ${collapsed ? 'is-collapsed' : ''}`}>
       <div className="sp-sidebar-group-head">
-        <span className="sp-sidebar-group-label">标签</span>
+        <button
+          type="button"
+          className="sp-sidebar-group-label sp-sidebar-group-toggle"
+          aria-expanded={!collapsed}
+          onClick={toggleCollapsed}
+        >
+          <span>标签</span>
+          <ChevronDown size={13} strokeWidth={2.2} className="sp-sidebar-group-chevron" aria-hidden="true" />
+        </button>
         <div className="sp-sidebar-group-actions">
-          {allTags.length > 0 && (
+          {allTags.length > 0 && !collapsed && (
             <button
               ref={customizeBtnRef}
               type="button"
-              className="sp-icon-btn sp-icon-btn--sm"
+              className="sp-icon-btn sp-icon-btn--sm sp-sidebar-reveal"
               aria-label="自定义置顶标签"
               aria-expanded={customizeOpen}
               title="自定义置顶标签"
@@ -137,15 +168,6 @@ export function TagNavigation({
               <SlidersHorizontal size={13} strokeWidth={2} aria-hidden="true" />
             </button>
           )}
-          <button
-            type="button"
-            className="sp-sidebar-all-btn"
-            aria-label="查看全部标签"
-            onClick={onOpenAllTags}
-          >
-            <span>全部</span>
-            <ArrowRight size={12} strokeWidth={2.2} aria-hidden="true" />
-          </button>
         </div>
       </div>
 
@@ -175,7 +197,7 @@ export function TagNavigation({
         <ErrorBanner error={tagsQuery.error} onRetry={() => void tagsQuery.refetch()} />
       )}
 
-      {visible.length > 0 ? (
+      {collapsed ? null : visible.length > 0 ? (
         <nav aria-label="按标签查看收藏" className="sp-sidebar-tags-wrap">
           {visible.map((t) => (
             <Link
@@ -190,10 +212,21 @@ export function TagNavigation({
               <span className="sp-truncate">#{t.name}</span>
             </Link>
           ))}
+          {hiddenTagCount !== 0 && (
+            <button
+              type="button"
+              className="sp-sidebar-tag-chip sp-sidebar-tag-chip--more"
+              aria-label={hiddenTagCount ? `查看其余 ${hiddenTagCount} 个标签` : '查看全部标签'}
+              title="在搜索中查看全部标签"
+              onClick={onOpenAllTags}
+            >
+              {hiddenTagCount ? `+${hiddenTagCount}` : '全部'}
+            </button>
+          )}
         </nav>
       ) : (
         tagsQuery.isSuccess && (
-          <p className="sp-sidebar-empty-hint">输入 # 创建标签</p>
+          <p className="sp-sidebar-empty-hint">记录时输入 # 即可添加标签</p>
         )
       )}
     </div>
